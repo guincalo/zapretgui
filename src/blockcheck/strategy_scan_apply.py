@@ -9,6 +9,43 @@ from blockcheck.strategy_scan_targeting import (
 )
 
 
+def _option_values(line: str) -> list[str]:
+    _name, separator, value = str(line or "").strip().partition("=")
+    if not separator:
+        return []
+    return [part.strip().strip('"').strip("'") for part in value.split(",") if part.strip()]
+
+
+def _accepts_port(filter_lines, wanted: int) -> bool:
+    for line in filter_lines or ():
+        option, _separator, value = str(line or "").strip().lower().partition("=")
+        if option != "--filter-tcp":
+            continue
+        for token in value.split(","):
+            port_range = _parse_port_range(token)
+            if port_range is not None and port_range[0] <= wanted <= port_range[1]:
+                return True
+    return False
+
+
+def _is_targets_own_profile(profile, target: str) -> bool:
+    """Profile только этого сайта: имена заданы прямо в нём и это ровно цель, порт 443 пропускает.
+
+    Такой profile обновляется, а не дублируется. Profile со списком-файлом или с
+    другими сайтами — общий: его стратегию «Применить» не трогает.
+    """
+    match = getattr(profile, "match", None)
+    if match is None or getattr(match, "hostlist_lines", None):
+        return False
+    names = {
+        normalize_target_domain(value) or ""
+        for line in getattr(match, "hostlist_domains_lines", ()) or ()
+        for value in _option_values(line)
+    }
+    wanted = normalize_target_domain(target) or ""
+    return bool(wanted) and names == {wanted} and _accepts_port(getattr(match, "filter_lines", ()), 443)
+
+
 _WINDIVERT_PORT_FILTER_OPTIONS = ("--wf-tcp-out", "--wf-tcp-in", "--wf-udp-out", "--wf-udp-in")
 _SCANNED_PAYLOADS = {
     PROTOCOL_TCP_HTTPS: ("tls_client_hello",),
@@ -179,6 +216,7 @@ def plan_selected_preset_strategy_apply(
     *,
     strategy_lines: list[str],
     ready_strategy_lines: list[str],
+    match_target: str = "",
     scan_protocol: str = "",
 ):
     """Чистый план правки выбранного пресета: (новый пресет, "created"/"updated", expect).
@@ -217,6 +255,10 @@ def plan_selected_preset_strategy_apply(
         ),
         None,
     )
+    if existing_profile is None and str(scan_protocol or "").strip() == PROTOCOL_TCP_HTTPS:
+        existing_profile = next(
+            (profile for profile in updated.profiles if _is_targets_own_profile(profile, match_target)), None
+        )
     if existing_profile is not None:
         planned, expect = _with_strategy_in_existing_profile(
             updated,
@@ -238,6 +280,7 @@ def apply_profile_to_selected_preset(
     profile_feature,
     strategy_lines: list[str],
     ready_strategy_lines: list[str],
+    match_target: str = "",
     scan_protocol: str = "",
 ) -> tuple[str, str, tuple[str, ...]]:
     """Пишет найденную стратегию в выбранный пресет.
@@ -258,6 +301,7 @@ def apply_profile_to_selected_preset(
             source,
             strategy_lines=strategy_lines,
             ready_strategy_lines=ready_strategy_lines,
+            match_target=match_target,
             scan_protocol=scan_protocol,
         )
         planned, report = with_declared_blobs(planned, strategy_lines, load_catalog)
@@ -311,6 +355,7 @@ def apply_strategy(
         profile_feature=profile_feature,
         strategy_lines=new_strategy_lines,
         ready_strategy_lines=str(strategy_args or "").splitlines(),
+        match_target=target,
         scan_protocol=scan_protocol,
     )
 
