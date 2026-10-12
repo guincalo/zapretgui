@@ -24,6 +24,7 @@ import blockcheck.page_runtime as blockcheck_page_runtime
 from blockcheck.ui.check_results import BlockcheckHistoryList, BlockcheckSummaryPanel
 from blockcheck.ui.result_cards import ProgressSteps, ResultCardsView, ResultDetailView
 from blockcheck.ui.domain_chip import DomainChip
+from diagnostics.services import SCOPE_ALL, SCOPE_FULL, SCOPE_MAIN, progress_steps
 from blockcheck.ui.domains_build import build_blockcheck_domains_ui
 from blockcheck.ui.helpers import (
     add_domain_chip,
@@ -67,11 +68,6 @@ from log.log import log
 
 
 logger = logging.getLogger(__name__)
-
-SCOPE_MAIN = "main"
-SCOPE_ALL = "all"
-SCOPE_FULL = "full"
-
 
 def update_blockcheck_tabs_accessibility(pivot, *, current: object | None = None, language: str = "ru") -> None:
     if pivot is None:
@@ -788,9 +784,7 @@ class BlockcheckPage(BasePage):
         self._result_cards.clear()
         self._results_card.setVisible(False)
         scope = self._current_scope()
-        self._progress_steps.start(
-            ("sites", "hostings", "voice", "ipv6", "system") + (("dns_servers", "filter") if scope == SCOPE_FULL else ())
-        )
+        self._progress_steps.start(progress_steps(scope))
         self._progress_card.setVisible(True)
         # Список сайтов проверки уже взят: добавлять свои домены до конца проверки бесполезно.
         self._domains_card.setVisible(False)

@@ -174,6 +174,19 @@ def ping_hop(ip: str, ttl: int, *, timeout_ms: int = 1000) -> tuple[str, float |
     return str(result.address or ""), result.rtt_ms
 
 
+def ping_ok(ip: str) -> bool | None:
+    """Отвечает ли адрес на пинг. None — пинг в этой системе недоступен."""
+    from utils.windows_icmp import ping_ipv4_host_winapi, ping_ipv6_winapi
+
+    if ":" in ip:
+        result = ping_ipv6_winapi(ip, count=2, timeout_ms=1500)
+    else:
+        result = ping_ipv4_host_winapi(ip, count=2, timeout_ms=1500, resolved_ip=ip)
+    if result.error_code == "UNSUPPORTED":
+        return None
+    return bool(result.ok)
+
+
 def system_ipv4(run: Run, host: str) -> DnsAnswer:
     """Ответ DNS системы (без кэша и hosts)."""
     return query_ipv4(host, timeout=DNS_TIMEOUT, cancelled=run.dns_cancelled)
@@ -189,6 +202,11 @@ def system_servers() -> tuple[str, ...]:
     return tuple(system_dns_servers())
 
 
+def browser_ipv4(run: Run, host: str) -> tuple[str, ...]:
+    """Адреса, которыми воспользовался бы браузер: hosts, DNS системы, а если DNS не дал — эталон."""
+    return tuple(hosts_ipv4(host) or system_ipv4(run, host).ips or doh_lookup(run, host)[1])
+
+
 def known_address(run: Run, host: str) -> str:
     """Адрес сервера: из hosts/DNS системы, иначе эталон. Пусто — не нашли.
 
@@ -197,9 +215,7 @@ def known_address(run: Run, host: str) -> str:
     known = run.freeze_addresses.get(host)
     if known is not None:
         return known
-    ips = list(hosts_ipv4(host)) or list(system_ipv4(run, host).ips)
-    if not ips:
-        ips = list(doh_lookup(run, host)[1])
+    ips = list(browser_ipv4(run, host))
     address = ips[0] if ips else ""
     if address:
         run.freeze_addresses[host] = address

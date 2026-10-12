@@ -18,6 +18,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 
 from diagnostics.block_kind import kind_info, KIND_OTHER, KINDS
+from diagnostics.levels import level_rank
 
 __all__ = [
     "Card",
@@ -211,7 +212,6 @@ _TRIED_WORDS = {
     "error": "ошибка",
 }
 _PROTOCOL_STATES = {"ok": OK, "fail": FAIL, "info": INFO, "unknown": UNKNOWN}
-_LEVEL_ORDER = {FAIL: 0, WARN: 1, UNKNOWN: 2, OK: 3}
 
 
 def _state(value: object, default: str = UNKNOWN) -> str:
@@ -991,7 +991,7 @@ def _system_card(items: list[dict]) -> Card:
         level, status = UNKNOWN, "Не проверено"
     else:
         level, status = OK, f"В порядке: {sum(1 for line in lines if line.state == OK)} из {len(lines)}"
-    shown = sorted(lines, key=lambda line: _LEVEL_ORDER.get(line.state, 4))
+    shown = sorted(lines, key=lambda line: level_rank(line.state))
     advice = [
         Line(INFO, str(item.get("title") or ""), str(item.get("advice") or ""))
         for item in items
@@ -1019,7 +1019,7 @@ def _system_card(items: list[dict]) -> Card:
 def build_cards(report: dict) -> list[Card]:
     """Карточки по отчёту: сначала сайты (сломанные впереди), затем остальные проверки."""
     services = list(report.get("services") or ())
-    cards = [_site_card(service) for service in sorted(services, key=lambda item: _LEVEL_ORDER.get(site_level(item), 9))]
+    cards = [_site_card(service) for service in sorted(services, key=lambda item: level_rank(site_level(item)))]
     if report.get("network"):
         cards.append(_network_card(report["network"]))
     freeze = report.get("freeze")

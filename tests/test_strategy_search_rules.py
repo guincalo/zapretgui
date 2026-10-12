@@ -51,7 +51,19 @@ class JudgeHttpsTests(unittest.TestCase):
 
     def test_answer_cut_early_is_blocked_but_cut_after_limit_is_ok(self) -> None:
         self.assertEqual(rules.judge_https(https_result(body_size=2_000, body_cut=True)).state, rules.PROBE_BLOCKED)
-        self.assertTrue(rules.judge_https(https_result(body_size=30_000, body_cut=True)).ok)
+        self.assertTrue(rules.judge_https(https_result(body_size=38_000, body_cut=True)).ok)
+
+    def test_strategy_uses_the_same_cut_window_as_site_check(self) -> None:
+        # Сайт, замерший на 30 КБ, проверка сайтов называет обрывом по объёму —
+        # значит, и стратегия, после которой так бывает, не работает.
+        from diagnostics.limits import FREEZE_MAX_BYTES, FREEZE_MIN_BYTES
+
+        outcome = rules.judge_https(https_result(body_size=30_000, body_cut=True))
+        self.assertEqual(outcome.state, rules.PROBE_BLOCKED)
+        self.assertIn("по объёму", outcome.reason)
+        self.assertIn("по объёму", rules.judge_https(https_result(body_size=FREEZE_MIN_BYTES, body_cut=True)).reason)
+        # Читаем больше верхней границы окна, иначе обрыв у её края не увидеть.
+        self.assertGreater(rules.HTTPS_READ_LIMIT, FREEZE_MAX_BYTES)
 
     def test_small_complete_page_is_ok(self) -> None:
         self.assertTrue(rules.judge_https(https_result(body_size=5_000, body_cut=False)).ok)

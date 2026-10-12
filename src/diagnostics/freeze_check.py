@@ -31,7 +31,8 @@ from urllib.parse import urlsplit
 
 from diagnostics.tls_probe import ProbeResult
 from diagnostics.upload_probe import UPLOAD_BULK_STALLS, UPLOAD_OK, UPLOAD_PACKET_LIMIT, UploadVerdict
-from diagnostics.verdict import FREEZE_MAX_BYTES, FREEZE_MIN_BYTES, Level
+from diagnostics.limits import FREEZE_MAX_BYTES, FREEZE_MIN_BYTES
+from diagnostics.verdict import Level
 
 __all__ = [
     "DIRECTION_DOWNLOAD",

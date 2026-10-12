@@ -23,7 +23,7 @@ class BlockcheckWorker(QObject):
     # Итог проверки (словарь из run_blockcheck), None — если её остановили,
     # {"failed": True, "error": …} — если проверка упала.
     finished = pyqtSignal(object)
-    # Ход проверки: шаг, сколько готово и сколько всего (см. engine.PROGRESS_STEPS).
+    # Ход проверки: шаг, сколько готово и сколько всего (см. diagnostics.services.PROGRESS_STEPS).
     progress = pyqtSignal(str, int, int)
     # Отчёт по ходу проверки: тот же словарь, что придёт в ``finished``, но пока неполный
     # (``report["partial"]`` истинно). Приходит после каждого проверенного сервиса и раздела.

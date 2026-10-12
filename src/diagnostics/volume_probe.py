@@ -27,6 +27,7 @@ import ssl
 import time
 from dataclasses import dataclass
 
+from diagnostics.limits import FREEZE_MAX_BYTES, FREEZE_MIN_BYTES
 from diagnostics.tls_probe import _client_context
 from utils.socket_cancel import SocketCancel, close_quietly
 
@@ -53,11 +54,11 @@ __all__ = [
 
 # Сколько набрать, чтобы уверенно сказать «обрыва нет».
 TARGET_BYTES = 48 * 1024
-# Окно, в котором замирание считается обрывом. Фильтр считает и служебные
-# данные шифрования (сертификат сервера — несколько килобайт), а здесь
-# считается только полезный ответ, поэтому нижняя граница ниже 16 КБ.
-CUT_MIN_BYTES = 8_000
-CUT_MAX_BYTES = 36_000
+# Окно, в котором замирание считается обрывом, — общее окно ``limits.FREEZE_*``,
+# только нижняя граница сдвинута: фильтр считает и служебные данные шифрования
+# (сертификат сервера — несколько килобайт), а здесь считается лишь полезный ответ.
+CUT_MIN_BYTES = FREEZE_MIN_BYTES - 4_000
+CUT_MAX_BYTES = FREEZE_MAX_BYTES
 MAX_REQUESTS = 60
 TIMEOUT_S = 5.0
 # Столько ждём следующих данных: дольше — соединение замерло.

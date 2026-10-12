@@ -38,6 +38,7 @@ import threading
 import time
 from collections.abc import Callable
 from concurrent.futures import Future
+from dataclasses import dataclass
 from datetime import datetime
 
 from diagnostics import (
@@ -55,7 +56,10 @@ from diagnostics import (
 )
 from diagnostics import problems as problem_rules
 from diagnostics import report_text
+from diagnostics.levels import level_rank
+from diagnostics.report_upgrade import REPORT_VERSION
 from diagnostics.limits import (
+    FREEZE_MAX_BYTES,
     DISCOVERY_TIMEOUT,
     DNS_ATTEMPTS,
     REGISTRY_WAIT_S,
@@ -73,6 +77,14 @@ from diagnostics.run_context import RECHECK_OPENED, RECHECK_SAME, RECHECK_UNSTAB
 from diagnostics.run_context import Live as _Live, Steps as _Steps, Stopped as _Stopped
 from diagnostics.services import (
     GOOGLEVIDEO_FALLBACK_HOST,
+    PROGRESS_STEPS,
+    STEP_DNS_SERVERS,
+    STEP_FILTER,
+    STEP_HOSTINGS,
+    STEP_IPV6,
+    STEP_SITES,
+    STEP_SYSTEM,
+    STEP_VOICE,
     SCOPE_ALL,
     SCOPE_FULL,
     SCOPE_MAIN,
@@ -88,9 +100,7 @@ from diagnostics.tls_probe import (
     KIND_CANCELLED,
 )
 from diagnostics.verdict import (
-    FREEZE_MAX_BYTES,
     DnsState,
-    Level,
     ReachState,
     ServiceVerdict,
     TargetOutcome,
@@ -128,17 +138,8 @@ _WATCH_PAGE = "/watch?v=jNQXAC9IVRw&hl=en"
 _WATCH_PAGE_MAX_BYTES = 2_000_000
 
 
-# Шаги хода проверки: что и в каком порядке показывает экран, пока она идёт.
-STEP_SITES = "sites"
-STEP_HOSTINGS = "hostings"
-STEP_VOICE = "voice"
-STEP_IPV6 = "ipv6"
-STEP_SYSTEM = "system"
-STEP_DNS_SERVERS = "dns_servers"
-STEP_FILTER = "filter"
 # Разделы отчёта, которые заполняются по ходу проверки.
 _REPORT_SECTIONS = ("services", "voice", "freeze", "telegram", "network", "speed", "ipv6", "dns_servers", "filter", "habits", "crowd")
-PROGRESS_STEPS = (STEP_SITES, STEP_HOSTINGS, STEP_VOICE, STEP_IPV6, STEP_SYSTEM, STEP_DNS_SERVERS, STEP_FILTER)
 # Сколько потоков нужно одной цели в худшем случае: сама цель, три запроса к
 # DNS системы, два эталона (A и AAAA) по запросу на каждый эталонный сервер и
 # несколько HTTPS-запросов, четыре пробы уточнения причины, три пакета QUIC и пять
@@ -168,13 +169,8 @@ def _discover_googlevideo(run: _Run) -> tuple[tuple[str, ...], str]:
             return True
         return False
 
-    # Адрес YouTube — тот, которым воспользовался бы браузер: hosts, DNS
-    # системы, а если DNS его не дал — эталон.
-    candidates = list(net_access.hosts_ipv4(YOUTUBE_HOST))
-    if not candidates:
-        candidates = list(net_access.system_ipv4(run, YOUTUBE_HOST).ips)
-    if not candidates:
-        candidates = list(net_access.doh_lookup(run, YOUTUBE_HOST)[1])
+    # Адрес YouTube — тот, которым воспользовался бы браузер.
+    candidates = list(net_access.browser_ipv4(run, YOUTUBE_HOST))
 
     for ip in candidates[:1]:
         result = net_access.fetch(
@@ -320,25 +316,12 @@ def _start_quic(run: _Run, probe: _Probe) -> Future | None:
     return run.submit(quic_probe.collect, probe.host, result.ip, submit=run.submit, cancel=run.probe_cancel)
 
 
-def _ping_ok(ip: str) -> bool | None:
-    """Отвечает ли адрес на пинг. None — пинг в этой системе недоступен."""
-    from utils.windows_icmp import ping_ipv4_host_winapi, ping_ipv6_winapi
-
-    if ":" in ip:
-        result = ping_ipv6_winapi(ip, count=2, timeout_ms=1500)
-    else:
-        result = ping_ipv4_host_winapi(ip, count=2, timeout_ms=1500, resolved_ip=ip)
-    if result.error_code == "UNSUPPORTED":
-        return None
-    return bool(result.ok)
-
-
 def _refine_cause(run: _Run, probe: _Probe) -> None:
     """Сайт не открылся: выясняем, режут по имени или по адресу."""
     result = probe.reach
     if not block_cause.needs_refining(result) or run.dns_cancelled():
         return
-    facts = block_cause.collect(probe.host, result, submit=run.submit, cancel=run.probe_cancel, ping=_ping_ok)
+    facts = block_cause.collect(probe.host, result, submit=run.submit, cancel=run.probe_cancel, ping=net_access.ping_ok)
     # Проверку могли снять, пока шли пробы: по обрывкам вывод не делаем.
     if not run.dns_cancelled():
         probe.cause = block_cause.judge(facts)
@@ -564,6 +547,43 @@ def _settle(run: _Run, future: Future | None, emit: Emit, title: str):
         return None
 
 
+@dataclass(frozen=True, slots=True)
+class _Setting:
+    """В каких условиях идёт проверка: это печатается первым и лежит в отчёте."""
+
+    environment: list[str]
+    zapret_running: bool | None
+    zapret_line: str
+    other_tools: tuple[str, ...]
+    in_path: tuple[str, ...]
+
+
+def _announce(scope: str, emit: Emit) -> _Setting:
+    """Шапка отчёта: режим, система, Zapret и программы обхода, которые могут мешать проверке."""
+    emit(f"🔍 BlockCheck: {_SCOPE_TITLES[scope]} — {datetime.now().strftime('%d.%m.%Y %H:%M:%S')}")
+    environment = sections.environment_lines()
+    for line in environment:
+        emit(line)
+    zapret_running, zapret_line = sections.zapret_status()
+    emit(zapret_line)
+    other_tools = tuple(running_bypass_tools())
+    # VPN мешает проверке, только если интернет идёт через его адаптер; прокси — не мешает вовсе.
+    in_path = tuple(tools_in_path(other_tools, sections.routed_adapters()))
+    if other_tools or in_path:
+        emit(sections.tools_line(other_tools, in_path))
+    emit("⏳ Проверяем так же, как браузер: TLS 1.3, правильные адреса сайтов…")
+    return _Setting(list(environment), zapret_running, zapret_line, other_tools, in_path)
+
+
+def _with_section_problems(problems: list[dict], *, burst, dns_servers, speed, crowd, zapret_running) -> list[dict]:
+    """Строки итога из отдельных разделов вдобавок к строкам по сайтам — все по важности."""
+    problems = problems + problem_rules.burst_problems(burst)
+    problems += sections.dns_problems(dns_servers) + sections.speed_problems(speed, zapret_running=zapret_running)
+    problems += sections.crowd_problems(crowd, zapret_running=zapret_running)
+    problems.sort(key=lambda item: level_rank(item["level"]))
+    return problems
+
+
 def run_blockcheck(
     scope: str = SCOPE_MAIN,
     *,
@@ -605,22 +625,12 @@ def run_blockcheck(
     )
     started = time.monotonic()
     try:
-        title = _SCOPE_TITLES[scope]
-        emit(f"🔍 BlockCheck: {title} — {datetime.now().strftime('%d.%m.%Y %H:%M:%S')}")
-        environment = sections.environment_lines()
-        for line in environment:
-            emit(line)
-        zapret_running, zapret_line = sections.zapret_status()
-        emit(zapret_line)
-        other_tools = running_bypass_tools()
-        # VPN мешает проверке, только если интернет идёт через его адаптер; прокси — не мешает вовсе.
-        in_path = tools_in_path(other_tools, sections.routed_adapters())
-        if other_tools or in_path:
-            emit(sections.tools_line(other_tools, in_path))
-        emit("⏳ Проверяем так же, как браузер: TLS 1.3, правильные адреса сайтов…")
+        setting = _announce(scope, emit)
+        environment, zapret_running, zapret_line = setting.environment, setting.zapret_running, setting.zapret_line
+        other_tools, in_path = setting.other_tools, setting.in_path
         # Разделы, которых в этом режиме нет или которые не удались, в отчёте остаются пустыми.
         live = _Live(partial, fresh=lambda: {"step_seconds": step.seconds()}, scope=scope, environment=environment)
-        live.data.update(zapret_running=zapret_running, zapret_line=zapret_line)
+        live.data.update(report_version=REPORT_VERSION, zapret_running=zapret_running, zapret_line=zapret_line)
         live.data.update(dict.fromkeys(_REPORT_SECTIONS), other_bypass_tools=list(other_tools), tools_in_path=list(in_path), partial=True)
 
         # Звонки и обрыв на 16 КБ проверяются всегда: режим меняет только список сайтов.
@@ -668,7 +678,9 @@ def run_blockcheck(
         dns = full and check_dns_servers
         dns_future = run.later(STEP_DNS_SERVERS, check_dns_servers, should_stop=run.dns_cancelled) if dns else None
         # У хостингов свой счётчик «готово из всего» — им отметка шага не нужна.
-        run.start_stages(PROGRESS_STEPS[1:6], lambda name, done: name == STEP_HOSTINGS or step(name, int(done), 1))
+        # Шаги после сайтов, которые идут в фоне по очереди (место фильтра — отдельно, в конце).
+        staged = (STEP_HOSTINGS, STEP_VOICE, STEP_IPV6, STEP_SYSTEM, STEP_DNS_SERVERS)
+        run.start_stages(staged, lambda name, done: name == STEP_HOSTINGS or step(name, int(done), 1))
         registry_wait = sections.start_registry()
 
         freeze_facts = _settle(run, freeze_future, emit, "Обрыв на 16–20 КБ")
@@ -750,10 +762,9 @@ def run_blockcheck(
             telegram=telegram,
             other_tools=other_tools,
         )
-        problems += problem_rules.burst_problems(burst)
-        problems += sections.dns_problems(dns_servers) + sections.speed_problems(speed, zapret_running=zapret_running)
-        problems += sections.crowd_problems(crowd, zapret_running=zapret_running)
-        problems.sort(key=lambda item: problem_rules.LEVEL_ORDER.get(Level(item["level"]), 9))
+        problems = _with_section_problems(
+            problems, burst=burst, dns_servers=dns_servers, speed=speed, crowd=crowd, zapret_running=zapret_running
+        )
 
         registry_index = registry_wait(REGISTRY_WAIT_S)
         services_report = registry.annotate(services_report, registry_index)
@@ -775,7 +786,6 @@ def run_blockcheck(
             reference=run.reference_report(),
             timed_out=run.timed_out,
             elapsed=elapsed,
-            dns_poisoning_detected=bool(spoofed),
             partial=False,
         )
     except _Stopped:

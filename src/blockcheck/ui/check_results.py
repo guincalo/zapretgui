@@ -31,6 +31,8 @@ from blockcheck.ui.result_cards import finding_detail_card, state_color
 from blockcheck.ui.result_cards_model import Card, FindingParts, Line, Section, build_cards, read_finding_parts
 from blockcheck.ui.brand_icons import BrandIcon, site_brand
 from diagnostics.compare import GROUP_TITLES
+from diagnostics.report_upgrade import upgrade as upgrade_report
+from settings.schema import CHECK_HISTORY_PROBLEMS_LIMIT
 from diagnostics.block_kind import KIND_ORDER, KIND_OTHER, KIND_UNSTABLE, KINDS, kind_info
 from ui.accessibility import set_control_accessibility, set_state_text
 from ui.fluent_widgets import set_tooltip
@@ -216,33 +218,41 @@ def cut_providers(report: dict) -> list[tuple[str, list[str]]]:
     return list(providers.items())
 
 
-# Вид проблемы → карточка с её полным отчётом (когда проблема не про один сайт).
-_KIND_CARDS = {"voice": "voice", "system": "system", "cut16": "hostings"}
+# Раздел отчёта, из которого выведена проблема, → карточка с его полным отчётом.
+_SECTION_CARDS = {
+    "freeze": "hostings",
+    "voice": "voice",
+    "telegram": "telegram",
+    "system": "system",
+    "network": "network",
+    "dns": "dns",
+    "dns_servers": "dns_servers",
+    "speed": "speed",
+    "crowd": "crowd",
+}
 
 
 def problem_card_key(problem: dict, report: dict) -> str:
     """Ключ карточки с полным отчётом по этой проблеме. Пусто — такой карточки нет.
 
-    Сайт ищется по названию, по адресу из проблемы или по первому слову фразы
-    («YouTube открывается, но…»); у QUIC — по первому названному сайту.
+    Проблема сама говорит, о каком она сайте (``site``) и из какого раздела отчёта
+    (``section``); у замеров скорости и соединений сайт находится по адресу.
+    Старые отчёты дополняет этими полями ``diagnostics.report_upgrade``.
     """
-    kind = str(problem.get("kind") or KIND_OTHER)
-    text = str(problem.get("text") or "")
-    title = str(problem.get("title") or "")
+    site = str(problem.get("site") or "")
     target = str(problem.get("target") or "")
-    names = {title, text.split(" ", 1)[0].rstrip(":,")}
-    if kind == "quic":
-        names.update(split_named_sites(text.partition(". ")[0])[1][:1])
-    names.discard("")
-    for service in report.get("services") or ():
-        hosts = {str(item.get("host") or "") for item in service.get("targets") or ()}
-        if str(service.get("label") or "") in names or (target and target in hosts):
-            return f"site:{service.get('key') or ''}"
-    if kind == "dns":
-        return "dns_servers" if report.get("dns_servers") else "dns"
-    if kind == "network":
-        return "ipv6" if text.startswith("IPv6") else "network"
-    return _KIND_CARDS.get(kind, "")
+    if not site and target:
+        site = next(
+            (
+                str(service.get("key") or "")
+                for service in report.get("services") or ()
+                if any(str(item.get("host") or "") == target for item in service.get("targets") or ())
+            ),
+            "",
+        )
+    if site:
+        return f"site:{site}"
+    return _SECTION_CARDS.get(str(problem.get("section") or ""), "")
 
 
 def problem_brand(problem: dict) -> tuple[str, str] | None:
@@ -275,20 +285,6 @@ _ACTION_ICONS = {
     "hosts": "fa5s.edit",
     "telegram_proxy": "fa5b.telegram-plane",
 }
-
-
-def with_default_action(problem: dict) -> dict:
-    """Проблема с действием, когда проверка его не назвала, а в программе готовое средство есть.
-
-    Telegram закрывают по адресу: стратегии Zapret тут обычно бессильны, зато в
-    программе есть свой прокси для Telegram — совет превращается в кнопку.
-    """
-    if problem.get("action"):
-        return problem
-    text = f"{problem.get('title') or ''} {problem.get('text') or ''}".lower()
-    if "telegram" in text and str(problem.get("kind") or "") in ("ip", "other", "noconnect"):
-        return {**problem, "action": "telegram_proxy"}
-    return problem
 
 
 def is_site_problem(problem: dict) -> bool:
@@ -1319,6 +1315,8 @@ class BlockcheckSummaryPanel(_HeightKeeper, QWidget):
 
     def show_report(self, report: dict) -> None:
         self._clear_problems()
+        # Отчёт старой версии (из файла или истории) — в текущий вид, один раз и здесь.
+        report = upgrade_report(report) or {}
         problems = list(report.get("problems") or ())
         # У общей строки про обрыв на 16 КБ — метки хостингов, где он найден.
         providers = cut_providers(report)
@@ -1329,7 +1327,6 @@ class BlockcheckSummaryPanel(_HeightKeeper, QWidget):
                 else item
                 for item in problems
             ]
-        problems = [with_default_action(item) for item in problems]
         blocking = [item for item in problems if item.get("level") in ("fail", "warn")]
         if not problems:
             level, title, mood, fun = "ok", "Всё открывается", MOOD_HAPPY, "bc_ok"
@@ -1448,8 +1445,8 @@ def _environment_text(report: dict) -> str:
 # Сколько прошлых проверок видно сразу и сколько — по кнопке «Показать все».
 HISTORY_SHOWN = 6
 HISTORY_ALL = 50
-# Столько проблем одного прогона хранит история (settings.schema.CHECK_HISTORY_PROBLEMS_LIMIT).
-HISTORY_PROBLEMS_KEPT = 12
+# Столько проблем одного прогона хранит история.
+HISTORY_PROBLEMS_KEPT = CHECK_HISTORY_PROBLEMS_LIMIT
 _HISTORY_MARKS = {"ok": "✓", "warn": "!", "fail": "✗", "unknown": "?"}
 
 
@@ -1485,9 +1482,6 @@ class HistoryRow:
     headline: str = ""
 
 
-_OPEN_STATES = ("ok", "warn")
-
-
 def history_rows(runs, limit: int = HISTORY_SHOWN) -> list[HistoryRow]:
     """Строки таблицы «Прошлые проверки», новые сверху.
 
@@ -1496,6 +1490,7 @@ def history_rows(runs, limit: int = HISTORY_SHOWN) -> list[HistoryRow]:
     изменилось» — сравнение с предыдущей проверкой того же набора сайтов.
     """
     from diagnostics.history import describe_changes, format_time, previous_run
+    from diagnostics.levels import is_open
 
     runs = list(runs or ())
     rows: list[HistoryRow] = []
@@ -1504,7 +1499,7 @@ def history_rows(runs, limit: int = HISTORY_SHOWN) -> list[HistoryRow]:
         level = str(run.get("level") or "unknown")
         level = level if level in _HISTORY_MARKS else "unknown"
         states = [str(state) for state in (run.get("states") or {}).values()]
-        opened = sum(1 for state in states if state in _OPEN_STATES)
+        opened = sum(1 for state in states if is_open(state))
         blocked = sum(1 for state in states if state == "fail")
         problems = len(run.get("problems") or ())
         if states:

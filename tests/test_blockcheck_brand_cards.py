@@ -183,15 +183,44 @@ class OpenReportTests(unittest.TestCase):
     }
 
     def test_problem_is_matched_to_its_card(self) -> None:
+        # Проблема сама называет свой сайт и раздел отчёта: экран ничего не угадывает по тексту.
         report = self.REPORT
-        self.assertEqual(problem_card_key(_problem("Telegram не открывается", kind="ip", title="Telegram"), report), "site:telegram")
-        self.assertEqual(problem_card_key(_problem("YouTube открывается, но не работают видео", kind="ip"), report), "site:youtube")
-        self.assertEqual(problem_card_key(_problem("Не открывается", kind="sni", target="x.com"), report), "site:x")
-        self.assertEqual(problem_card_key(_problem("QUIC блокируется по имени для: YouTube, X. Сайты открываются", kind="quic"), report), "site:youtube")
-        self.assertEqual(problem_card_key(_problem("Обычные ответы подменяются", kind="dns"), report), "dns_servers")
-        self.assertEqual(problem_card_key(_problem("Обычные ответы подменяются", kind="dns"), {}), "dns")
-        self.assertEqual(problem_card_key(_problem("Провайдер обрывает загрузку", kind="cut16"), report), "hostings")
+        self.assertEqual(problem_card_key({**_problem("Не открывается", kind="ip"), "site": "telegram"}, report), "site:telegram")
+        self.assertEqual(problem_card_key(_problem("Медленно", kind="sni", target="x.com"), report), "site:x")
+        self.assertEqual(problem_card_key({**_problem("Подмена", kind="dns"), "section": "dns"}, report), "dns")
+        self.assertEqual(problem_card_key({**_problem("Находка", kind="dns"), "section": "dns_servers"}, report), "dns_servers")
+        self.assertEqual(problem_card_key({**_problem("Обрыв", kind="cut16"), "section": "freeze"}, report), "hostings")
+        self.assertEqual(problem_card_key({**_problem("Дата-центры"), "section": "telegram"}, report), "telegram")
+        # Слово из фразы — не ссылка: без site и section карточки нет.
+        self.assertEqual(problem_card_key(_problem("YouTube открывается, но не работают видео", kind="ip"), report), "")
         self.assertEqual(problem_card_key(_problem("Что-то ещё"), report), "")
+
+    def test_old_reports_are_upgraded_to_the_same_links(self) -> None:
+        from diagnostics.report_upgrade import REPORT_VERSION, upgrade
+
+        old = {
+            **self.REPORT,
+            "problems": [
+                _problem("Telegram не открывается", kind="ip", title="Telegram"),
+                _problem("YouTube открывается, но не работают видео", kind="ip"),
+                _problem("Не открывается", kind="sni", target="x.com"),
+                _problem("QUIC блокируется по имени для: YouTube, X. Сайты открываются", kind="quic"),
+                _problem("Обычные ответы подменяются", kind="dns"),
+                _problem("Провайдер обрывает загрузку", kind="cut16"),
+                _problem("IPv6 не работает", kind="network"),
+                _problem("Что-то ещё"),
+            ],
+        }
+        report = upgrade(old)
+        keys = [problem_card_key(item, report) for item in report["problems"]]
+
+        self.assertEqual(report["report_version"], REPORT_VERSION)
+        self.assertEqual(keys, ["site:telegram", "site:youtube", "site:x", "site:youtube", "dns_servers", "hostings", "", ""])
+        # Закрытому по адресу Telegram старый экран предлагал прокси — перевод сохраняет кнопку.
+        self.assertEqual(report["problems"][0]["action"], "telegram_proxy")
+        self.assertEqual(report["problems"][2]["action"], "")
+        # Отчёт текущей версии не трогается вовсе.
+        self.assertIs(upgrade(report), report)
 
     def test_site_cards_open_their_reports_and_carry_no_repeated_text(self) -> None:
         opened, acted = [], []
@@ -801,8 +830,6 @@ class LightAndFittingTests(unittest.TestCase):
         self.assertTrue(panel.bypass_label.isHidden())
 
     def test_telegram_problem_gets_the_telegram_proxy_button(self) -> None:
-        from blockcheck.ui.check_results import with_default_action
-
         acted = []
         panel = BlockcheckSummaryPanel(on_action=lambda *args: acted.append(args), on_open=lambda _key: None)
         self.addCleanup(panel.deleteLater)
@@ -813,7 +840,12 @@ class LightAndFittingTests(unittest.TestCase):
         self.assertEqual(group.shared_action_button.text(), "Telegram Proxy")
         group.shared_action_button.click()
         self.assertEqual(acted, [("telegram_proxy", "")])
-        # Действие, которое назвала сама проверка, не трогаем; чужим проблемам прокси не предлагаем.
-        self.assertEqual(with_default_action({"kind": "ip", "title": "Telegram", "action": "strategy"})["action"], "strategy")
-        self.assertEqual(with_default_action({"kind": "ip", "title": "Facebook", "action": ""})["action"], "")
-        self.assertEqual(with_default_action({"kind": "sni", "title": "Telegram", "action": ""})["action"], "")
+        # Старый отчёт: действие, которое назвала сама проверка, не трогаем; чужим проблемам прокси не предлагаем.
+        from diagnostics.report_upgrade import upgrade
+
+        def action(problem: dict) -> str:
+            return upgrade({"problems": [problem]})["problems"][0]["action"]
+
+        self.assertEqual(action({"kind": "ip", "title": "Telegram", "action": "strategy"}), "strategy")
+        self.assertEqual(action({"kind": "ip", "title": "Facebook", "action": ""}), "")
+        self.assertEqual(action({"kind": "sni", "title": "Telegram", "action": ""}), "")

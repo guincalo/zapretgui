@@ -28,6 +28,15 @@ __all__ = [
     "SCOPE_FULL",
     "SCOPE_MAIN",
     "SCOPE_TITLES",
+    "PROGRESS_STEPS",
+    "STEP_DNS_SERVERS",
+    "STEP_FILTER",
+    "STEP_HOSTINGS",
+    "STEP_IPV6",
+    "STEP_SITES",
+    "STEP_SYSTEM",
+    "STEP_VOICE",
+    "progress_steps",
     "SERVICES",
     "YOUTUBE_HOST",
     "Service",
@@ -83,6 +92,25 @@ SCOPE_ALL = "all"
 # Всё, что в «Все сайты», плюс DNS-серверы и поиск места фильтра.
 SCOPE_FULL = "full"
 SCOPE_TITLES = {SCOPE_MAIN: "Discord и YouTube", SCOPE_ALL: "Все сайты", SCOPE_FULL: "Полная проверка"}
+
+# Шаги хода проверки: что и в каком порядке показывает экран, пока она идёт.
+STEP_SITES = "sites"
+STEP_HOSTINGS = "hostings"
+STEP_VOICE = "voice"
+STEP_IPV6 = "ipv6"
+STEP_SYSTEM = "system"
+STEP_DNS_SERVERS = "dns_servers"
+STEP_FILTER = "filter"
+PROGRESS_STEPS = (STEP_SITES, STEP_HOSTINGS, STEP_VOICE, STEP_IPV6, STEP_SYSTEM, STEP_DNS_SERVERS, STEP_FILTER)
+# Шаги, которые идут только в полной проверке.
+_FULL_ONLY_STEPS = (STEP_DNS_SERVERS, STEP_FILTER)
+
+
+def progress_steps(scope: str) -> tuple[str, ...]:
+    """Шаги хода проверки для режима: движок отмечает их, экран показывает строками."""
+    if scope == SCOPE_FULL:
+        return PROGRESS_STEPS
+    return tuple(step for step in PROGRESS_STEPS if step not in _FULL_ONLY_STEPS)
 
 # «Discord и YouTube» — то, ради чего Zapret ставят чаще всего.
 SERVICES: dict[str, Service] = {

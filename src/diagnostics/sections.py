@@ -427,7 +427,12 @@ def dns_problems(dns_servers: dict | None) -> list[dict]:
         if level is not None:
             found.append(
                 problem_rules.problem(
-                    level, finding["text"], action="dns", kind=block_kind.KIND_DNS, parts=dns_finding_parts(finding)
+                    level,
+                    finding["text"],
+                    action="dns",
+                    kind=block_kind.KIND_DNS,
+                    parts=dns_finding_parts(finding),
+                    section=problem_rules.SECTION_DNS_SERVERS,
                 )
             )
     return found
@@ -652,6 +657,7 @@ def speed_problems(speed: dict | None, *, zapret_running: bool | None) -> list[d
                 target=str(item.get("host") or ""),
                 kind=block_kind.KIND_SNI,
                 title=str(item.get("name") or ""),
+                section=problem_rules.SECTION_SPEED,
             )
         )
     return found
@@ -768,6 +774,7 @@ def crowd_problems(crowd: dict | None, *, zapret_running: bool | None) -> list[d
             target=str(crowd.get("host") or ""),
             kind=block_kind.KIND_SNI,
             title=str(crowd.get("label") or ""),
+            section=problem_rules.SECTION_CROWD,
         )
     ]
 

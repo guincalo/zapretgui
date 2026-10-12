@@ -15,6 +15,15 @@ from __future__ import annotations
 from diagnostics import block_kind, protocol_probe, quic_probe, telegram_check, volume_probe
 from diagnostics.limits import DNS_ATTEMPTS, HTTPS_TIMEOUT, SOURCE_HOSTS, SOURCE_REFERENCE
 from diagnostics.run_context import RECHECK_OPENED, RECHECK_SAME, Probe
+from diagnostics.services import (
+    STEP_DNS_SERVERS,
+    STEP_FILTER,
+    STEP_HOSTINGS,
+    STEP_IPV6,
+    STEP_SITES,
+    STEP_SYSTEM,
+    STEP_VOICE,
+)
 from diagnostics.verdict import DnsState, Level, ReachState, describe_reach
 
 # Молчание по QUIC — не поломка: сервер может его не поддерживать.
@@ -37,13 +46,13 @@ def stages_text(stages: dict | None) -> str:
 
 
 STEP_TITLES = {
-    "sites": "сайты",
-    "hostings": "хостинги",
-    "voice": "звонки",
-    "ipv6": "IPv6",
-    "system": "компьютер и сеть",
-    "dns_servers": "DNS-серверы",
-    "filter": "место фильтра",
+    STEP_SITES: "сайты",
+    STEP_HOSTINGS: "хостинги",
+    STEP_VOICE: "звонки",
+    STEP_IPV6: "IPv6",
+    STEP_SYSTEM: "компьютер и сеть",
+    STEP_DNS_SERVERS: "DNS-серверы",
+    STEP_FILTER: "место фильтра",
 }
 
 def timed_out_line(deadline: float) -> str:

@@ -23,6 +23,8 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
+from diagnostics.levels import FAIL, is_open
+
 __all__ = [
     "GROUP_TITLES",
     "MAX_AGE",
@@ -39,7 +41,6 @@ ZAPRET_OFF = "off"
 # Старше этого прошлую проверку не берём: блокировки меняются, и разницу дало бы время, а не обход.
 MAX_AGE = timedelta(days=3)
 
-_OPEN = ("ok", "warn")
 NOTE_PRESET = (
     "Это итог для выбранного пресета, а не для Zapret вообще: пресет решает, для каких сайтов и какой обход "
     "включён. Для сайтов, которые не открылись, попробуйте другой пресет или «Подбор стратегии»."
@@ -97,13 +98,13 @@ def compare_runs(entry: dict, other: dict | None) -> dict | None:
     # Порядок сервисов — как в текущей проверке.
     for name in entry.get("states") or {}:
         on, off = on_states.get(name), off_states.get(name)
-        if off == "fail" and on in _OPEN:
+        if off == FAIL and is_open(on):
             helped.append(name)
         elif off == "fail" and on == "fail":
             not_helped.append(name)
-        elif off in _OPEN and on in _OPEN:
+        elif is_open(off) and is_open(on):
             fine_anyway.append(name)
-        elif off in _OPEN and on == "fail":
+        elif is_open(off) and on == FAIL:
             broken.append(name)
     if not (helped or not_helped or fine_anyway or broken):
         return None

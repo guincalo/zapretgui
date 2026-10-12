@@ -16,6 +16,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 
+from diagnostics.limits import FREEZE_MAX_BYTES, FREEZE_MIN_BYTES
 from utils.net_failure import (
     FAILURE_CANCELLED,
     FAILURE_CERT,
@@ -38,11 +39,11 @@ PROBE_BLOCKED = "blocked"
 PROBE_UNREACHABLE = "unreachable"
 PROBE_CANCELLED = "cancelled"
 
-# Обрыв ответа на 14–24 КБ — характерная блокировка «по объёму» (ТСПУ).
-FREEZE_MIN_BYTES = 14_000
-FREEZE_MAX_BYTES = 24_000
+# Обрыв ответа внутри общего окна ``diagnostics.limits.FREEZE_*`` — блокировка
+# «по объёму» (ТСПУ). Подбор и проверка сайтов судят по одному окну: стратегия,
+# после которой сайт замирает на 28 КБ, не работает, а не «работает».
 # Сколько байт ответа читать: больше верхней границы обрыва, иначе его не видно.
-HTTPS_READ_LIMIT = 32_768
+HTTPS_READ_LIMIT = FREEZE_MAX_BYTES + 4 * 1024
 
 
 @dataclass(frozen=True, slots=True)

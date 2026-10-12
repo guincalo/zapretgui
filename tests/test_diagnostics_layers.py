@@ -18,6 +18,57 @@ NETWORK_CALLS = {"https_get", "query_doh", "query_ipv4", "hosts_file_ipv4", "sys
 UPPER_LAYERS = ("engine.py", "sections.py", "problems.py", "report_text.py", "registry.py", "filter_place.py", "filter_habits.py")
 
 
+# Слой, который управляет проверкой и делает выводы. Пробы (``tls_probe``,
+# ``quic_probe``, ``block_cause``…) — листья: они открывают сокеты сами, а этот
+# слой зовёт их или ``net_access``, но не трогает сеть напрямую.
+ORCHESTRATION = (
+    "engine.py",
+    "sections.py",
+    "problems.py",
+    "report_text.py",
+    "report_upgrade.py",
+    "report_contract.py",
+    "verdict.py",
+    "levels.py",
+    "limits.py",
+    "services.py",
+    "block_kind.py",
+    "history.py",
+    "compare.py",
+    "run_context.py",
+    "reach.py",
+    "registry.py",
+    "filter_place.py",
+    "filter_habits.py",
+)
+# Модули, весь смысл которых — сеть: сокеты, TLS, HTTP, пинг. Модули DNS здесь не
+# названы: из них слой берёт типы и коды ответа, а сами запросы ловит список имён ниже.
+NETWORK_MODULES = {
+    "socket",
+    "ssl",
+    "urllib.request",
+    "http.client",
+    "requests",
+    "utils.windows_icmp",
+    "utils.http2_post",
+}
+# Запросы DNS напрямую по протоколу: проверки DNS-серверов ходят через свои модули, не через этот слой.
+DNS_WIRE_CALLS = {"query_udp", "query_tcp", "query_dot", "query_server"}
+
+
+def imported_modules(source: str) -> set[str]:
+    """Все импортируемые модули, в том числе внутри функций."""
+    modules: set[str] = set()
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Import):
+            modules.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            modules.add(node.module)
+            # «from utils import windows_icmp» — тоже сетевой модуль.
+            modules.update(f"{node.module}.{alias.name}" for alias in node.names)
+    return modules
+
+
 def imported_names(source: str) -> set[str]:
     names: set[str] = set()
     for node in ast.walk(ast.parse(source)):
@@ -33,12 +84,35 @@ class NetworkGatewayTests(unittest.TestCase):
                 source = (SRC / name).read_text(encoding="utf-8")
                 self.assertEqual(imported_names(source) & NETWORK_CALLS, set())
 
+    def test_orchestration_opens_no_sockets_itself(self) -> None:
+        for name in ORCHESTRATION:
+            with self.subTest(module=name):
+                source = (SRC / name).read_text(encoding="utf-8")
+                self.assertEqual(imported_modules(source) & NETWORK_MODULES, set())
+                self.assertEqual(imported_names(source) & (NETWORK_CALLS | DNS_WIRE_CALLS), set())
+
+    def test_the_module_check_sees_nested_and_package_imports(self) -> None:
+        source = "def f():\n    from utils import windows_icmp\n    import socket\n"
+        self.assertEqual(imported_modules(source) & NETWORK_MODULES, {"utils.windows_icmp", "socket"})
+
     def test_gateway_is_the_module_that_owns_the_network_calls(self) -> None:
         source = (SRC / "net_access.py").read_text(encoding="utf-8")
         self.assertEqual(imported_names(source) & NETWORK_CALLS, NETWORK_CALLS)
 
     def test_the_check_notices_a_direct_import(self) -> None:
         self.assertEqual(imported_names("from diagnostics.tls_probe import https_get\n") & NETWORK_CALLS, {"https_get"})
+
+    def test_progress_steps_have_one_owner(self) -> None:
+        """Шаги хода проверки задаёт ``services``; подписи к ним есть и в тексте, и на экране."""
+        from blockcheck.ui.result_cards import _STEP_TITLES
+        from diagnostics import report_text, services
+
+        self.assertEqual(tuple(report_text.STEP_TITLES), services.PROGRESS_STEPS)
+        self.assertEqual(tuple(_STEP_TITLES), services.PROGRESS_STEPS)
+        self.assertEqual(services.progress_steps(services.SCOPE_FULL), services.PROGRESS_STEPS)
+        short = services.progress_steps(services.SCOPE_MAIN)
+        self.assertNotIn(services.STEP_FILTER, short)
+        self.assertEqual(short, services.progress_steps(services.SCOPE_ALL))
 
     def test_engine_stays_small(self) -> None:
         """Движок — порядок проверок и общий отчёт. Новую проверку кладут в свой модуль."""

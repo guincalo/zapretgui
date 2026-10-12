@@ -1214,7 +1214,7 @@ class EngineScenarioTests(unittest.TestCase):
         self.assertEqual(youtube["headline"], "YouTube открывается")
         self.assertEqual(youtube["level"], "warn")
         self.assertIn("www.youtube.com", youtube["dns_note"])
-        self.assertTrue(result["dns_poisoning_detected"])
+        self.assertTrue(result["spoofed_hosts"])
         self.assertIn(("www.youtube.com", "142.251.157.4"), net.calls)
         self.assertNotIn("❌ YouTube", text)
 
@@ -1298,7 +1298,7 @@ class EngineScenarioTests(unittest.TestCase):
         discord_target = result["services"][0]["targets"][0]
         self.assertEqual(discord_target["rechecked"], "same")
         self.assertIn("повторная проверка поодиночке дала то же", discord_target["text"])
-        self.assertFalse(result["dns_poisoning_detected"])
+        self.assertFalse(result["spoofed_hosts"])
         self.assertEqual(result["services"][0]["level"], "fail")
         self.assertIn("Подбор стратегии", text)
         hosts_order = [line.split(" ")[1] for line in lines if line.startswith("❌ ") and "." in line.split(" ")[1]]

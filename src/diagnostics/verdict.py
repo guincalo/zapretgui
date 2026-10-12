@@ -42,6 +42,7 @@ from diagnostics.tls_probe import (
     KIND_TLS,
     ProbeResult,
 )
+from diagnostics.limits import FREEZE_MAX_BYTES, FREEZE_MIN_BYTES
 from utils.address_kinds import AddressKind, address_kind, is_stub_address
 from utils.windows_dns_query import DNS_STATUS_NAME_ERROR, DNS_STATUS_NO_RECORDS
 
@@ -50,8 +51,6 @@ __all__ = [
     "ADVICE_UNSTABLE",
     "DnsJudgement",
     "DnsState",
-    "FREEZE_MAX_BYTES",
-    "FREEZE_MIN_BYTES",
     "Level",
     "ReachState",
     "ServiceVerdict",
@@ -179,11 +178,6 @@ def judge_dns(
 # Открывается ли адрес
 # ---------------------------------------------------------------------------
 
-# ТСПУ режет соединения с зарубежными серверами после ~16 КБ данных. Считает он
-# пакеты (около 25 в обе стороны), поэтому в байтах граница плавает: по замерам
-# разных проверок — от 12 до 36 КБ.
-FREEZE_MIN_BYTES = 12_000
-FREEZE_MAX_BYTES = 36_000
 
 
 class ReachState(Enum):

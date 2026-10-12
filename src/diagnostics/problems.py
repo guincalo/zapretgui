@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
+from diagnostics.levels import level_rank
 from diagnostics import (
     block_cause,
     block_kind,
@@ -46,9 +47,6 @@ ADVICE_BLOCKED_REFERENCE = (
     "Похоже, этот сервер закрыт у вашего провайдера. Не выбирайте его для защищённого DNS: "
     "Windows молча вернётся к обычным запросам, которые видны и подменяются."
 )
-
-
-LEVEL_ORDER = {Level.FAIL: 0, Level.WARN: 1, Level.UNKNOWN: 2, Level.OK: 3}
 
 
 ADVICE_FINGERPRINT = (
@@ -84,6 +82,7 @@ def burst_problems(burst) -> list[dict]:
             ("Подберите стратегию для звонков: «Подбор стратегии» → «Голосовые звонки Discord и Telegram (STUN)».",),
             action="strategy_voice",
             kind=block_kind.KIND_VOICE,
+            section=SECTION_VOICE,
         )
     ]
 
@@ -110,6 +109,25 @@ def no_geo_service(_host: str) -> str:
     return ""
 
 
+# Разделы отчёта, из которых выводятся строки итога (ключи ``report[...]``).
+SECTION_SERVICES = "services"
+SECTION_FREEZE = "freeze"
+SECTION_VOICE = "voice"
+SECTION_TELEGRAM = "telegram"
+SECTION_NETWORK = "network"
+SECTION_IPV6 = "ipv6"
+SECTION_SYSTEM = "system"
+SECTION_DNS = "dns"
+SECTION_DNS_SERVERS = "dns_servers"
+SECTION_QUIC = "quic"
+SECTION_SPEED = "speed"
+SECTION_CROWD = "crowd"
+
+# Ключ сайта Telegram в ``services``: закрытому по адресу Telegram помогает встроенный прокси.
+TELEGRAM_SITE = "telegram"
+_TELEGRAM_PROXY_KINDS = frozenset({block_kind.KIND_IP, block_kind.KIND_OTHER, block_kind.KIND_NO_CONNECT})
+
+
 def problem(
     level: Level,
     text: str,
@@ -121,8 +139,14 @@ def problem(
     title: str = "",
     evidence=(),
     parts: dict | None = None,
+    site: str = "",
+    section: str = "",
 ) -> dict:
     """Строка итога. ``kind`` — вид блокировки: по нему экран собирает строки в группы.
+
+    ``site`` — ключ сайта из ``report["services"]``, о котором эта строка; ``section`` —
+    раздел отчёта, из которого она выведена (``freeze``, ``voice``, ``ipv6``…). По ним
+    экран находит карточку с подробностями — данными, а не разбором текста фразы.
 
     ``title`` — короткое название для строки внутри группы (вид блокировки там
     уже назван в заголовке). ``evidence`` — на чём основан вывод; эти же фразы
@@ -142,6 +166,10 @@ def problem(
     }
     if parts:
         record["parts"] = dict(parts)
+    if site:
+        record["site"] = site
+    if section:
+        record["section"] = section
     return record
 
 
@@ -202,6 +230,7 @@ def collect_problems(
                     "Обычно это временное ограничение, чаще в мобильных сетях — проверьте другую сеть.",
                 ),
                 kind=block_kind.KIND_NETWORK,
+                section=SECTION_NETWORK,
             )
         )
     elif offline:
@@ -212,6 +241,7 @@ def collect_problems(
                 "похоже, нет интернета или всё соединение режет антивирус, прокси или VPN",
                 ("Проверьте подключение к интернету и повторите проверку.",),
                 kind=block_kind.KIND_NETWORK,
+                section=SECTION_NETWORK,
             )
         )
     # В обоих случаях причина общая и уже названа: совет «подберите стратегию»
@@ -261,6 +291,9 @@ def collect_problems(
                     item for item in advice if item not in ADVICE_VIA_ZAPRET
                 )
                 action = "hosts"
+            if not action and key == TELEGRAM_SITE and (verdict.kind or block_kind.KIND_OTHER) in _TELEGRAM_PROXY_KINDS:
+                # Telegram закрывают по адресу: стратегия тут бессильна, а у программы есть свой прокси.
+                action = "telegram_proxy"
             causes = tuple(
                 dict.fromkeys(report_text.sentence(probe.cause.text) + "." for probe in broken if probe.cause is not None)
             )
@@ -281,11 +314,13 @@ def collect_problems(
                     # «открывается, но не работают картинки» нужно сказать полностью.
                     title=service.label if verdict.level == Level.FAIL else "",
                     evidence=causes,
+                    site=key,
+                    section=SECTION_SERVICES,
                 )
             )
         elif verdict.level == Level.UNKNOWN:
             if not offline:
-                problems.append(problem(Level.UNKNOWN, verdict.headline, verdict.advice))
+                problems.append(problem(Level.UNKNOWN, verdict.headline, verdict.advice, site=key, section=SECTION_SERVICES))
         elif verdict.kind != block_kind.KIND_FINGERPRINT:
             # Сайт, который в браузере может не открыться, в «Открываются» не числится: о нём своя строка ниже.
             working.append(service.label)
@@ -318,6 +353,8 @@ def collect_problems(
                 kind=block_kind.KIND_FINGERPRINT,
                 title=service.label,
                 evidence=evidence,
+                site=key,
+                section=SECTION_SERVICES,
             )
         )
 
@@ -329,17 +366,29 @@ def collect_problems(
                 freeze.advice,
                 action=_zapret_action(zapret_running),
                 kind=block_kind.KIND_CUT,
+                section=SECTION_FREEZE,
             )
         )
     elif freeze is not None and freeze.level == Level.UNKNOWN and not offline:
         problems.append(problem(freeze.level, freeze.headline, freeze.advice))
     if voice is not None and voice.level != Level.OK and not offline:
         problems.append(
-            problem(voice.level, voice.headline, voice.advice, action="strategy_voice", kind=block_kind.KIND_VOICE)
+            problem(
+                voice.level, voice.headline, voice.advice, action="strategy_voice", kind=block_kind.KIND_VOICE, section=SECTION_VOICE
+            )
         )
     # Один молчащий дата-центр — не проблема для человека: приложение возьмёт другой.
     if telegram is not None and telegram.level == Level.FAIL and not offline:
-        problems.append(problem(telegram.level, telegram.headline, telegram.advice, title="Telegram"))
+        problems.append(
+            problem(
+                telegram.level,
+                telegram.headline,
+                telegram.advice,
+                action="telegram_proxy",
+                title="Telegram",
+                section=SECTION_TELEGRAM,
+            )
+        )
 
     spoofed = [
         probe.host
@@ -357,6 +406,7 @@ def collect_problems(
                 (ADVICE_DNS,),
                 action="dns",
                 kind=block_kind.KIND_DNS,
+                section=SECTION_DNS,
             )
         )
     # Сайты, которые QUIC заведомо поддерживают, — контроль: если молчат и они,
@@ -387,13 +437,14 @@ def collect_problems(
                 "обычным соединением, но браузер сначала пробует QUIC и теряет на этом время",
                 (ADVICE_QUIC,),
                 kind=block_kind.KIND_QUIC,
+                section=SECTION_QUIC,
             )
         )
 
     # QUIC заблокирован, а сам сайт открывается: это не «сайт не работает», но
     # браузер сначала пробует QUIC и переходит на обычное соединение с задержкой.
-    quic_blocked = [
-        services[key].label
+    quic_blocked_keys = [
+        key
         for key, probes in collected.items()
         if any(
             probe.quic is not None
@@ -402,6 +453,7 @@ def collect_problems(
             for probe in probes
         )
     ]
+    quic_blocked = [services[key].label for key in quic_blocked_keys]
     if quic_blocked and not offline:
         problems.append(
             problem(
@@ -415,6 +467,9 @@ def collect_problems(
                 ),
                 (ADVICE_QUIC,),
                 kind=block_kind.KIND_QUIC,
+                # Подробности — на карточке первого названного сайта.
+                site=quic_blocked_keys[0],
+                section=SECTION_QUIC,
             )
         )
     # Неполадки самого компьютера показываются всегда: они объясняют и «нет интернета».
@@ -427,10 +482,13 @@ def collect_problems(
                     f"{item.title}: {item.text}",
                     (item.advice,) if item.advice else (),
                     kind=block_kind.KIND_SYSTEM,
+                    section=SECTION_SYSTEM,
                 )
             )
     if ipv6 is not None and ipv6.code == ipv6_check.IPV6_BROKEN and not offline:
-        problems.append(problem(Level.WARN, f"IPv6 {ipv6.text}", (ADVICE_IPV6,), kind=block_kind.KIND_NETWORK))
+        problems.append(
+            problem(Level.WARN, f"IPv6 {ipv6.text}", (ADVICE_IPV6,), kind=block_kind.KIND_NETWORK, section=SECTION_IPV6)
+        )
     for item in blocked_references(reference or []):
         problems.append(
             problem(
@@ -439,6 +497,7 @@ def collect_problems(
                 (ADVICE_BLOCKED_REFERENCE,),
                 action="dns",
                 kind=block_kind.KIND_DNS,
+                section=SECTION_DNS,
             )
         )
     tools = ", ".join(other_tools)
@@ -446,7 +505,7 @@ def collect_problems(
         for item in problems:
             if item["kind"] in _DIRECT_ROAD_KINDS:
                 item["advice"].append(ADVICE_OTHER_TOOLS.format(tools=tools))
-    problems.sort(key=lambda item: LEVEL_ORDER.get(Level(item["level"]), 9))
+    problems.sort(key=lambda item: level_rank(item["level"]))
     return problems, working, spoofed
 
 

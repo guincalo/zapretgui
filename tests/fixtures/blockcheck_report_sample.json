@@ -601,7 +601,6 @@
   "dns_servers": 0.0,
   "filter": 0.6
  },
- "dns_poisoning_detected": false,
  "text": [
   "строка отчёта"
  ],

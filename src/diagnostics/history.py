@@ -14,6 +14,9 @@ from __future__ import annotations
 import json
 from datetime import datetime
 
+from diagnostics.levels import FAIL, is_open, worst
+from diagnostics.services import SCOPE_TITLES
+
 __all__ = [
     "KIND_BLOCKCHECK",
     "REPORT_FORMAT",
@@ -28,16 +31,8 @@ KIND_BLOCKCHECK = "blockcheck"
 # Название и номер формата выгрузки: по ним чужая программа поймёт, что перед ней.
 REPORT_FORMAT = "zapretgui.blockcheck/1"
 
-_SCOPE_TITLES = {"main": "Discord и YouTube", "all": "Все сайты", "full": "Полная проверка"}
-_OPEN = ("ok", "warn")
-
-
 def _overall_level(report: dict) -> str:
-    levels = [str(problem.get("level") or "") for problem in report.get("problems") or ()]
-    for level in ("fail", "warn", "unknown"):
-        if level in levels:
-            return level
-    return "ok"
+    return worst(problem.get("level") for problem in report.get("problems") or ())
 
 
 def blockcheck_entry(report: dict, *, log_file: str = "", when: datetime | None = None, preset: str = "") -> dict:
@@ -62,7 +57,7 @@ def blockcheck_entry(report: dict, *, log_file: str = "", when: datetime | None 
     return {
         "kind": KIND_BLOCKCHECK,
         "time": when.isoformat(timespec="seconds"),
-        "title": _SCOPE_TITLES.get(str(report.get("scope") or ""), str(report.get("scope") or "")),
+        "title": SCOPE_TITLES.get(str(report.get("scope") or ""), str(report.get("scope") or "")),
         "level": level,
         "headline": headline,
         "problems": problems,
@@ -185,9 +180,9 @@ def describe_changes(previous: dict | None, current: dict) -> list[str]:
     recovered: list[str] = []
     for name, state in after.items():
         old = before.get(name)
-        if old in _OPEN and state == "fail":
+        if is_open(old) and state == FAIL:
             stopped.append(name)
-        elif old == "fail" and state in _OPEN:
+        elif old == FAIL and is_open(state):
             recovered.append(name)
     changes: list[str] = []
     if stopped:
