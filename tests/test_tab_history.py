@@ -158,11 +158,33 @@ class CommandTests(unittest.TestCase):
             entry = finished.history_entry
             self.assertEqual((add.call_args.args[0], add.call_args.args[1]), ("servers_history", entry))
             self.assertEqual(entry["kind"], "servers")
-            # Отчёт возвращается из файла тем же объектом: карточки по нему получаются те же.
-            self.assertEqual(commands.load_past_server_check_report(entry["log_file"]), report)
+            # Из файла возвращаются те же факты, а выводы — по нынешним правилам.
+            from dns.server_check import rejudge_report
+
+            loaded = commands.load_past_server_check_report(entry["log_file"])
+            self.assertEqual(loaded, rejudge_report(report))
+            self.assertEqual([row.cells for row in loaded.rows], [row.cells for row in report.rows])
             # Чужой или испорченный файл — «отчёта нет», а не ошибка.
             self.assertIsNone(commands.load_past_server_check_report(got["history_entry"]["log_file"]))
             self.assertIsNone(commands.load_past_dns_check_report(""))
+
+    def test_past_check_files_of_any_known_version_are_read(self) -> None:
+        import json
+        import tempfile
+
+        from dns import commands
+
+        with tempfile.TemporaryDirectory() as folder:
+            def write(fmt: str) -> str:
+                path = f"{folder}/{fmt.replace('/', '_')}.json"
+                with open(path, "w", encoding="utf-8") as stream:
+                    json.dump({"format": fmt, "report": {"domains": {}}}, stream)
+                return path
+
+            # Своя вкладка, версия не новее текущей — читается; из новой программы или чужой — нет.
+            self.assertEqual(commands._read_past_check(write("zapretgui.dns_check/0"), commands.DNS_CHECK_FORMAT)["format"], "zapretgui.dns_check/0")
+            self.assertEqual(commands._read_past_check(write("zapretgui.dns_check/9"), commands.DNS_CHECK_FORMAT), {})
+            self.assertEqual(commands._read_past_check(write("zapretgui.server_check/1"), commands.DNS_CHECK_FORMAT), {})
 
     def test_server_check_entry_names_the_worst_finding_and_skips_unfinished_runs(self) -> None:
         from test_dns_server_check_page import _report as server_report

@@ -1053,6 +1053,20 @@ def run_server_check(
     return publish(report)
 
 
+def rejudge_report(report: ServerCheckReport) -> ServerCheckReport:
+    """Выводы законченной проверки заново, по нынешним правилам и тем же сырым фактам.
+
+    Нужен прошлым проверкам из файла: в нём лежат и факты, и выводы того дня. Остановленная
+    проверка выводов не имеет и остаётся как есть.
+    """
+    if not report.finished or report.stopped:
+        return report
+    owner_map = dict(report.owners)
+    resolvable = resolvable_domains(report.rows)
+    rows = tuple(replace(row, findings=judge_row(row, owner_map.get, resolvable)) for row in report.rows)
+    return replace(report, rows=rows, findings=judge_report(rows, report.canary, owner_map.get, report.bypass))
+
+
 __all__ = [
     "CODE_ALL_FINE",
     "CODE_BEST",
@@ -1090,5 +1104,6 @@ __all__ = [
     "judge_row",
     "resolvable_domains",
     "probe_address",
+    "rejudge_report",
     "run_server_check",
 ]

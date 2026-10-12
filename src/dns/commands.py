@@ -319,7 +319,8 @@ def _save_past_check(prefix: str, document: dict) -> str:
 
         folder = str(APPLICATION_PATHS.logs_dir)
         os.makedirs(folder, exist_ok=True)
-        path = os.path.join(folder, f"{prefix}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json")
+        # С миллисекундами: две проверки, закончившиеся в одну секунду, не затирают друг друга.
+        path = os.path.join(folder, f"{prefix}_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')[:-3]}.json")
         with open(path, "w", encoding="utf-8") as stream:
             json.dump(document, stream, ensure_ascii=False, indent=1)
         old = sorted(name for name in os.listdir(folder) if name.startswith(f"{prefix}_") and name.endswith(".json"))
@@ -333,7 +334,24 @@ def _save_past_check(prefix: str, document: dict) -> str:
         return ""
 
 
+def _format_version(value: object, expected_format: str) -> int | None:
+    """Номер версии файла той же вкладки (``zapretgui.<вкладка>/<номер>``). None — чужой файл."""
+    family, _slash, _current = expected_format.rpartition("/")
+    name, slash, number = str(value or "").rpartition("/")
+    if not slash or name != family:
+        return None
+    try:
+        return int(number)
+    except ValueError:
+        return None
+
+
 def _read_past_check(log_file: str | None, expected_format: str) -> dict:
+    """Документ прошлой проверки вкладки. Пусто — файла нет, он чужой или из более новой программы.
+
+    Файл любой версии формата этой вкладки не новее текущей читается: смена номера
+    версии не должна делать нечитаемыми все сохранённые проверки.
+    """
     import json
 
     if not log_file:
@@ -343,7 +361,11 @@ def _read_past_check(log_file: str | None, expected_format: str) -> dict:
             document = json.load(stream)
     except (OSError, ValueError):
         return {}
-    if not isinstance(document, dict) or document.get("format") != expected_format:
+    if not isinstance(document, dict):
+        return {}
+    version = _format_version(document.get("format"), expected_format)
+    current = _format_version(expected_format, expected_format)
+    if version is None or current is None or version > current:
         return {}
     return document
 
@@ -392,10 +414,12 @@ def load_past_dns_check_text(log_file: str | None) -> str:
 
 def load_past_server_check_report(log_file: str | None):
     """Отчёт прошлой проверки DNS-серверов — тем же объектом, из которого строятся карточки. None — файла нет."""
-    from dns.server_check import ServerCheckReport
+    from dns.server_check import ServerCheckReport, rejudge_report
     from utils.dataclass_json import from_plain
 
-    return from_plain(ServerCheckReport, _read_past_check(log_file, SERVER_CHECK_FORMAT).get("report"))
+    report = from_plain(ServerCheckReport, _read_past_check(log_file, SERVER_CHECK_FORMAT).get("report"))
+    # Выводы — по нынешним правилам: сырые факты в файле есть, а правила с тех пор могли уточниться.
+    return rejudge_report(report) if report is not None else None
 
 
 def _remember_check(key: str, entry: dict | None) -> None:
