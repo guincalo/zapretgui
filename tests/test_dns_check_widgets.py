@@ -9,7 +9,8 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt6.QtWidgets import QApplication
 
-from dns.ui.dns_check_widgets import DnsDomainsView, DnsSummaryPanel, summarize_dns_results
+from dns.dns_check_plans import summarize_dns_results
+from dns.ui.dns_check_widgets import DnsDomainsView, DnsSummaryPanel
 
 SPOOFED = {
     "summary": {"dns_poisoning_detected": True},

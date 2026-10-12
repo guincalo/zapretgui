@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import unittest
 
-from dns.ui.dns_check_widgets import summarize_dns_results
+from dns.dns_check_plans import summarize_dns_results
 
 HONEST = {"discord.com": {"state": "ok"}}
 UP = {"label": "Cloudflare", "address": "1.1.1.1", "ok": True, "reason": ""}

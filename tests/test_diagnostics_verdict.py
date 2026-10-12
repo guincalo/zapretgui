@@ -1218,6 +1218,23 @@ class EngineScenarioTests(unittest.TestCase):
         self.assertEqual(net.calls, [])
 
     def test_foreign_certificate_is_reported_as_spoofing(self) -> None:
+        # Чужой сертификат — только по адресу из DNS; настоящий адрес сайта отдаёт подлинный.
+        lines: list[str] = []
+        net = _Net(
+            system=("5.6.7.8",),
+            https=lambda host, ip: (
+                ProbeResult(ip=ip, kind=KIND_CERT, cert_problem="сертификат выдан другому сайту") if ip == "5.6.7.8" else _ok(ip)
+            ),
+        )
+        result = net.run(engine.run_dns_check, emit=lines.append)
+
+        self.assertTrue(result["summary"]["dns_poisoning_detected"])
+        self.assertIn("Обнаружена DNS подмена", "\n".join(lines))
+        # Контроль спрашивал настоящий адрес сайта.
+        self.assertIn(DISCORD_REAL[0], [ip for _host, ip in net.calls])
+
+    def test_foreign_certificate_everywhere_is_not_dns_spoofing(self) -> None:
+        # Антивирус или прокси с проверкой HTTPS: чужой сертификат на любом адресе — DNS ни при чём.
         lines: list[str] = []
         net = _Net(
             system=("5.6.7.8",),
@@ -1225,8 +1242,17 @@ class EngineScenarioTests(unittest.TestCase):
         )
         result = net.run(engine.run_dns_check, emit=lines.append)
 
-        self.assertTrue(result["summary"]["dns_poisoning_detected"])
-        self.assertIn("Обнаружена DNS подмена", "\n".join(lines))
+        self.assertFalse(result["summary"]["dns_poisoning_detected"])
+        self.assertIn("DNS тут ни при чём", "\n".join(lines))
+
+    def test_foreign_certificate_without_reference_proves_nothing(self) -> None:
+        from diagnostics.verdict import judge_dns
+
+        judgement = judge_dns(
+            system_ips=("5.6.7.8",), system_status=0, reference_ips=(), hosts_ips=(), check_kind=KIND_CERT
+        )
+        self.assertEqual(judgement.state, DnsState.UNKNOWN)
+        self.assertIn("эталон недоступен", judgement.reason)
 
     def test_nxdomain_site_that_opens_by_real_address_is_reported_as_working(self) -> None:
         """Случай из жалобы: DNS говорит «домена нет», браузер с DoH открывает сайт."""

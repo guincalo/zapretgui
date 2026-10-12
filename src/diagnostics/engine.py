@@ -260,6 +260,18 @@ def _probe_host(
     # При совпадении с эталоном о DNS говорит только проверка «лишнего»
     # адреса: сбой на подтверждённом адресе — дело не DNS.
     dns_check = probe.suspect_check if matches and not probe.hosts_ips else probe.local_check
+    # Чужой сертификат по адресу из DNS — контроль тем же запросом на эталонный адрес:
+    # если и там чужой, подменяют HTTPS (антивирус, прокси), а не адрес.
+    control = None
+    if (
+        dns_check is not None
+        and dns_check.kind == KIND_CERT
+        and not probe.hosts_ips
+        and probe.reference_ips
+        and probe.reference_ips[0] != dns_check.ip
+        and not run.dns_cancelled()
+    ):
+        control = net_access.get(run, host, probe.reference_ips[0], target.path)
     probe.judgement = judge_dns(
         system_ips=probe.dns.ips,
         system_status=probe.dns.status,
@@ -269,6 +281,7 @@ def _probe_host(
         check_cert_problem=dns_check.cert_problem if dns_check else "",
         nxdomain_count=probe.dns_nxdomain,
         attempts=DNS_ATTEMPTS,
+        control_kind=control.kind if control is not None else "",
     )
     probe.mark("dns")
     if full:

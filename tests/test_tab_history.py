@@ -83,7 +83,8 @@ class EntryTests(unittest.TestCase):
 
     def test_dns_entry_levels(self) -> None:
         self.assertEqual(history.dns_check_entry({"domains": {"a": {"state": "ok"}, "b": {"state": "local"}}})["level"], "ok")
-        self.assertEqual(history.dns_check_entry({"domains": {"a": {"state": "unknown"}}})["level"], "warn")
+        # Ничего не узнали — «не узнали», а не предупреждение.
+        self.assertEqual(history.dns_check_entry({"domains": {"a": {"state": "unknown"}}})["level"], "unknown")
 
     def test_entries_survive_the_settings_cleaning(self) -> None:
         entry = history.domain_entry("x.com", "fail", "Фильтр между узлами 3 и 4", ["DNS системы: заглушка"], when=WHEN)

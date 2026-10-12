@@ -22,32 +22,18 @@ from ui.widgets.fun import FunTicker, Mascot, burst_confetti
 from ui.widgets.fun.mascot import MOOD_ALARM, MOOD_BUSY, MOOD_HAPPY, MOOD_IDLE
 from ui.widgets.stagger_float_in import float_in
 
+from dns.dns_check_plans import UNVERIFIED_TITLE, summarize_dns_results
+
 # Состояния домена из diagnostics.verdict.DnsState.
 _STATE_VIEW = {
     "spoofed": ("fa5s.times-circle", "error", "Подменён"),
-    "local": ("fa5s.exclamation-triangle", "warning", "Адрес из файла hosts"),
+    "local": ("fa5s.exclamation-triangle", "warning", "Адрес не от провайдера"),
     "unknown": ("fa5s.question-circle", "muted", "Не удалось проверить"),
     "ok": ("fa5s.check-circle", "success", "Честный ответ"),
 }
 _ORDER = {"spoofed": 0, "local": 1, "unknown": 2, "ok": 3}
 
 
-def _reference_note(results: dict) -> str:
-    """Что с эталонными серверами, с которыми сравнивались ответы. Пусто — все ответили."""
-    reference = [dict(item) for item in results.get("reference") or () if isinstance(item, dict)]
-    down = [item for item in reference if not item.get("ok")]
-    if not reference or not down:
-        return ""
-    if len(down) == len(reference):
-        return "Ни один эталонный сервер не ответил — сравнивать ответы было не с чем."
-    names = ", ".join(
-        f"{item.get('label', '')} ({item.get('address', '')})" + (f" — {item['reason']}" if item.get("reason") else "")
-        for item in down
-    )
-    return f"Не ответили эталонные серверы: {names}. Сравнение сделано по остальным."
-
-
-_UNVERIFIED_TITLE = "Проверить DNS не удалось"
 # Состояние панели → набор шуток под заголовком.
 _FUN_LINES = {
     "idle": "dns_idle",
@@ -57,57 +43,6 @@ _FUN_LINES = {
     "stopped": "stopped",
     "error": "error",
 }
-
-
-def summarize_dns_results(results: dict | None) -> dict:
-    """Итог проверки для панели: вид, заголовок, объяснение и число подмен."""
-    summary = _summarize(results or {})
-    note = _reference_note(results or {})
-    if note and summary["kind"] not in ("stopped", "error"):
-        reference = list((results or {}).get("reference") or ())
-        if summary["kind"] == "ok" and all(not item.get("ok") for item in reference):
-            # Без эталона «честный DNS» утверждать нельзя.
-            summary = {"kind": "partial", "title": _UNVERIFIED_TITLE, "detail": ""}
-        summary["detail"] = f"{summary['detail']} {note}".strip()
-    return summary
-
-
-def _summarize(results: dict) -> dict:
-    if results.get("stopped"):
-        return {"kind": "stopped", "title": "Проверка остановлена", "detail": ""}
-    domains = dict(results.get("domains") or {})
-    if not domains:
-        return {
-            "kind": "error",
-            "title": "Проверка не удалась",
-            "detail": "Подробности — в подробном логе ниже. Проверьте подключение и попробуйте ещё раз.",
-        }
-    spoofed = [host for host, item in domains.items() if item.get("state") == "spoofed"]
-    unknown = [host for host, item in domains.items() if item.get("state") == "unknown"]
-    if spoofed:
-        noun = "сайта" if len(spoofed) == 1 else "сайтов"
-        return {
-            "kind": "spoofed",
-            "title": f"Поймали провайдера за руку: подменяет адреса {len(spoofed)} {noun}",
-            "detail": (
-                "Программы, которые спрашивают адрес у Windows, получают неверный ответ. "
-                "Включите DNS с шифрованием (DoH) на странице «Настройка DNS» — его провайдер перехватить не сможет."
-            ),
-            "count": len(spoofed),
-        }
-    if unknown:
-        return {
-            "kind": "partial",
-            "title": "Явной подмены нет",
-            "detail": (
-                "Часть адресов отличается от эталона, но проверить их не удалось — для CDN это обычно нормально."
-            ),
-        }
-    return {
-        "kind": "ok",
-        "title": "Ваш DNS честный 👍",
-        "detail": "Адреса совпадают с эталоном. Если сайты не открываются — дело не в DNS, а в блокировке соединения.",
-    }
 
 
 class DnsSummaryPanel(_HeightKeeper, SimpleCardWidget):
@@ -186,7 +121,7 @@ class DnsSummaryPanel(_HeightKeeper, SimpleCardWidget):
             from blockcheck.ui.fun_texts import show_state_line
 
             fun = _FUN_LINES.get(kind, "")
-            if kind == "partial" and title == _UNVERIFIED_TITLE:
+            if kind == "partial" and title == UNVERIFIED_TITLE:
                 fun = "dns_unverified"
             show_state_line(self.ticker, fun)
         if self.open_settings_btn is not None:
@@ -332,4 +267,4 @@ class DnsDomainsView(QWidget):
         set_state_text(self, f"Домены проверки DNS: {len(ordered)}, подменено {spoofed}")
 
 
-__all__ = ["DnsDomainsView", "DnsSummaryPanel", "summarize_dns_results"]
+__all__ = ["DnsDomainsView", "DnsSummaryPanel"]

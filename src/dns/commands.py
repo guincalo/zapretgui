@@ -23,24 +23,6 @@ def mark_isp_dns_warning_shown() -> bool:
     return bool(set_isp_dns_info_shown(True))
 
 
-def create_dns_check_worker():
-    from dns.dns_check_worker import DNSCheckWorker
-
-    return DNSCheckWorker(run_dns_poisoning_check=run_dns_poisoning_check)
-
-
-def create_dns_check_save_worker(request_id: int, *, file_path: str, plain_text: str, parent=None):
-    from dns.dns_check_worker import DNSCheckSaveWorker
-
-    return DNSCheckSaveWorker(
-        request_id,
-        file_path=file_path,
-        plain_text=plain_text,
-        save_dns_check_results=save_dns_check_results,
-        parent=parent,
-    )
-
-
 def run_dns_poisoning_check(*, log_callback=None, should_stop=None) -> dict:
     from diagnostics.engine import run_dns_check
 

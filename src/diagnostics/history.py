@@ -89,6 +89,9 @@ def dns_check_entry(results: dict, *, when: datetime | None = None) -> dict | No
     unknown = [host for host, level in states.items() if level == "unknown"]
     if spoofed:
         level, headline = "fail", f"Подменяются адреса: {', '.join(spoofed)}"
+    elif unknown and len(unknown) == len(states):
+        # Ни один адрес проверить не удалось — это «не узнали», а не предупреждение.
+        level, headline = UNKNOWN, "Проверить DNS не удалось"
     elif unknown:
         level, headline = "warn", f"Подмены не видно, но не удалось проверить: {', '.join(unknown)}"
     else:
