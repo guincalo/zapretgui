@@ -194,7 +194,6 @@ class BlockcheckPage(BasePage):
         self._dns_spoofing_tab_page = None
         self._active_tab_index: int = 0
         self._pending_tab_key: str | None = None
-        self._pending_diagnostics_start_focus = False
         self._cleanup_in_progress = False
         self._tabs_pivot = None
         self._domains_caption = None
@@ -302,9 +301,6 @@ class BlockcheckPage(BasePage):
                 return
             self._pending_tab_key = None
             self._switch_tab(self.TAB_ORDER.index(self._normalize_tab_key(pending_tab_key)))
-
-        if self.is_page_ready():
-            self._apply_pending_diagnostics_start_focus()
 
     # ------------------------------------------------------------------
     # UI construction
@@ -698,13 +694,6 @@ class BlockcheckPage(BasePage):
             language=self.__dict__.get("_ui_language", "ru"),
         )
 
-    def request_diagnostics_start_focus(self) -> None:
-        self._pending_diagnostics_start_focus = True
-        if not self.is_page_ready():
-            self.run_when_page_ready(self._apply_pending_diagnostics_start_focus)
-            return
-        self._apply_pending_diagnostics_start_focus()
-
     def handle_page_command(self, command: str, payload: dict) -> bool:
         _ = payload
         normalized = str(command or "").strip().lower()
@@ -783,26 +772,7 @@ class BlockcheckPage(BasePage):
         if self._dns_spoofing_tab_page is not None:
             self._dns_spoofing_tab_page.setVisible(tab_key == self.TAB_DNS_SPOOFING)
 
-        if tab_key == self.TAB_BLOCKCHECK:
-            self._apply_pending_diagnostics_start_focus()
         self._log_ui_timing(f"blockcheck_ui.switch_tab.{tab_key}", started_at)
-
-    def _apply_pending_diagnostics_start_focus(self) -> None:
-        """«Открыть диагностику» со страниц управления: Discord и YouTube, фокус на «Проверить»."""
-        if not self._pending_diagnostics_start_focus:
-            return
-        if self.TAB_ORDER[self._active_tab_index] != self.TAB_BLOCKCHECK:
-            self._switch_tab(self.TAB_ORDER.index(self.TAB_BLOCKCHECK))
-            return
-        self._pending_diagnostics_start_focus = False
-        if not self._run_runtime.is_running():
-            index = self._scope_combo.findData(SCOPE_MAIN)
-            if index >= 0:
-                self._scope_combo.setCurrentIndex(index)
-        try:
-            self._start_btn.setFocus()
-        except Exception:
-            pass
 
     # ------------------------------------------------------------------
     # Проверка

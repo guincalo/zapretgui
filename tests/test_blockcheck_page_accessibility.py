@@ -224,16 +224,6 @@ class BlockcheckPageAccessibilityTests(unittest.TestCase):
         self.assertEqual(page._normalize_tab_key("diagnostics"), "blockcheck")
         self.assertEqual(page._normalize_tab_key("connection"), "blockcheck")
 
-    def test_open_diagnostics_selects_discord_youtube_and_focuses_start(self) -> None:
-        page = _make_page()
-        self.addCleanup(page.deleteLater)
-        page.is_page_ready = lambda: True
-
-        page.request_diagnostics_start_focus()
-
-        self.assertEqual(page._scope_combo.currentData(), "main")
-        self.assertFalse(page._pending_diagnostics_start_focus)
-
     def test_finished_report_fills_summary_and_sites(self) -> None:
         page = _make_page()
         self.addCleanup(page.deleteLater)
