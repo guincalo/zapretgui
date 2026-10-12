@@ -280,3 +280,56 @@ class VideoServerFallbackTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RecheckLanesTests(unittest.TestCase):
+    """Перепроверка: лёгкие запросы идут шире, полные проверки — по-прежнему узко."""
+
+    def test_light_requests_go_wider_than_full_rechecks(self) -> None:
+        import threading
+        import time
+
+        services = {f"s{index}": engine.Service(f"s{index}", f"Сайт {index}", (engine.Target(f"s{index}.com", "сайт", main=True),)) for index in range(12)}
+        done_probes = []
+        for key, service in services.items():
+            target = service.targets[0]
+            probe = engine._Probe(target=target, service=key, host=target.host)
+            probe.reach = ProbeResult(ip="203.0.113.9", kind=KIND_CONNECT, connect_fail="timeout")
+            probe.reach_state = ReachState.DPI
+            done_probes.append((key, target, probe, None))
+
+        lock = threading.Lock()
+        now = {"light": 0, "full": 0}
+        peak = {"light": 0, "full": 0}
+
+        def busy(kind: str) -> None:
+            with lock:
+                now[kind] += 1
+                peak[kind] = max(peak[kind], now[kind])
+            time.sleep(0.05)
+            with lock:
+                now[kind] -= 1
+
+        def light(_run, host, ip, _path, **_kwargs):
+            busy("light")
+            # Половина сайтов на лёгкий запрос открывается — их ждёт полная проверка.
+            return _ok(ip) if int(host[1:].split(".")[0]) % 2 else _dead(ip)
+
+        def full(_run, target, key, **_kwargs):
+            busy("full")
+            probe = engine._Probe(target=target, service=key, host=target.host)
+            probe.reach = _ok("203.0.113.9")
+            probe.reach_state = ReachState.OK
+            return probe
+
+        run = engine._Run(None, workers=64, deadline=60)
+        self.addCleanup(run.close)
+        with patch.object(net_access, "get", side_effect=light), patch.object(engine, "_probe_target", side_effect=full):
+            result = engine._recheck_failed(run, services, done_probes)
+
+        self.assertLessEqual(peak["full"], engine.RECHECK_AT_ONCE)
+        self.assertGreater(peak["light"], engine.RECHECK_AT_ONCE)
+        self.assertLessEqual(peak["light"], engine.RECHECK_LIGHT_AT_ONCE)
+        opened = [probe.rechecked for _key, _target, probe, _error in result]
+        self.assertEqual(opened.count("opened"), 6)
+        self.assertEqual(opened.count("same"), 6)

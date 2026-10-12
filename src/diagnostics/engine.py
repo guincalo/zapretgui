@@ -64,6 +64,7 @@ from diagnostics.limits import (
     DNS_ATTEMPTS,
     REGISTRY_WAIT_S,
     RECHECK_AT_ONCE,
+    RECHECK_LIGHT_AT_ONCE,
     RECHECK_NEEDS_S,
     RECHECK_SITES,
     RUN_DEADLINE,
@@ -462,10 +463,12 @@ def _recheck_failed(run: _Run, services: dict[str, Service], done_probes: list) 
     ][:RECHECK_SITES]
     if not failed or run.dns_cancelled() or run.deadline - time.monotonic() < RECHECK_NEEDS_S:
         return done_probes
-    lane = run.lane(RECHECK_AT_ONCE)
+    light = run.lane(RECHECK_LIGHT_AT_ONCE)
+    heavy = run.lane(RECHECK_AT_ONCE)
 
-    def _again(index: int) -> _Probe | None:
-        key, target, first, _error = done_probes[index]
+    def _light(index: int) -> Future | None:
+        """Лёгкий шаг; полная проверка встаёт в свою очередь, только если он прошёл."""
+        _key, target, first, _error = done_probes[index]
         if run.dns_cancelled():
             return None
         # Сначала один лёгкий запрос к тому же адресу. Полная проверка сайта заново — это
@@ -475,6 +478,12 @@ def _recheck_failed(run: _Run, services: dict[str, Service], done_probes: list) 
             if not net_access.get(run, first.host, first.reach.ip, target.path).ok:
                 first.rechecked = "" if run.dns_cancelled() else RECHECK_SAME
                 return None
+        return heavy.submit(_again, index)
+
+    def _again(index: int) -> _Probe | None:
+        key, target, first, _error = done_probes[index]
+        if run.dns_cancelled():
+            return None
         again = _probe_target(run, target, key, full=True, volume=not services[key].control)
         if again.reach is None or again.reach.kind == KIND_CANCELLED:
             # Повтор не успел — остаётся первый результат, без пометки.
@@ -491,11 +500,12 @@ def _recheck_failed(run: _Run, services: dict[str, Service], done_probes: list) 
             again.rechecked = ""
         return again
 
-    futures = [(index, lane.submit(_again, index)) for index in failed]
+    futures = [(index, light.submit(_light, index)) for index in failed]
     result = list(done_probes)
     for index, future in futures:
         try:
-            again = run.wait(future)
+            full_check = run.wait(future)
+            again = run.wait(full_check) if full_check is not None else None
         except _Stopped:
             raise
         except Exception:
