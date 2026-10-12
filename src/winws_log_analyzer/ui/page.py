@@ -5,6 +5,8 @@ from __future__ import annotations
 import glob
 import os
 
+from log.log_kinds import ORCHESTRA_LOG_PATTERNS, WINWS_DEBUG_LOG_PATTERNS
+
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import QFileDialog, QTableWidgetItem
@@ -46,7 +48,7 @@ _VERDICT_TITLES = {
 # см. _build_stable_debug_log_file), устаревшие zapret_winws2_debug_*.log и
 # raw-вывод оркестратора orchestra_*.log. Остальное (zapret_log_*.txt — логи GUI,
 # tg_proxy.log, crashes.log) — другой формат, парсеру не подходит.
-_RECENT_LOG_PATTERNS = ("*_debug.log", "zapret_winws2_debug_*.log", "orchestra_*.log")
+_RECENT_LOG_PATTERNS = (*WINWS_DEBUG_LOG_PATTERNS, *ORCHESTRA_LOG_PATTERNS)
 _RECENT_LOG_LIMIT = 20
 
 _DROP_ALLOWED_EXTENSIONS = (".log", ".txt")

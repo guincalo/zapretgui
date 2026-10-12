@@ -15,6 +15,7 @@ from dataclasses import dataclass
 # BEFORE QApplication exists.
 
 from config.config import MAX_LOG_FILES, MAX_DEBUG_LOG_FILES
+from log.log_kinds import WINWS_DEBUG_LOG_PATTERNS
 from config.runtime_layout import APPLICATION_PATHS
 from utils.exit_steps import register_exit_step
 
@@ -87,7 +88,7 @@ def cleanup_old_logs(logs_folder, max_files=MAX_LOG_FILES):
     """
     Удаляет старые лог файлы с раздельными лимитами для каждого типа:
     - zapret_log_*.txt: max_files (по умолчанию 50)
-    - zapret_winws2_debug_*.log: MAX_DEBUG_LOG_FILES (20)
+    - журналы winws (<пресет>_debug.log и старые zapret_winws2_debug_*.log): MAX_DEBUG_LOG_FILES (20) на шаблон
     - zapret_[0-9]*.log: старый формат, включается в общий лимит
     - blockcheck_run_*.log: отдельная история запусков BlockCheck
     """
@@ -101,11 +102,12 @@ def cleanup_old_logs(logs_folder, max_files=MAX_LOG_FILES):
     all_errors.extend(e)
     total_found += t
 
-    # 2. Debug логи winws2 (zapret_winws2_debug_*.log) - макс 20
-    d, e, t = _cleanup_files_by_pattern(logs_folder, "zapret_winws2_debug_*.log", MAX_DEBUG_LOG_FILES)
-    total_deleted += d
-    all_errors.extend(e)
-    total_found += t
+    # 2. Журналы winws — макс 20 каждого вида (имена: log.log_kinds)
+    for pattern in WINWS_DEBUG_LOG_PATTERNS:
+        d, e, t = _cleanup_files_by_pattern(logs_folder, pattern, MAX_DEBUG_LOG_FILES)
+        total_deleted += d
+        all_errors.extend(e)
+        total_found += t
 
     # 3. Старый формат логов (zapret_[0-9]*.log) - удаляем все старые
     d, e, t = _cleanup_files_by_pattern(logs_folder, "zapret_[0-9]*.log", 10)

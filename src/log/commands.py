@@ -10,6 +10,12 @@ from dataclasses import dataclass
 from config.config import MAX_DEBUG_LOG_FILES, MAX_LOG_FILES
 from config.runtime_layout import APPLICATION_PATHS
 from log.log import LOG_FILE, cleanup_old_logs, global_logger, log
+from log.log_kinds import (
+    APP_LOG_PATTERNS,
+    LEGACY_APP_LOG_PATTERNS,
+    STRATEGY_SCAN_LOG_PATTERNS,
+    WINWS_DEBUG_LOG_PATTERNS,
+)
 from app.performance_metrics import log_ui_timing_since
 
 from support_request_bundle import prepare_support_request
@@ -148,10 +154,12 @@ def list_logs(*, run_cleanup: bool) -> LogsListState:
 def build_stats() -> LogsStatsState:
     total_started_at = time.perf_counter()
     glob_started_at = time.perf_counter()
-    app_logs = glob.glob(os.path.join(LOGS_FOLDER, "zapret_log_*.txt"))
-    app_logs.extend(glob.glob(os.path.join(LOGS_FOLDER, "zapret_[0-9]*.log")))
-    app_logs.extend(glob.glob(os.path.join(LOGS_FOLDER, "blockcheck_run_*.log")))
-    debug_logs = glob.glob(os.path.join(LOGS_FOLDER, "zapret_winws2_debug_*.log"))
+    def _found(patterns) -> list[str]:
+        # Один файл может подходить под несколько шаблонов — считаем его один раз.
+        return sorted({path for pattern in patterns for path in glob.glob(os.path.join(LOGS_FOLDER, pattern))})
+
+    app_logs = _found((*APP_LOG_PATTERNS, *LEGACY_APP_LOG_PATTERNS, *STRATEGY_SCAN_LOG_PATTERNS))
+    debug_logs = _found(WINWS_DEBUG_LOG_PATTERNS)
     all_files = app_logs + debug_logs
     _log_timing("logs_feature.build_stats.glob", glob_started_at)
     size_started_at = time.perf_counter()
@@ -218,7 +226,7 @@ def prepare_support_bundle(*, current_log_file: str, orchestra_runner):
         bundle_prefix="support_logs",
         context_label="Логи приложения",
         candidate_paths=candidate_paths,
-        recent_patterns=("zapret_winws2_debug_*.log", "blockcheck_run_*.log"),
+        recent_patterns=(*WINWS_DEBUG_LOG_PATTERNS, *STRATEGY_SCAN_LOG_PATTERNS),
         extra_note="Если проблема связана с оркестратором, в архив по возможности добавлен и его свежий лог.",
     )
 

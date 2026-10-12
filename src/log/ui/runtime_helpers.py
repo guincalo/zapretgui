@@ -24,35 +24,6 @@ def render_send_status_label(*, label, text: str, tone: str, theme_tokens) -> No
     label.setStyleSheet(f"color: {color}; font-size: 11px;")
 
 
-def resolve_winws_status_style(
-    *,
-    current_text: str,
-    neutral_color: str,
-    running_color: str,
-    error_color: str,
-) -> tuple[str, str]:
-    text = str(current_text or "").strip()
-    if not text:
-        return "neutral", ""
-    if "PID:" in text:
-        return "running", text
-    if "ошиб" in text.lower():
-        return "error", text
-    return "neutral", text
-
-
-def set_winws_status(label, *, kind: str, text: str, neutral_color: str, running_color: str, error_color: str) -> None:
-    if kind == "running":
-        color = running_color
-    elif kind == "error":
-        color = error_color
-    else:
-        color = neutral_color
-
-    label.setText(text)
-    label.setStyleSheet(f"color: {color}; font-size: 11px;")
-
-
 def compute_errors_text_height(*, text_edit, min_height: int, max_height: int) -> int:
     try:
         document = text_edit.document()

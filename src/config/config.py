@@ -16,7 +16,7 @@ def is_dev_build_channel() -> bool:
 
 # Настройка количества сохраняемых лог-файлов
 MAX_LOG_FILES = 50           # zapret_log_*.txt - основные логи приложения
-MAX_DEBUG_LOG_FILES = 20     # zapret_winws2_debug_*.log - debug логи winws2
+MAX_DEBUG_LOG_FILES = 20     # журналы winws одного вида (log.log_kinds.WINWS_DEBUG_LOG_PATTERNS)
 
 # Discord TCP конфигурации
 

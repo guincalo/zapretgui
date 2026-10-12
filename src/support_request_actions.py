@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from log.log_kinds import BLOCKCHECK_REPORT_PATTERNS, STRATEGY_SCAN_LOG_PATTERNS, WINWS_DEBUG_LOG_PATTERNS
 from blockcheck.strategy_search.probe_profile import PROTOCOL_UDP_GAMES
 import os
 from dataclasses import dataclass
@@ -57,7 +58,7 @@ def _common_candidate_paths() -> list[str | None]:
     ]
 
 
-BLOCKCHECK_RECENT_PATTERNS = ("blockcheck_run_*.json", "zapret_winws2_debug_*.log")
+BLOCKCHECK_RECENT_PATTERNS = (*BLOCKCHECK_REPORT_PATTERNS, *WINWS_DEBUG_LOG_PATTERNS)
 # Сколько последних файлов каждого вида класть в архив BlockCheck.
 BLOCKCHECK_RECENT_REPORTS = 2
 
@@ -117,7 +118,7 @@ def prepare_strategy_scan_support_request(
             run_log_file,
             *_common_candidate_paths(),
         ],
-        recent_patterns=("blockcheck_run_*.log", "zapret_winws2_debug_*.log"),
+        recent_patterns=(*STRATEGY_SCAN_LOG_PATTERNS, *WINWS_DEBUG_LOG_PATTERNS),
         extra_note=extra_note,
         discussions_url=BLOCKCHECK_ISSUES_URL,
     )
