@@ -308,7 +308,8 @@ class DnsNowPanel(SimpleCardWidget):
         set_state_text(self.title_label, summary)
 
     def set_measuring(self, measuring: bool, *, idle_text: str, busy_text: str) -> None:
-        self.measure_button.setEnabled(not measuring)
+        # Кнопку не отключаем: у нажатой кнопки фокус, и отключение увело бы его дальше,
+        # а страница прокрутилась бы сама. Повторное нажатие гасит флаг страницы.
         self.measure_button.setText(busy_text if measuring else idle_text)
 
     def set_adapters_caption(self, caption: str, empty_text: str) -> None:

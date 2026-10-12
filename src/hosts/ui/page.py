@@ -468,9 +468,10 @@ class HostsPage(BasePage):
         self._request_snapshot()
 
     def _restore_permissions(self) -> None:
+        # Повторное нажатие гасит занятая дорожка; кнопку не отключаем — у нажатой
+        # кнопки фокус, и страница прокрутилась бы сама к следующему виджету.
         if self._restore_runtime.is_running():
             return
-        self.restore_button.setEnabled(False)
         self._restore_runtime.start_qthread_worker(
             worker_factory=lambda request_id: self._hosts.create_permission_restore_worker(request_id, self),
             on_loaded=self._on_restore_finished,
@@ -480,7 +481,6 @@ class HostsPage(BasePage):
     def _on_restore_finished(self, request_id: int, result, error: str = "") -> None:
         if not self._restore_runtime.is_current(request_id, cleanup_in_progress=self._cleanup_in_progress):
             return
-        self.restore_button.setEnabled(True)
         if result is not None and getattr(result, "success", False):
             InfoBar.success(
                 title=self._tr("page.hosts.permissions.restored.title", "Права восстановлены"),
