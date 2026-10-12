@@ -35,7 +35,6 @@ class ReachRecheckTests(unittest.TestCase):
         probe.hosts_ips = tuple(hosts)
         probe.dns = DnsAnswer(ips=tuple(system))
         probe.reference_ips = tuple(reference)
-        probe.reference_ipv6 = tuple(ipv6)
         asked: list[str] = []
 
         def _get(_run, _host, ip, _path, **_kwargs):
@@ -45,7 +44,12 @@ class ReachRecheckTests(unittest.TestCase):
 
         run = engine._Run(None, workers=8, deadline=60)
         self.addCleanup(run.close)
-        with patch.object(net_access, "get", side_effect=_get), patch.object(reach, "RETRY_PAUSE_S", 0.0):
+        with (
+            patch.object(net_access, "get", side_effect=_get),
+            # Адреса IPv6 эталон отдаёт только запасной попытке, когда IPv4 не открылся.
+            patch.object(net_access, "doh_lookup", return_value=(True, tuple(ipv6))),
+            patch.object(reach, "RETRY_PAUSE_S", 0.0),
+        ):
             reach.check_reach(run, probe, read_limit=0)
         probe.reach_state = judge_reach(probe.reach)
         if quic_ok:

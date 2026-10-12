@@ -33,6 +33,7 @@ from utils.dns_wire import (
     STATUS_ERROR,
     STATUS_OK,
     STATUS_TIMEOUT,
+    TYPE_AAAA,
     DnsQueryResult,
     DnsRecord,
 )
@@ -209,6 +210,8 @@ class _Net:
         self.status = status
         self.https = https or (lambda host, ip: _ok(ip))
         self.calls: list[tuple[str, str]] = []
+        # Какие записи спрашивали у эталонного DNS (A, AAAA).
+        self.doh_types: list[int] = []
         # Что «показали» дополнительные пробы: по умолчанию ничего не выяснили.
         self.cause_facts = cause_facts
         self.refined: list[str] = []
@@ -264,6 +267,10 @@ class _Net:
             return self.cause_facts(host, result)
         return engine.block_cause.CauseFacts(host=host, result=result)
 
+    def _doh(self, _run, _host, record_type=engine.DNS_TYPE_A):
+        self.doh_types.append(record_type)
+        return True, self.reference_v6 if record_type == TYPE_AAAA else self.reference
+
     def patches(self):
         def _https_get(host, ip, *_args, **_kwargs):
             self.calls.append((host, ip))
@@ -280,10 +287,7 @@ class _Net:
             patch.object(
                 net_access,
                 "doh_lookup",
-                side_effect=lambda _run, _host, record_type=engine.DNS_TYPE_A: (
-                    True,
-                    self.reference_v6 if record_type == engine.DNS_TYPE_AAAA else self.reference,
-                ),
+                side_effect=self._doh,
             ),
             patch.object(net_access, "https_get", side_effect=_https_get),
             # Пауза перед повтором нужна настоящей сети; сценариям она только добавляет секунды.
@@ -1405,6 +1409,8 @@ class EngineScenarioTests(unittest.TestCase):
         net.run(engine.run_blockcheck, "main", emit=lambda _line: None)
 
         self.assertFalse(any(":" in ip for _host, ip in net.calls))
+        # Адреса IPv6 нужны только запасной попытке — у открывшегося сайта их не спрашивают.
+        self.assertNotIn(TYPE_AAAA, net.doh_types)
 
     def test_system_address_that_fails_is_rechecked_by_reference_address(self) -> None:
         def _https(host, ip):

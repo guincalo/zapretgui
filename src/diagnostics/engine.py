@@ -110,7 +110,7 @@ from diagnostics.verdict import (
 )
 from utils.bypass_tools import running_bypass_tools, tools_in_path
 from utils.dns_reference import REFERENCE_RESOLVERS
-from utils.dns_wire import TYPE_A, TYPE_AAAA
+from utils.dns_wire import TYPE_A
 from utils.windows_dns_query import (
     DNS_STATUS_NAME_ERROR,
     DnsAnswer,
@@ -132,7 +132,6 @@ ShouldStop = Callable[[], bool]
 BODY_PROBE_BYTES = 64 * 1024
 
 DNS_TYPE_A = TYPE_A
-DNS_TYPE_AAAA = TYPE_AAAA
 
 _WATCH_PAGE = "/watch?v=jNQXAC9IVRw&hl=en"
 _WATCH_PAGE_MAX_BYTES = 2_000_000
@@ -229,7 +228,6 @@ def _probe_host(
         for _attempt in range(DNS_ATTEMPTS)
     ]
     doh_future = run.submit(net_access.doh_lookup, run, host)
-    doh6_future = run.submit(net_access.doh_lookup, run, host, DNS_TYPE_AAAA) if full else None
     probe.hosts_ips = net_access.hosts_ipv4(host)
     probe.dns, probe.dns_nxdomain = _merge_dns_answers([future.result() for future in dns_futures])
 
@@ -285,8 +283,6 @@ def _probe_host(
     )
     probe.mark("dns")
     if full:
-        if doh6_future is not None:
-            probe.reference_ipv6 = doh6_future.result()[1]
         _check_reach(run, probe, read_limit=read_limit)
         probe.reach_state = judge_reach(probe.reach)
         # Чужой сертификат — у самого сайта или у адреса из hosts, который не подошёл: читаем, чей он.

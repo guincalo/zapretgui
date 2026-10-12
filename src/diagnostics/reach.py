@@ -24,6 +24,7 @@ from diagnostics.limits import (
 )
 from diagnostics.run_context import Probe, Run
 from diagnostics.tls_probe import CONNECT_TIMEOUT, KIND_CANCELLED, KIND_CERT, KIND_CONNECT, ProbeResult
+from utils.dns_wire import TYPE_AAAA
 from utils.windows_dns_query import ERROR_CANCELLED
 
 __all__ = ["check_reach", "same_network"]
@@ -154,14 +155,13 @@ def check_reach(run: Run, probe: Probe, *, read_limit: int) -> None:
 
     # Браузер сам уходит на IPv6, если IPv4 не отвечает: без этой попытки
     # проверка показала бы ❌ там, где сайт у пользователя открывается.
+    # Адреса IPv6 спрашиваются у эталона только здесь: раньше их узнавали для
+    # каждого сайта заранее — по четыре лишних шифрованных соединения на сайт.
     last = probe.reach
-    if (
-        last is not None
-        and not last.ok
-        and last.kind not in (KIND_CANCELLED, KIND_CERT)
-        and probe.reference_ipv6
-        and not run.dns_cancelled()
-    ):
+    if last is None or last.ok or last.kind in (KIND_CANCELLED, KIND_CERT) or run.dns_cancelled():
+        return
+    probe.reference_ipv6 = net_access.doh_lookup(run, probe.host, TYPE_AAAA)[1]
+    if probe.reference_ipv6 and not run.dns_cancelled():
         probe.ipv6_result = _one(probe.reference_ipv6[0])
         if probe.ipv6_result.ok:
             probe.reach = probe.ipv6_result
