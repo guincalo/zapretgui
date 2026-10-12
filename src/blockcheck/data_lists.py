@@ -7,7 +7,7 @@
 исчезает и сам fallback-путь, и дублирование дефолтов.
 
 Внешнее переопределение файлом рядом с приложением по-прежнему работает —
-см. ``targets.load_domains_with_source`` / ``load_tcp_targets_with_source``.
+см. ``targets.load_domains_with_source``.
 """
 
 from __future__ import annotations

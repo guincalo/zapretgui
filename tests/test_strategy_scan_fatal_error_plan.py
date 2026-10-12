@@ -24,7 +24,7 @@ class StrategyScanFatalErrorPlanTests(unittest.TestCase):
         self.assertEqual(plan.fatal_error, report.fatal_error)
         self.assertEqual(plan.support_status_code, "ready_after_error")
         self.assertIn("Остановлено", plan.status_text)
-        self.assertEqual(plan.notification_kind, "none")
+        self.assertEqual(plan.outcome.kind, "error")
 
     def test_plain_cancel_keeps_empty_fatal_error(self) -> None:
         report = StrategyScanReport(
@@ -45,7 +45,7 @@ class StrategyScanFatalErrorPlanTests(unittest.TestCase):
 
         plan = self._finalize(report)
 
-        self.assertEqual(plan.notification_kind, "baseline_accessible")
+        self.assertEqual(plan.outcome.kind, "open")
 
     def test_only_reliable_strategies_count_as_working(self) -> None:
         report = StrategyScanReport(target="discord.com", total_tested=2)
@@ -53,7 +53,7 @@ class StrategyScanFatalErrorPlanTests(unittest.TestCase):
         plan = self._finalize(report, rows=[{"success": True}, {"success": False, "verdict": "unstable"}])
 
         self.assertEqual(plan.working_count, 1)
-        self.assertEqual(plan.notification_kind, "found")
+        self.assertEqual(plan.outcome.kind, "found")
 
 
 class StrategyScanResultPresentationTests(unittest.TestCase):

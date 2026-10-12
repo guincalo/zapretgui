@@ -115,7 +115,7 @@ def check_telegram(
     return tuple(wait(future) for future in futures)
 
 
-def summarize_telegram(servers: tuple[DcResult, ...], *, zapret_running: bool | None = None) -> TelegramReport:
+def summarize_telegram(servers: tuple[DcResult, ...]) -> TelegramReport:
     checked = [item for item in servers if item.connected is not None]
     answered = [item for item in checked if item.connected]
     if not checked:

@@ -6,7 +6,6 @@
 список — но теперь это осознанный выбор пользователя, а не тихая деградация.
 """
 
-import json
 import logging
 from pathlib import Path
 
@@ -15,9 +14,7 @@ from blockcheck.data_lists import (
     HTTPS_TARGETS,
     PING_TARGETS,
     STUN_TARGETS,
-    TCP_16_20_TARGETS,
 )
-from blockcheck.config import TCP_TARGET_MAX_COUNT, TCP_TARGETS_PER_PROVIDER
 from blockcheck.googlevideo_discovery import (
     is_bare_googlevideo_host,
     normalize_googlevideo_host,
@@ -159,90 +156,6 @@ def remove_user_domain(domain: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# TCP 16-20KB targets
-# ---------------------------------------------------------------------------
-
-def load_tcp_targets_with_source(filepath: str | Path | None = None) -> tuple[list[dict], str]:
-    """Цели проверки 16-20 КБ и источник, из которого они взяты."""
-    builtin = [dict(target) for target in TCP_16_20_TARGETS]
-
-    for candidate in _iter_override_candidates("tcp_16_20_targets.json", filepath):
-        if not candidate.exists():
-            continue
-        try:
-            data = json.loads(candidate.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError) as e:
-            logger.warning("Failed to load tcp targets from %s: %s", candidate, e)
-            return builtin, f"builtin (unreadable override {candidate})"
-
-        if isinstance(data, list) and data:
-            return data, f"file:{candidate}"
-        return builtin, f"builtin (empty override {candidate})"
-
-    return builtin, "builtin"
-
-
-def load_tcp_targets(filepath: str | Path | None = None) -> list[dict]:
-    """Load TCP 16-20KB test targets from JSON file."""
-    targets, _ = load_tcp_targets_with_source(filepath)
-    return targets
-
-
-def select_tcp_targets(
-    targets: list[dict],
-    max_count: int = TCP_TARGET_MAX_COUNT,
-    per_provider_cap: int = TCP_TARGETS_PER_PROVIDER,
-) -> list[dict]:
-    """Select a diverse subset of TCP targets.
-
-    Selection strategy:
-    1) round-robin across providers for fairness;
-    2) up to ``per_provider_cap`` entries per provider;
-    3) stop at ``max_count``.
-    """
-    if not targets or max_count <= 0:
-        return []
-
-    if per_provider_cap <= 0:
-        per_provider_cap = 1
-
-    by_provider: dict[str, list[dict]] = {}
-    for t in targets:
-        prov = str(t.get("provider") or "unknown")
-        by_provider.setdefault(prov, []).append(t)
-
-    provider_order = list(by_provider.keys())
-    provider_taken = {provider: 0 for provider in provider_order}
-    provider_index = {provider: 0 for provider in provider_order}
-
-    selected: list[dict] = []
-    while len(selected) < max_count:
-        added_this_round = False
-
-        for provider in provider_order:
-            if provider_taken[provider] >= per_provider_cap:
-                continue
-
-            idx = provider_index[provider]
-            items = by_provider[provider]
-            if idx >= len(items):
-                continue
-
-            selected.append(items[idx])
-            provider_index[provider] += 1
-            provider_taken[provider] += 1
-            added_this_round = True
-
-            if len(selected) >= max_count:
-                break
-
-        if not added_this_round:
-            break
-
-    return selected
-
-
-# ---------------------------------------------------------------------------
 # Default targets
 # ---------------------------------------------------------------------------
 
@@ -266,11 +179,6 @@ def get_default_https_targets(googlevideo_host: str | None = None) -> list[dict]
     )
     targets.insert(redirector_index, dynamic_target)
     return targets
-
-
-def get_default_https_targets_domains() -> list[str]:
-    """Extract domain names from default HTTPS targets."""
-    return [host_of(target["value"]) for target in HTTPS_TARGETS]
 
 
 def get_default_stun_targets() -> list[dict]:

@@ -133,14 +133,12 @@ class BlockcheckWorker(QObject):
         except Exception:
             logger.exception("Failed to remember blockcheck run")
             return
-        changes = [str(item) for item in note.get("changes") or ()]
-        report["changes"] = changes
-        report["previous_time"] = str(note.get("previous_time") or "")
         report["json_file"] = str(note.get("json_file") or "")
         if report["json_file"]:
             self.run_log_started.emit(report["json_file"])
         report["history"] = [dict(run) for run in note.get("history") or () if isinstance(run, dict)]
-        # Сравнение «с Zapret и без» и строка об изменениях уже лежат в файле; здесь — только на экран.
+        # Сравнение «с Zapret и без», изменения с прошлого раза и их строка уже лежат
+        # в отчёте и в файле; здесь — только на экран.
         for line in note.get("lines") or ():
             self.log_message.emit(str(line))
 

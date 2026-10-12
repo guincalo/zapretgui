@@ -281,6 +281,9 @@ class StoreAndRememberTests(unittest.TestCase):
         self.assertEqual(Path(second["json_file"]).name, "blockcheck_run_1.json")
         self.assertEqual(document["format"], history.REPORT_FORMAT)
         self.assertEqual(document["level"], "fail")
+        # Отчёт, открытый из «Прошлых проверок», показывает ту же полосу изменений.
+        self.assertEqual(document["report"]["changes"], ["перестали открываться: YouTube"])
+        self.assertEqual(document["report"]["previous_time"], second["previous_time"])
 
     def test_run_of_another_scope_is_not_compared(self) -> None:
         from blockcheck import commands
@@ -302,14 +305,17 @@ class WorkerTests(unittest.TestCase):
         )
 
     def test_changes_are_added_to_report_and_printed(self) -> None:
-        worker = self._worker(
-            lambda report, log: {
+        def remember(report, _log):
+            # Как настоящая запись: изменения ложатся в отчёт до сохранения файла.
+            report["changes"] = ["перестали открываться: YouTube"]
+            return {
                 "changes": ["перестали открываться: YouTube"],
                 "previous_time": "2026-10-06T10:00:00",
                 "json_file": "x.json",
                 "lines": ["🕘 С прошлой проверки (06.10 10:00) перестали открываться: YouTube."],
             }
-        )
+
+        worker = self._worker(remember)
         lines: list[str] = []
         worker.log_message.connect(lines.append)
         report = {"scope": "all"}

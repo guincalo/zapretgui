@@ -65,28 +65,19 @@ def start_run_log(
         scan_protocol=scan_protocol,
         udp_games_scope=udp_games_scope,
     )
-    candidates = [primary_path]
-
-    tried: set[Path] = set()
-    for path in candidates:
-        if path in tried:
-            continue
-        tried.add(path)
-        header = (
-            f"=== Strategy Scan Run Log ({datetime.now():%Y-%m-%d %H:%M:%S}) ===\n"
-            f"Mode: {mode}\n"
-            f"Protocol: {scan_protocol}\n"
-        )
-        if scan_protocol == "udp_games":
-            header += f"UDP games scope: {udp_games_scope}\n"
-        header += (
-            f"Target: {target}\n"
-            f"{'=' * 70}\n\n"
-        )
-        if run_log_sessions.start(path, header):
-            return StrategyScanRunLogState(path=path, created=True)
-
-    return StrategyScanRunLogState(path=None, created=False)
+    header = (
+        f"=== Strategy Scan Run Log ({datetime.now():%Y-%m-%d %H:%M:%S}) ===\n"
+        f"Mode: {mode}\n"
+        f"Protocol: {scan_protocol}\n"
+    )
+    if scan_protocol == "udp_games":
+        header += f"UDP games scope: {udp_games_scope}\n"
+    header += (
+        f"Target: {target}\n"
+        f"{'=' * 70}\n\n"
+    )
+    started = run_log_sessions.start(primary_path, header)
+    return StrategyScanRunLogState(path=primary_path if started else None)
 
 
 def append_run_log(path: Path | None, message: str) -> None:

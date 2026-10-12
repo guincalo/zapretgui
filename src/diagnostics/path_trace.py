@@ -369,9 +369,8 @@ def tcp_pair(
             return None if token.cancelled else ttl is not None
         # Данные — ответ сервера; пустое чтение — соединение закрыли.
         return bool(answer)
-    except (ConnectionResetError, ConnectionAbortedError):
-        return None if token.cancelled else False
     except OSError:
+        # Сброс, разрыв и прочие отказы сети: сервер ответил отказом.
         return None if token.cancelled else False
     finally:
         if sock is not None:

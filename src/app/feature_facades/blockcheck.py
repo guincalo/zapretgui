@@ -133,12 +133,6 @@ class BlockcheckFeature:
     def load_page_initial_state(self, *args, **kwargs):
         return self._worker_commands().load_page_initial_state(*args, **kwargs)
 
-    def append_run_log(self, *args, **kwargs) -> None:
-        return self._commands().append_run_log(*args, **kwargs)
-
-    def start_run_log(self, *args, **kwargs):
-        return self._commands().start_run_log(*args, **kwargs)
-
     def make_blockcheck_report_path(self, *args, **kwargs) -> str:
         return self._worker_commands().make_blockcheck_report_path(*args, **kwargs)
 
@@ -201,9 +195,6 @@ class BlockcheckFeature:
 
     def finalize_scan_report(self, *args, **kwargs):
         return self._commands().finalize_scan_report(*args, **kwargs)
-
-    def build_finish_notification_plan(self, *args, **kwargs):
-        return self._commands().build_finish_notification_plan(*args, **kwargs)
 
     def build_apply_success_plan(self, *args, **kwargs):
         return self._commands().build_apply_success_plan(*args, **kwargs)

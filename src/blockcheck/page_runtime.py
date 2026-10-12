@@ -54,11 +54,6 @@ def load_page_initial_state() -> BlockcheckPageInitialStatePlan:
         return BlockcheckPageInitialStatePlan(user_domains=())
 
 
-def load_user_domains() -> list[str]:
-    from blockcheck.targets import load_user_domains
-
-    return list(load_user_domains())
-
 def add_user_domain(text: str) -> str | UserDomainRejection | None:
     from blockcheck.googlevideo_discovery import is_bare_googlevideo_host
     from blockcheck.hosts import host_of

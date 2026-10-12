@@ -62,13 +62,12 @@ from ui.code_editor.log_syntax import LogSyntaxHighlighter
 from ui.fluent_widgets import set_tooltip
 from ui.theme import get_cached_qta_pixmap
 from ui.theme_refresh import ThemeRefreshBinding
-from ui.widgets.elided_label import ElidedLabel as _ElidedLabel
 from ui.widgets.hover_hint import HoverHint
 from ui.widgets.reveal import RISE_PX, Reveal
 from ui.widgets.share_bar import ShareBar
 from ui.block_build import DeferredFill
 from ui.widgets.stagger_float_in import float_in
-from ui.widgets.tone_group import ToneDot, dot_on_first_line, mute, paint_dot
+from ui.widgets.tone_group import ToneDot, mute, paint_dot
 
 CARD_RADIUS = 8
 GRID_GAP = 10
@@ -171,43 +170,6 @@ class _StateIcon(QLabel):
             )
         except Exception:
             pass
-
-
-class _LineRow(QWidget):
-    """Строка измерения: значок, что проверяли и что получилось."""
-
-    def __init__(self, line: Line, parent=None, *, wrap: bool = False) -> None:
-        super().__init__(parent)
-        self.line = line
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(7)
-        state = line.state
-        dot = ToneDot(lambda tokens: state_color(state, tokens), self, size=7, hollow=state in _HOLLOW_STATES)
-        if wrap:
-            layout.addWidget(dot_on_first_line(dot), 0, Qt.AlignmentFlag.AlignTop)
-        else:
-            layout.addWidget(dot, 0, Qt.AlignmentFlag.AlignVCenter)
-        if wrap:
-            # Подробный вид: текст переносится, название — жирнее.
-            # Строка без пояснения — обычный текст (совет, описание), с пояснением — «что: как».
-            text = f"<b>{_escape(line.name)}</b> — {_escape(line.text)}" if line.text else _escape(line.name)
-            label = BodyLabel(text, self)
-            label.setTextFormat(Qt.TextFormat.RichText)
-            label.setWordWrap(True)
-            label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-            layout.addWidget(label, 1)
-        else:
-            self.name_label = _ElidedLabel(line.name, self)
-            if line.text:
-                # Название — целиком, сколько есть места; сокращается пояснение справа.
-                self.name_label.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
-                layout.addWidget(self.name_label, 0)
-                self.text_label = mute(_ElidedLabel(line.text, self, align=Qt.AlignmentFlag.AlignRight))
-                layout.addWidget(self.text_label, 1)
-            else:
-                layout.addWidget(self.name_label, 1)
-        set_state_text(self, f"{line.name}: {line.text}" if line.text else line.name)
 
 
 def _escape(text: str) -> str:

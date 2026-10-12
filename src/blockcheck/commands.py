@@ -7,25 +7,6 @@ from log.log import global_logger
 from log.run_log_sessions import run_log_sessions
 
 
-def create_blockcheck_worker(
-    *,
-    scope: str = "main",
-    user_domains: list[str] | None = None,
-    parent=None,
-):
-    from blockcheck.worker import BlockcheckWorker
-
-    return BlockcheckWorker(
-        scope=scope,
-        user_domains=user_domains,
-        report_path=make_blockcheck_report_path,
-        save_report=save_blockcheck_report,
-        remember_run=remember_blockcheck_run,
-        check_dns_servers=check_dns_servers,
-        parent=parent,
-    )
-
-
 def load_page_initial_state():
     from blockcheck.page_runtime import load_page_initial_state as _load_page_initial_state
 
@@ -163,6 +144,9 @@ def remember_blockcheck_run(report: dict, log_file: str | None, *, preset: str =
     changes = history.describe_changes(previous, entry)
     previous_time = str(previous.get("time") or "") if previous else ""
     report["preset"] = str(preset or "")
+    # Полоса «С прошлой проверки» должна быть и у отчёта, открытого из истории.
+    report["changes"] = list(changes)
+    report["previous_time"] = previous_time
     report["compare"] = compare.compare_runs(entry, compare.counterpart(past, entry))
     lines = compare.lines(report["compare"], format_time=history.format_time)
     if changes:
@@ -179,12 +163,6 @@ def remember_blockcheck_run(report: dict, log_file: str | None, *, preset: str =
         "history": runs,
         "lines": lines,
     }
-
-
-def build_quick_target_menu_plan(*, scan_protocol: str, current_value: str):
-    from blockcheck.strategy_scan_page_plans import build_quick_target_menu_plan as _build_plan
-
-    return _build_plan(scan_protocol=scan_protocol, current_value=current_value)
 
 
 def prepare_strategy_scan_support(

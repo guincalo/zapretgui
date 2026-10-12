@@ -56,6 +56,24 @@ class StrategyScanGoogleVideoTargetTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls._app = QApplication.instance() or QApplication([])
 
+    def test_stop_pressed_while_waiting_in_queue_is_not_lost(self) -> None:
+        # Поток подбора может ждать очереди фоновых задач. «Остановить», нажатое в это
+        # время, должно отменить подбор, как только тот создан, а не потеряться при старте.
+        worker = _make_worker("discord.com")
+        worker.stop()
+        search = SimpleNamespace(cancel=lambda: cancelled.append(True))
+        cancelled: list[bool] = []
+
+        def fake_search(request, *, env, events, on_created):
+            on_created(search)
+            return _stub_scanner_report(request.target)
+
+        with patch(_SEARCH, side_effect=fake_search):
+            worker.run()
+
+        self.assertEqual(cancelled, [True])
+        self.assertTrue(worker.is_cancelled())
+
     def test_bare_googlevideo_replaced_before_scanner_start(self) -> None:
         worker = _make_worker("googlevideo.com")
         logs: list[str] = []

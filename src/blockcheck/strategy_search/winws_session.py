@@ -130,11 +130,6 @@ class WinwsSession:
             process = self._process
         return process is not None and process.poll() is None
 
-    def exit_code(self) -> int | None:
-        with self._lock:
-            process = self._process
-        return None if process is None else process.poll()
-
     def output_tail(self, lines: int = 6) -> str:
         return "\n".join(list(self._lines)[-lines:])
 

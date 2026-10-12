@@ -16,7 +16,6 @@ __all__ = [
     "HEAD_START_S",
     "HTTPS_TIMEOUT",
     "REACH_ADDRESSES",
-    "REACH_ATTEMPTS",
     "READ_TIMEOUT",
     "REGISTRY_WAIT_S",
     "RECHECK_AT_ONCE",
@@ -45,7 +44,6 @@ DOH_TIMEOUT = 5.0
 REFERENCE_GRACE_S = 1.0
 HTTPS_TIMEOUT = 5.0
 READ_TIMEOUT = 3.0
-REACH_ATTEMPTS = 2
 # Сколько разных адресов сайта пробовать, прежде чем сказать «не открывается».
 # Браузер перебирает все адреса из ответа DNS; у крупных сайтов их несколько,
 # и закрытым бывает только один.

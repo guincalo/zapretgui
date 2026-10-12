@@ -178,11 +178,9 @@ class StrategyScanPageAccessibilityTests(unittest.TestCase):
                 cancelled=False,
             ),
             reset_ui=lambda: None,
-            scan_protocol="tcp",
             progress_bar=progress_bar,
             status_label=status_label,
             set_support_status=lambda _text: None,
-            parent_widget=None,
         )
 
         self.assertEqual(progress_bar.accessibleName(), "Ход подбора стратегии: не выполняется")

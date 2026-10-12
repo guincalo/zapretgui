@@ -39,14 +39,11 @@ class BlockcheckWorkerArchitectureTests(unittest.TestCase):
 
     def test_blockcheck_run_worker_receives_log_actions_as_callables(self) -> None:
         feature_source = inspect.getsource(BlockcheckFeature.create_blockcheck_worker)
-        command_factory_source = inspect.getsource(blockcheck_commands.create_blockcheck_worker)
         worker_source = inspect.getsource(blockcheck_worker.BlockcheckWorker)
 
         # У проверки один файл — отчёт .json: рабочий поток получает, куда его писать и чем.
         self.assertIn("report_path=self.make_blockcheck_report_path", feature_source)
         self.assertIn("save_report=self.save_blockcheck_report", feature_source)
-        self.assertIn("report_path=make_blockcheck_report_path", command_factory_source)
-        self.assertIn("save_report=save_blockcheck_report", command_factory_source)
         self.assertIn("_report_path", worker_source)
         self.assertIn("_save_report", worker_source)
         # Текстовый журнал проверки больше не ведётся.

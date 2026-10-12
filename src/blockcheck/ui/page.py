@@ -52,7 +52,6 @@ from qfluentwidgets import (
     CaptionLabel,
     BodyLabel,
     IndeterminateProgressBar,
-    themeColor,
     PrimaryPushButton,
     PushButton,
     LineEdit,
@@ -66,7 +65,6 @@ from config.urls import BLOCKCHECK_INFO_URL
 from ui.fluent_widgets import SettingsCard, InfoBarHelper, set_tooltip
 from log.log import log
 
-import qtawesome as qta
 
 logger = logging.getLogger(__name__)
 
@@ -455,8 +453,6 @@ class BlockcheckPage(BasePage):
             caption_label_cls=CaptionLabel,
             line_edit_cls=LineEdit,
             push_button_cls=PushButton,
-            qta_module=qta,
-            theme_color_fn=themeColor,
             on_add=self._on_add_domain,
         )
         self._domains_card = domains_widgets.card

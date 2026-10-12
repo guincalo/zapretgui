@@ -334,16 +334,23 @@ def lines(services: list[dict], index: Index, now: float | None = None) -> list[
 TAG_REGISTRY = {"key": "registry", "text": "в реестре РКН", "state": "info"}
 
 
-def annotate(services: list[dict], index: Index) -> None:
-    """Дописывает в отчёт по сайтам отметку реестра. Пустой список — ничего не пишет."""
+def annotate(services: list[dict], index: Index) -> list[dict]:
+    """Отчёт по сайтам с отметкой реестра. Пустой список — отчёт как был.
+
+    Переданный список не меняется: его уже мог получить экран и читать из
+    другого потока. Отметка ложится в новые записи сайтов и их адресов.
+    """
     if not index.hosts:
-        return
+        return list(services)
+    marked: list[dict] = []
     for service in services:
+        targets = []
         for target in service.get("targets") or ():
             found = index.match(str(target.get("host") or ""), str(target.get("address") or ""))
-            target["registry"] = {"listed": found.listed, "name": found.name, "network": found.network}
+            targets.append(dict(target, registry={"listed": found.listed, "name": found.name, "network": found.network}))
         # Метка сайта лежит в отчёте готовой, как и остальные его метки.
-        tags = service.setdefault("tags", [])
-        if any((target.get("registry") or {}).get("listed") for target in service.get("targets") or ()):
-            if TAG_REGISTRY not in tags:
-                tags.append(dict(TAG_REGISTRY))
+        tags = list(service.get("tags") or [])
+        if any(target["registry"]["listed"] for target in targets) and TAG_REGISTRY not in tags:
+            tags.append(dict(TAG_REGISTRY))
+        marked.append(dict(service, targets=targets, tags=tags))
+    return marked

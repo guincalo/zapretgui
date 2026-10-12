@@ -159,14 +159,14 @@ class ReportTests(unittest.TestCase):
         ]
 
     def test_report_gets_a_mark_for_every_site(self) -> None:
-        registry.annotate(self.services, self.index)
+        self.services = registry.annotate(self.services, self.index)
 
         marks = [service["targets"][0]["registry"] for service in self.services]
         self.assertEqual(marks[0], {"listed": True, "name": "facebook.com", "network": "68.171.224.0/19"})
         self.assertEqual(marks[1], {"listed": False, "name": "", "network": ""})
 
     def test_without_a_list_nothing_is_claimed(self) -> None:
-        registry.annotate(self.services, registry.Index())
+        self.services = registry.annotate(self.services, registry.Index())
 
         self.assertNotIn("registry", self.services[0]["targets"][0])
         self.assertIn("скачать не удалось", "\n".join(registry.lines(self.services, registry.Index())))
@@ -174,7 +174,7 @@ class ReportTests(unittest.TestCase):
         self.assertNotIn(("в реестре РКН", "info"), cards["Facebook"].chips)
 
     def test_text_report_names_listed_sites_and_warns_about_blocks_outside_the_registry(self) -> None:
-        registry.annotate(self.services, self.index)
+        self.services = registry.annotate(self.services, self.index)
         text = "\n".join(registry.lines(self.services, self.index, now=1000.0))
 
         self.assertIn("📕 www.facebook.com: в реестре есть facebook.com; адрес 68.171.230.1 в списке заблокированных", text)
@@ -182,8 +182,17 @@ class ReportTests(unittest.TestCase):
         self.assertIn("и без записи в реестре", text)
         self.assertIn("давно не обновлялся", "\n".join(registry.lines(self.services, self.index, now=1000.0 + 9 * DAY)))
 
+    def test_annotating_does_not_touch_the_report_the_screen_already_has(self) -> None:
+        # Экран получает отчёт по сайтам раньше, чем скачается реестр, и читает его из
+        # своего потока: отметка не должна дописываться в уже отданные записи.
+        marked = registry.annotate(self.services, self.index)
+
+        self.assertNotIn("registry", self.services[0]["targets"][0])
+        self.assertNotIn("tags", self.services[0])
+        self.assertTrue(marked[0]["targets"][0]["registry"]["listed"])
+
     def test_cards_show_the_mark_and_do_not_call_an_unlisted_site_unblocked(self) -> None:
-        registry.annotate(self.services, self.index)
+        self.services = registry.annotate(self.services, self.index)
         cards = {card.title: card for card in build_cards({"services": self.services})}
 
         def row(title: str) -> str:

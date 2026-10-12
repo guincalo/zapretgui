@@ -30,7 +30,6 @@ __all__ = [
     "DNS_STATUS_NO_RECORDS",
     "DnsAnswer",
     "hosts_file_ipv4",
-    "is_dns_api_available",
     "query_ipv4",
     "system_dns_servers",
 ]
@@ -178,10 +177,6 @@ else:  # pragma: no cover - модуль импортируется и на Linu
     _DnsCancelQuery = None
     _DnsFree = None
     _DnsQueryConfig = None
-
-
-def is_dns_api_available() -> bool:
-    return _DnsQueryEx is not None
 
 
 # ---------------------------------------------------------------------------

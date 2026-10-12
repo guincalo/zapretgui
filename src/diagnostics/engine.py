@@ -697,7 +697,7 @@ def run_blockcheck(
 
         telegram_facts = _settle(run, telegram_future, emit, "Дата-центры Telegram")
         telegram = (
-            telegram_check.summarize_telegram(telegram_facts, zapret_running=zapret_running)
+            telegram_check.summarize_telegram(telegram_facts)
             if telegram_facts is not None
             else None
         )
@@ -756,7 +756,7 @@ def run_blockcheck(
         problems.sort(key=lambda item: problem_rules.LEVEL_ORDER.get(Level(item["level"]), 9))
 
         registry_index = registry_wait(REGISTRY_WAIT_S)
-        registry.annotate(services_report, registry_index)
+        services_report = registry.annotate(services_report, registry_index)
         for line in registry.lines(services_report, registry_index):
             emit(line)
         emit(step.line(report_text.STEP_TITLES))
@@ -767,6 +767,7 @@ def run_blockcheck(
             emit(line)
 
         return live.put(
+            services=services_report,
             registry=registry.summary(registry_index),
             problems=problems,
             working=working,
@@ -800,7 +801,7 @@ def check_site(host: str, *, should_stop: ShouldStop | None = None, emit: Emit |
         collected = _run_probes(run, services, full=True, emit=emit or (lambda _line: None))
         verdicts = {key: _service_verdict(item, collected[key], zapret_running=zapret_running) for key, item in services.items()}
         report = report_text.services_report(services, verdicts, collected)
-        registry.annotate(report, registry_wait(REGISTRY_WAIT_S))
+        report = registry.annotate(report, registry_wait(REGISTRY_WAIT_S))
         return report[0] if report else None
     except _Stopped:
         return None

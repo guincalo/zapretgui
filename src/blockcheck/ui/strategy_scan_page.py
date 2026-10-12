@@ -9,7 +9,7 @@ from collections import deque
 from pathlib import Path
 
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
-from PyQt6.QtWidgets import QWidget, QHBoxLayout, QLabel
+from PyQt6.QtWidgets import QLabel
 
 from ui.pages.base_page import BasePage
 from blockcheck.ui.strategy_scan_page_build import (
@@ -104,7 +104,6 @@ class StrategyScanPage(BasePage):
         self._result_rows: list[dict] = []
         self._scan_target: str = ""
         self._scan_protocol: str = "tcp_https"
-        self._scan_udp_games_scope: str = "all"
         self._scan_mode: str = "quick"
         self._scan_worker = None
         self._run_log_file: Path | None = None
@@ -383,14 +382,6 @@ class StrategyScanPage(BasePage):
     # Helpers
     # ------------------------------------------------------------------
 
-    @staticmethod
-    def _wrap_layout(layout: QHBoxLayout) -> QWidget:
-        """Wrap a layout in a transparent QWidget for add_widget()."""
-        w = QWidget()
-        w.setLayout(layout)
-        w.setStyleSheet("background: transparent;")
-        return w
-
     def _on_protocol_changed(self, _index: int) -> None:
         """Adjust target input defaults when protocol changes."""
         selection = self._blockcheck.build_selection_state(
@@ -513,13 +504,6 @@ class StrategyScanPage(BasePage):
             is_current_worker_finish=self._is_current_worker_finish,
             single_shot=QTimer.singleShot,
             run_scheduled=self._run_scheduled_quick_targets_menu_start,
-            cleanup_in_progress=self.__dict__.get("_cleanup_in_progress", False),
-        )
-
-    def _schedule_quick_targets_menu_start(self) -> None:
-        self._quick_targets_state_obj().schedule_start(
-            QTimer.singleShot,
-            self._run_scheduled_quick_targets_menu_start,
             cleanup_in_progress=self.__dict__.get("_cleanup_in_progress", False),
         )
 
@@ -662,7 +646,6 @@ class StrategyScanPage(BasePage):
 
         self._scan_target = run_result.target
         self._scan_protocol = run_result.scan_protocol
-        self._scan_udp_games_scope = run_result.udp_games_scope
         self._scan_mode = run_result.mode
         self._scan_worker = run_result.worker
         self._run_log_file = None
@@ -963,11 +946,9 @@ class StrategyScanPage(BasePage):
             blockcheck_feature=self._blockcheck,
             finish_plan=finish_plan,
             reset_ui=self._reset_ui,
-            scan_protocol=self._scan_protocol,
             progress_bar=self._progress_bar,
             status_label=self._status_label,
             set_support_status=self._set_support_status,
-            parent_widget=self.window(),
             panel=self._scan_panel,
         )
 
@@ -995,13 +976,6 @@ class StrategyScanPage(BasePage):
             is_current_worker_finish=self._is_current_worker_finish,
             single_shot=QTimer.singleShot,
             run_scheduled=self._run_scheduled_strategy_scan_finalize_start,
-            cleanup_in_progress=self.__dict__.get("_cleanup_in_progress", False),
-        )
-
-    def _schedule_strategy_scan_finalize_start(self) -> None:
-        self._strategy_scan_finalize_state_obj().schedule_start(
-            QTimer.singleShot,
-            self._run_scheduled_strategy_scan_finalize_start,
             cleanup_in_progress=self.__dict__.get("_cleanup_in_progress", False),
         )
 

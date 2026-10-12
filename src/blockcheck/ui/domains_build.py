@@ -28,8 +28,6 @@ def build_blockcheck_domains_ui(
     caption_label_cls,
     line_edit_cls,
     push_button_cls,
-    qta_module,
-    theme_color_fn,
     on_add,
 ) -> BlockcheckDomainsWidgets:
     card = settings_card_cls()

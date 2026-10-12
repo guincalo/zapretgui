@@ -5,8 +5,8 @@ from pathlib import Path
 
 @dataclass(slots=True)
 class StrategyScanRunLogState:
+    # None — журнал завести не удалось.
     path: Path | None
-    created: bool
 
 
 @dataclass(slots=True)
@@ -49,10 +49,7 @@ class StrategyScanFinishPlan:
     cancelled: bool
     baseline_accessible: bool
     status_text: str
-    log_message: str | None
     support_status_code: str
-    notification_kind: str
-    baseline_variant: str
     fatal_error: str = ""
     outcome: StrategyScanPanelOutcome | None = None
 
@@ -74,16 +71,6 @@ class StrategyScanResultPresentation:
     time_text: str
     can_apply: bool
     stored_row: dict[str, object]
-
-
-@dataclass(slots=True)
-class StrategyScanNotificationPlan:
-    kind: str
-    title_key: str
-    title_default: str
-    body_key: str
-    body_default: str
-    body_text: str
 
 
 @dataclass(slots=True)

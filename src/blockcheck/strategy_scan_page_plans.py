@@ -8,7 +8,6 @@ from blockcheck.strategy_scan_state import (
     StrategyScanFinishPlan,
     StrategyScanInteractionPlan,
     StrategyScanLanguagePlan,
-    StrategyScanNotificationPlan,
     StrategyScanProgressPlan,
     StrategyScanProtocolUiPlan,
     StrategyScanQuickMenuPlan,
@@ -407,8 +406,7 @@ def finalize_scan_report(
     scan_protocol: str,
     result_rows: list[dict],
 ) -> StrategyScanFinishPlan:
-    working = sum(1 for row in result_rows if row.get("success"))
-    baseline_variant = "stun" if scan_protocol in {"stun_voice", "udp_games"} else "tcp"
+    working = count_working_results(result_rows)
 
     if report is None:
         return StrategyScanFinishPlan(
@@ -418,10 +416,7 @@ def finalize_scan_report(
             cancelled=False,
             baseline_accessible=False,
             status_text="Ошибка подбора",
-            log_message="ERROR: Strategy scan execution failed",
             support_status_code="ready_after_error",
-            notification_kind="none",
-            baseline_variant=baseline_variant,
         )
 
     total_available = max(0, int(getattr(report, "total_available", 0) or 0))
@@ -436,17 +431,6 @@ def finalize_scan_report(
     else:
         status_text = f"Готово. Проверено: {total_count}, надёжно работают: {working} ({elapsed:.0f} с)"
 
-    if fatal_error or (report.cancelled and total_count == 0):
-        notification_kind = "none"
-    elif report.baseline_accessible:
-        notification_kind = "baseline_accessible"
-    elif report.cancelled:
-        notification_kind = "none"
-    elif working > 0:
-        notification_kind = "found"
-    else:
-        notification_kind = "not_found"
-
     outcome = build_panel_outcome(report, result_rows)
     return StrategyScanFinishPlan(
         total_available=total_available,
@@ -455,10 +439,7 @@ def finalize_scan_report(
         cancelled=bool(report.cancelled),
         baseline_accessible=bool(report.baseline_accessible),
         status_text=status_text,
-        log_message=f"\n{status_text}",
         support_status_code="ready_after_error" if fatal_error else "ready",
-        notification_kind=notification_kind,
-        baseline_variant=baseline_variant,
         fatal_error=fatal_error,
         outcome=outcome,
     )
@@ -562,62 +543,4 @@ def build_panel_outcome(report, result_rows: list[dict]) -> StrategyScanPanelOut
             f"Проверено {tested} из {available}. Запустите подбор ещё раз — проверятся следующие стратегии, "
             "— или выберите «Все стратегии». Провалившиеся уйдут в конец очереди."
         ),
-    )
-
-
-def build_finish_notification_plan(finish_plan: StrategyScanFinishPlan, *, scan_protocol: str) -> StrategyScanNotificationPlan:
-    if finish_plan.notification_kind == "baseline_accessible":
-        if scan_protocol == "udp_games":
-            title_default = "UDP уже доступен"
-        elif finish_plan.baseline_variant == "stun":
-            title_default = "STUN уже доступен"
-        else:
-            title_default = "Домен уже доступен"
-
-        if finish_plan.baseline_variant == "stun":
-            return StrategyScanNotificationPlan(
-                kind="warning",
-                title_key="page.strategy_scan.baseline_ok_title_stun",
-                title_default=title_default,
-                body_key="page.strategy_scan.baseline_ok_text_stun",
-                body_default="Цель отвечает и без обхода: результаты подбора — только для сведения",
-                body_text="",
-            )
-
-        return StrategyScanNotificationPlan(
-            kind="warning",
-            title_key="page.strategy_scan.baseline_ok_title",
-            title_default=title_default,
-            body_key="page.strategy_scan.baseline_ok_text",
-            body_default="Сайт открывается и без обхода: результаты подбора — только для сведения",
-            body_text="",
-        )
-
-    if finish_plan.notification_kind == "found":
-        return StrategyScanNotificationPlan(
-            kind="success",
-            title_key="page.strategy_scan.found",
-            title_default="Найдены надёжные стратегии",
-            body_key="",
-            body_default="",
-            body_text=f"{finish_plan.working_count} из {finish_plan.total_count}",
-        )
-
-    if finish_plan.notification_kind == "not_found":
-        return StrategyScanNotificationPlan(
-            kind="warning",
-            title_key="page.strategy_scan.not_found",
-            title_default="Рабочих стратегий не найдено",
-            body_key="page.strategy_scan.try_full",
-            body_default="Запустите подбор ещё раз: проверятся следующие стратегии, или выберите «Все стратегии»",
-            body_text="",
-        )
-
-    return StrategyScanNotificationPlan(
-        kind="none",
-        title_key="",
-        title_default="",
-        body_key="",
-        body_default="",
-        body_text="",
     )

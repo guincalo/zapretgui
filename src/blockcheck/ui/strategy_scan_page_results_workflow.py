@@ -5,7 +5,6 @@ from __future__ import annotations
 from app.ui_texts import tr as tr_catalog
 import blockcheck.strategy_scan_run_workflow as strategy_scan_run_workflow
 from ui.accessibility import set_state_text
-from ui.fluent_widgets import InfoBarHelper
 
 
 def apply_strategy_started_progress(
@@ -64,11 +63,9 @@ def apply_finished_scan(
     blockcheck_feature,
     finish_plan,
     reset_ui,
-    scan_protocol: str,
     progress_bar,
     status_label,
     set_support_status,
-    parent_widget,
     panel=None,
 ) -> None:
     reset_ui()
@@ -113,19 +110,6 @@ def apply_finished_scan(
         )
     )
 
-    # Панель уже всё сказала; всплывашка — только если панели нет (старые вызовы).
-    if panel is not None:
-        return
-    try:
-        notification_plan = blockcheck_feature.build_finish_notification_plan(finish_plan, scan_protocol=scan_protocol)
-        title = tr_catalog(notification_plan.title_key, default=notification_plan.title_default)
-        body = notification_plan.body_text or tr_catalog(notification_plan.body_key, default=notification_plan.body_default)
-        if notification_plan.kind == "warning" and notification_plan.title_key:
-            InfoBarHelper.warning(parent_widget, title, body)
-        elif notification_plan.kind == "success" and notification_plan.title_key:
-            InfoBarHelper.success(parent_widget, title, body)
-    except Exception:
-        pass
 
 
 def apply_force_stop_status(
