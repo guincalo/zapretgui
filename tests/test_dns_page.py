@@ -17,7 +17,7 @@ from dns import page_plans
 from dns.adapters import DnsAdapter
 from dns.dns_providers import DNS_PROVIDERS
 from dns.latency import DnsLatencyReport
-from dns.state import CustomServerResult, DnsState
+from dns.state import CustomServerResult, DnsState, LineCheck
 from config.urls import ZAPRET_DNS_SITE_URL
 from dns.ui.page import AUTO_CHOICE, PROMO_PROVIDER
 from dns.ui.provider_grid import PROMO_TILE_KEY
@@ -315,6 +315,37 @@ class DnsPageTests(unittest.TestCase):
         page = self._page(state=replace(STATE, adapters=(ETHERNET,)))
 
         self.assertTrue(page.now_panel.all_chip.isHidden())
+
+    def test_own_recent_check_beats_the_catalog_mark(self) -> None:
+        """Блокировки у провайдеров разные: своя проверка серверов точнее общей отметки каталога."""
+        line = LineCheck(
+            time="2026-10-12T21:05:00",
+            cards=(
+                ("Google DNS", "ok", ""),
+                ("Quad9", "network", "подменяет обычные ответы"),
+                ("AdGuard", "partial", "закрыт DoT"),
+            ),
+        )
+        page = self._page(state=replace(STATE, line_check=line))
+        tiles = {tile.key: tile for tile in self._provider_tiles(page)}
+
+        self.assertEqual(tiles["Google DNS"].status, "")
+        self.assertIn("Проверка 12.10 21:05 на вашей линии: Работает", tiles["Google DNS"].tooltip)
+        self.assertNotIn("В России блокируется", tiles["Google DNS"].tooltip)
+        self.assertEqual(tiles["Quad9"].status, "blocked")
+        self.assertIn("Блокируется по дороге — подменяет обычные ответы", tiles["Quad9"].tooltip)
+        # «Не полностью» отметку каталога не снимает и не ставит, но дату и вывод называет.
+        self.assertEqual(tiles["AdGuard"].status, "at_risk")
+        self.assertIn("Работает не полностью — закрыт DoT", tiles["AdGuard"].tooltip)
+        # Сервера в проверке не было — всё как в каталоге.
+        self.assertIn("В России блокируется", tiles["Cloudflare"].tooltip)
+
+        # Предупреждение после применения — по той же отметке.
+        page.grid.activated.emit("Google DNS")
+        payload = page._apply_lane.request.call_args.args[0]
+        done = page_plans.build_provider_dns_apply_result_plan(name="Google DNS", adapter_count=1, success_count=1, ipv6=[])
+        page._on_apply_done(payload, {"plan": done, "state": replace(STATE, line_check=line)})
+        self.info_bar.warning.assert_not_called()
 
     def test_tiles_carry_status_dnssec_and_group_notes(self) -> None:
         page = self._page()

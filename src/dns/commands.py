@@ -90,10 +90,10 @@ def save_dns_check_results(*, file_path: str, plain_text: str):
         )
 
 
-def load_state() -> DnsState:
-    from dns.runtime import load_state as _load_state
+def load_page_state() -> DnsState:
+    from dns.runtime import load_page_state as _load_page_state
 
-    return _load_state()
+    return _load_page_state()
 
 
 def warm_state() -> DnsState:

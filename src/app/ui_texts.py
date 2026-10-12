@@ -2129,6 +2129,10 @@ TEXTS: dict[str, dict[str, str]] = {
         "ru": "Шифрованный путь (DoH) до этого сервера из вашей сети закрыт, поэтому Windows спрашивает его обычными запросами — провайдер их видит и может подменить. Нужно шифрование — выберите сервер из группы «Шифрованные».",
         "en": "The encrypted path (DoH) to this server is closed on your network, so Windows asks it with plain queries — your provider sees them and can replace them. If you need encryption, pick a server from the “Encrypted” group.",
     },
+    "page.network.tile.line_check": {
+        "ru": "Проверка {time} на вашей линии: {verdict}",
+        "en": "Check of {time} on your line: {verdict}",
+    },
     "page.network.tile.dnssec": {
         "ru": "DNSSEC: сервер проверяет подписи ответов и не отдаёт подделанные.",
         "en": "DNSSEC: the server verifies answer signatures and drops forged ones.",

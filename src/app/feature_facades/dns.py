@@ -39,7 +39,8 @@ def build_dns_feature() -> DnsFeature:
 
         return dns_public
 
-    load_state = lambda *args, **kwargs: _public().load_state(*args, **kwargs)
+    # Странице нужен и итог прошлой проверки серверов на этой линии (dns.line_check).
+    load_state = lambda *args, **kwargs: _public().load_page_state(*args, **kwargs)
     apply_dns = lambda *args, **kwargs: _public().apply_dns(*args, **kwargs)
     reset_to_auto = lambda *args, **kwargs: _public().reset_to_auto(*args, **kwargs)
     start_local_proxy = lambda *args, **kwargs: _public().start_local_proxy(*args, **kwargs)

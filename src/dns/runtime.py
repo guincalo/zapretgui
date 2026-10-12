@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from threading import RLock
 
 from dns import winapi
@@ -79,10 +80,17 @@ def _local_proxy_mode() -> str:
         return ""
 
 
+def load_page_state() -> DnsState:
+    """Состояние для страницы «Настройки DNS»: то же плюс прошлая проверка серверов на этой линии."""
+    from dns.line_check import load_line_check
+
+    return replace(load_state(), line_check=load_line_check())
+
+
 def warm_state() -> DnsState:
     """Загружает состояние заранее (после запуска), чтобы страница открылась сразу."""
     global _warmed_state
-    state = load_state()
+    state = load_page_state()
     with _warmed_lock:
         _warmed_state = state
     return state
@@ -208,6 +216,7 @@ __all__ = [
     "consume_warmed_state",
     "flush_dns_cache",
     "load_custom_servers",
+    "load_page_state",
     "load_state",
     "repair_local_proxy",
     "reset_to_auto",

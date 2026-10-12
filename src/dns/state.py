@@ -6,6 +6,22 @@ from dns.adapters import DnsAdapter
 
 
 @dataclass(frozen=True, slots=True)
+class LineCheck:
+    """Прошлая проверка «DNS-серверов» на линии пользователя (dns.line_check)."""
+
+    # Когда проверяли, ISO-время записи истории.
+    time: str
+    # (сервер, вывод CARD_*, коротко что не так) — по одному на сервер.
+    cards: tuple[tuple[str, str, str], ...] = ()
+
+    def card(self, server: str) -> tuple[str, str] | None:
+        for name, status, note in self.cards:
+            if name == server:
+                return status, note
+        return None
+
+
+@dataclass(frozen=True, slots=True)
 class DnsState:
     """Снимок DNS-слоя для страницы: адаптеры с их DNS, есть ли IPv6 и DoH, свои серверы."""
 
@@ -16,6 +32,8 @@ class DnsState:
     local_proxy_mode: str = ""
     # Свои DNS-серверы пользователя из настроек (записи dns.custom_servers).
     custom_servers: tuple[dict, ...] = ()
+    # Прошлая проверка серверов на этой линии; None — её нет или она устарела.
+    line_check: LineCheck | None = None
 
 
 @dataclass(frozen=True, slots=True)

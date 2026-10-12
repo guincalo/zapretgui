@@ -8,7 +8,7 @@ from dns.adapters import DnsAdapter
 from dns.address_migration import migrate_outdated_dns_addresses
 from dns.dns_providers import DNS_PROVIDERS, doh_templates
 from dns.reachability import ServerReach
-from dns.state import DnsState
+from dns.state import DnsState, LineCheck
 
 ETH = "{00000000-0000-0000-0000-000000000009}"
 WIFI = "{00000000-0000-0000-0000-000000000012}"
@@ -178,11 +178,21 @@ class DnsRuntimeTests(unittest.TestCase):
 
     def test_warmed_state_is_given_out_once(self) -> None:
         state = DnsState()
-        with patch.object(runtime, "load_state", return_value=state):
+        with patch.object(runtime, "load_page_state", return_value=state):
             runtime.warm_state()
 
         self.assertIs(runtime.consume_warmed_state(), state)
         self.assertIsNone(runtime.consume_warmed_state())
+
+    def test_page_state_adds_the_last_server_check_on_this_line(self) -> None:
+        line = LineCheck(time="2026-10-12T21:05:00", cards=(("Quad9", "ok", ""),))
+        with (
+            patch.object(runtime, "load_state", return_value=KNOWN),
+            patch("dns.line_check.load_line_check", return_value=line),
+        ):
+            state = runtime.load_page_state()
+
+        self.assertEqual((state.adapters, state.line_check), (KNOWN.adapters, line))
 
     def test_migration_replaces_only_outdated_static_addresses(self) -> None:
         fake = _FakeWinApi(doh=True)

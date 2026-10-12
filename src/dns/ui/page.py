@@ -34,6 +34,7 @@ from qfluentwidgets import CaptionLabel, InfoBar, InfoBarPosition, PushButton, R
 
 from app.ui_texts import tr as tr_catalog
 from config.urls import ZAPRET_DNS_SITE_URL
+from diagnostics.history import format_time
 from dns import page_plans as dns_page_plans
 from dns import custom_servers
 from dns.custom_servers import CUSTOM_DNS_CATEGORY, build_dns_providers_with_custom
@@ -44,6 +45,7 @@ from dns.dns_providers import (
     STATUS_BLOCKED,
     is_encrypted_only,
 )
+from dns.server_check_plans import CARD_NETWORK, CARD_OK, CARD_SILENT, CARD_TITLES
 from dns.ui.now_panel import AdapterChip, DnsNowPanel, NowState
 from dns.ui.provider_grid import ADD_TILE_KEY, PROMO_TILE_KEY, DnsProviderGrid, DnsTile, GridTexts
 from log.log import log
@@ -140,6 +142,8 @@ class NetworkPage(BasePage):
         self._adapters: tuple = ()
         self._ipv6_available = False
         self._doh_supported = False
+        # Прошлая проверка «DNS-серверов» на этой линии (dns.state.LineCheck) или None.
+        self._line_check = None
         # Режим работающего шифрованного DNS; по нему находится его плитка.
         self._local_proxy_mode = ""
         self._loaded = False
@@ -456,6 +460,7 @@ class NetworkPage(BasePage):
         self._ipv6_available = bool(getattr(state, "ipv6_available", False))
         self._doh_supported = bool(getattr(state, "doh_supported", False))
         self._local_proxy_mode = str(getattr(state, "local_proxy_mode", "") or "")
+        self._line_check = getattr(state, "line_check", None)
         self._loaded = True
         self._set_custom_servers(getattr(state, "custom_servers", ()) or (), render=False)
         if [adapter.guid for adapter in self._adapters] != known or not known:
@@ -653,9 +658,11 @@ class NetworkPage(BasePage):
                 ipv4 = dns_page_plans.normalize_dns_list(data.get("ipv4", []))
                 ipv6 = dns_page_plans.normalize_dns_list(data.get("ipv6", []))
                 custom = bool(data.get("custom_id"))
-                status = str(data.get("status", ""))
+                status, measured = self._line_status(name, data)
                 tooltip_lines = [f"{name} — {data.get('desc', '')}".rstrip(" —")]
-                if status in STATUS_TOOLTIP_KEYS:
+                if measured:
+                    tooltip_lines.append(measured)
+                elif status in STATUS_TOOLTIP_KEYS:
                     tooltip_lines.append(self._t(*STATUS_TOOLTIP_KEYS[status]))
                 if local_proxy:
                     tooltip_lines.append(
@@ -813,6 +820,31 @@ class NetworkPage(BasePage):
 
     # ── применение DNS ──────────────────────────────────────
 
+    def _line_status(self, name: str, data: dict) -> tuple[str, str]:
+        """Отметка плитки и строка подсказки о проверке на линии пользователя.
+
+        Своя недавняя проверка «DNS-серверов» точнее общей отметки каталога:
+        блокировки у каждого провайдера свои. Нет проверки или о сервере в ней
+        ничего не известно — остаётся отметка каталога и пустая строка.
+        """
+        status = str(data.get("status", "") or "")
+        line_check = self.__dict__.get("_line_check")
+        found = line_check.card(name) if line_check is not None else None
+        if found is None:
+            return status, ""
+        card, note = found
+        if card in (CARD_NETWORK, CARD_SILENT):
+            status = STATUS_BLOCKED
+        elif card == CARD_OK:
+            status = ""
+        verdict = f"{CARD_TITLES[card]} — {note}" if note else CARD_TITLES[card]
+        return status, self._t(
+            "page.network.tile.line_check",
+            "Проверка {time} на вашей линии: {verdict}",
+            time=format_time(line_check.time),
+            verdict=verdict,
+        )
+
     def _info(self, level: str, title: str, content: str = "") -> None:
         getattr(InfoBar, level)(
             title=title,
@@ -930,7 +962,10 @@ class NetworkPage(BasePage):
                         if part
                     ),
                 )
-            elif payload.get("action") == "provider" and (payload.get("data") or {}).get("status") == STATUS_BLOCKED:
+            elif (
+                payload.get("action") == "provider"
+                and self._line_status(str(payload.get("name") or ""), payload.get("data") or {})[0] == STATUS_BLOCKED
+            ):
                 # О блокировке выбранного сервера — только когда DNS и правда поставлен.
                 name = str(payload.get("name") or "")
                 self._info(
