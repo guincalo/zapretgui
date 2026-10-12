@@ -388,6 +388,24 @@ class HostsPageTests(unittest.TestCase):
         # Группы «ИИ-сервисы» в каталоге нет — шаг экскурсии остаётся без цели, а не падает.
         self.assertIsNone(self._page(snapshot).onboarding_target("ai_tile"))
 
+    def test_group_header_explains_the_group_on_hover(self) -> None:
+        """Зачем группа и почему ChatGPT есть и в пресете, — в подсказке заголовка, без новых блоков."""
+        from dataclasses import replace
+
+        from hosts.page_snapshot import CATEGORY_AI
+
+        snapshot = _manual_snapshot()
+        with_ai = replace(
+            snapshot,
+            services=(*snapshot.services, HostsServiceEntry("Gemini", CATEGORY_AI, "fa5s.globe", None, ("p1",), None)),
+        )
+        page = self._page(with_ai)
+        notes = {tile.title: tile.note for tile in page.tiles.tiles() if tile.kind == "group"}
+
+        self.assertIn("без посредника", notes["Напрямую"])
+        self.assertIn("ChatGPT", notes["ИИ-сервисы"])
+        self.assertIn("hosts", page.subtitle_label.text())
+
     def test_click_on_tile_writes_hosts_right_away(self) -> None:
         page = self._page(_manual_snapshot())
 

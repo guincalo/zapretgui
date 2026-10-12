@@ -291,12 +291,14 @@ TEXTS_TOUR: dict[str, dict[str, str]] = {
         "ru": (
             "В группе «Напрямую» у каждой плитки выключатель: включили — адрес сервиса записан в hosts "
             "как есть. Запись идёт сразу, кнопки «Сохранить» нет.\n\n"
-            "Счётчик в заголовке группы — сколько сервисов включено. Поиск по сервисам открывается по Ctrl+F."
+            "Счётчик в заголовке группы — сколько сервисов включено. Наведите мышь на заголовок — подсказка "
+            "объяснит, когда эта группа помогает. Поиск по сервисам открывается по Ctrl+F."
         ),
         "en": (
             "In the Direct group every tile has a switch: turn it on and the service address is written "
             "to hosts as is. It is written right away, there is no Save button.\n\n"
-            "The counter in the group header shows how many services are on. Ctrl+F opens the search."
+            "The counter in the group header shows how many services are on. Hover over the header and a tip "
+            "explains when this group helps. Ctrl+F opens the search."
         ),
     },
     "onboarding.step.hosts_ai.title": {"ru": "ИИ-сервисы и DNS-профили", "en": "AI services and DNS profiles"},
@@ -306,14 +308,18 @@ TEXTS_TOUR: dict[str, dict[str, str]] = {
             "DNS-профили: чьи адреса вписать для сервиса. Нажмите на значок — адреса от этого провайдера "
             "запишутся в hosts, нажмите ещё раз — уберутся. Какой значок чей, подписано справа в заголовке "
             "группы.\n\n"
-            "Если с одним профилем сервис не открылся, попробуйте другой."
+            "Если с одним профилем сервис не открылся, попробуйте другой. Почему ChatGPT есть и в пресете, "
+            "и здесь: профиль в пресете обходит провайдера, а если сервис сам не пускает из России, помогает "
+            "только DNS-профиль тут."
         ),
         "en": (
             "Tiles in the AI services and Other services groups have a row of icons instead of a switch. "
             "These are DNS profiles: whose addresses to write for the service. Click an icon and addresses "
             "from that provider go to hosts, click again and they are removed. The legend on the right of "
             "the group header says which icon is whose.\n\n"
-            "If a service does not open with one profile, try another."
+            "If a service does not open with one profile, try another. Why ChatGPT is both in the preset and "
+            "here: the preset profile gets past the provider, but if the service itself refuses Russia, only a "
+            "DNS profile here helps."
         ),
     },
     "onboarding.step.hosts_file.title": {"ru": "Весь файл hosts", "en": "The whole hosts file"},

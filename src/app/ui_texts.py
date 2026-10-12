@@ -1618,8 +1618,8 @@ TEXTS: dict[str, dict[str, str]] = {
         "en": "Writes winws logs to the logs folder",
     },
     "page.hosts.subtitle": {
-        "ru": "Щёлкните по плитке — адреса сервиса сразу запишутся в системный файл hosts.",
-        "en": "Click a tile — the service addresses are written to the system hosts file right away.",
+        "ru": "Файл hosts — список Windows «имя сайта → адрес», он главнее ответа DNS. Щёлкните по плитке — программа сразу запишет в него адреса сервиса.",
+        "en": "The hosts file is the Windows list “site name → address”; it wins over the DNS answer. Click a tile and the app writes the service addresses into it right away.",
     },
     "page.hosts.summary.writing": {
         "ru": "Записываю…",
@@ -1664,6 +1664,18 @@ TEXTS: dict[str, dict[str, str]] = {
     "page.hosts.group.ai.hint": {
         "ru": "сами закрыты для России, нужен DNS-профиль",
         "en": "blocked for Russia by themselves, a DNS profile is needed",
+    },
+    "page.hosts.group.direct.note": {
+        "ru": "Адрес сервиса из каталога программы пишется в hosts как есть, без посредника. Помогает, когда DNS провайдера отвечает об этом сервисе неправду.",
+        "en": "The service address from the app catalog is written to hosts as is, with no go-between. Helps when your provider's DNS lies about this service.",
+    },
+    "page.hosts.group.ai.note": {
+        "ru": "Эти сервисы сами не пускают пользователей из России, провайдер тут ни при чём. Выберите значок DNS-профиля — сервис откроется через сервер этого профиля, посредника. Не открылся — попробуйте другой. У ChatGPT профиль есть и в пресете Zapret, но тот помогает только против провайдера: если закрыт сам сервис, нужен профиль здесь.",
+        "en": "These services refuse users from Russia themselves; your provider has nothing to do with it. Pick a DNS profile icon and the service opens through that profile's server, a go-between. If it does not open, try another. ChatGPT also has a profile in the Zapret preset, but that one only helps against the provider: if the service itself is closed, you need a profile here.",
+    },
+    "page.hosts.group.other.note": {
+        "ru": "Выберите значок DNS-профиля — сервис откроется через сервер этого профиля, посредника. Не открылся — попробуйте другой.",
+        "en": "Pick a DNS profile icon and the service opens through that profile's server, a go-between. If it does not open, try another.",
     },
     "page.hosts.group.other.hint": {
         "ru": "через DNS-профиль",

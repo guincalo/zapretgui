@@ -63,6 +63,26 @@ _GROUP_HINTS = {
     CATEGORY_AI: ("page.hosts.group.ai.hint", "сами закрыты для России, нужен DNS-профиль"),
     CATEGORY_OTHER: ("page.hosts.group.other.hint", "через DNS-профиль"),
 }
+# Подсказка при наведении на заголовок группы: зачем эта группа.
+_GROUP_NOTES = {
+    CATEGORY_DIRECT: (
+        "page.hosts.group.direct.note",
+        "Адрес сервиса из каталога программы пишется в hosts как есть, без посредника. Помогает, когда "
+        "DNS провайдера отвечает об этом сервисе неправду.",
+    ),
+    CATEGORY_AI: (
+        "page.hosts.group.ai.note",
+        "Эти сервисы сами не пускают пользователей из России, провайдер тут ни при чём. Выберите значок "
+        "DNS-профиля — сервис откроется через сервер этого профиля, посредника. Не открылся — попробуйте "
+        "другой. У ChatGPT профиль есть и в пресете Zapret, но тот помогает только против провайдера: если "
+        "закрыт сам сервис, нужен профиль здесь.",
+    ),
+    CATEGORY_OTHER: (
+        "page.hosts.group.other.note",
+        "Выберите значок DNS-профиля — сервис откроется через сервер этого профиля, посредника. Не открылся — "
+        "попробуйте другой.",
+    ),
+}
 # Цели экскурсии: первая плитка группы показывает, как группа устроена.
 _ONBOARDING_TILE_CATEGORIES = {"direct_tile": CATEGORY_DIRECT, "ai_tile": CATEGORY_AI}
 
@@ -143,7 +163,8 @@ class HostsPage(BasePage):
     def __init__(self, parent=None, *, deps):
         super().__init__(
             "Hosts",
-            "Щёлкните по плитке — адреса сервиса сразу запишутся в системный файл hosts.",
+            "Файл hosts — список Windows «имя сайта → адрес», он главнее ответа DNS. Щёлкните по плитке — "
+            "программа сразу запишет в него адреса сервиса.",
             parent,
             title_key="page.hosts.title",
             subtitle_key="page.hosts.subtitle",
@@ -747,7 +768,16 @@ class HostsPage(BasePage):
             counter = f"{counter}  ·  {self._tr(hint_key, hint_default)}"
             # У групп с DNS-профилями справа легенда: какая иконка — какой провайдер.
             legend = all_choices if any(item.has_choices for item in items) else ()
-            tiles.append(HostsTile(kind="group", title=self._tr(key, default), counter=counter, legend=legend))
+            note_key, note_default = _GROUP_NOTES[category]
+            tiles.append(
+                HostsTile(
+                    kind="group",
+                    title=self._tr(key, default),
+                    note=self._tr(note_key, note_default),
+                    counter=counter,
+                    legend=legend,
+                )
+            )
             tiles.extend(items)
 
         adobe_title = self._tr("page.hosts.adobe.title", "Блокировать активацию Adobe")
