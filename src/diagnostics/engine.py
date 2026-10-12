@@ -60,6 +60,7 @@ from diagnostics.levels import level_rank
 from diagnostics.report_upgrade import REPORT_VERSION
 from diagnostics.limits import (
     FREEZE_MAX_BYTES,
+    DISCOVERY_READ_BUDGET_S,
     DISCOVERY_TIMEOUT,
     DNS_ATTEMPTS,
     REGISTRY_WAIT_S,
@@ -159,13 +160,20 @@ def _discover_googlevideo(run: _Run) -> tuple[tuple[str, ...], str]:
     from blockcheck.googlevideo_discovery import extract_googlevideo_hosts
 
     found: list[str] = []
+    # Когда начали читать страницу и вышел ли срок чтения.
+    reading: list[float] = []
+    late: list[bool] = []
 
     def _done(body: bytes) -> bool:
-        if b"googlevideo" not in body:
-            return False
-        hosts = extract_googlevideo_hosts(body.decode("utf-8", errors="ignore"))
-        if hosts:
-            found.extend(hosts[:VIDEO_SERVERS])
+        if b"googlevideo" in body:
+            hosts = extract_googlevideo_hosts(body.decode("utf-8", errors="ignore"))
+            if hosts:
+                found.extend(hosts[:VIDEO_SERVERS])
+                return True
+        if not reading:
+            reading.append(time.monotonic())
+        if time.monotonic() - reading[0] >= DISCOVERY_READ_BUDGET_S:
+            late.append(True)
             return True
         return False
 
@@ -178,6 +186,8 @@ def _discover_googlevideo(run: _Run) -> tuple[tuple[str, ...], str]:
         )
         if found:
             return tuple(found), "адрес видеосервера получен от YouTube"
+        if late:
+            return (GOOGLEVIDEO_FALLBACK_HOST,), "страница YouTube грузилась слишком медленно, поэтому проверяем общий адрес"
         if result.ok:
             return (GOOGLEVIDEO_FALLBACK_HOST,), "YouTube не назвал видеосервер, поэтому проверяем общий адрес"
         if result.kind == KIND_CANCELLED:

@@ -333,3 +333,37 @@ class RecheckLanesTests(unittest.TestCase):
         opened = [probe.rechecked for _key, _target, probe, _error in result]
         self.assertEqual(opened.count("opened"), 6)
         self.assertEqual(opened.count("same"), 6)
+
+
+class GooglevideoDiscoveryTests(unittest.TestCase):
+    def _discover(self, chunks: list[bytes], *, budget: float):
+        def fetch(_run, _host, ip, _path, *, body_done, **_kwargs):
+            body = b""
+            for chunk in chunks:
+                body += chunk
+                if body_done(body):
+                    break
+            return _ok(ip)
+
+        run = engine._Run(None, workers=4, deadline=60)
+        self.addCleanup(run.close)
+        with (
+            patch.object(net_access, "browser_ipv4", return_value=("142.250.1.1",)),
+            patch.object(net_access, "fetch", side_effect=fetch),
+            patch.object(engine, "DISCOVERY_READ_BUDGET_S", budget),
+        ):
+            return engine._discover_googlevideo(run)
+
+    def test_slow_page_is_not_read_without_end(self) -> None:
+        hosts, note = self._discover([b"<html>" + b"x" * 100] * 50, budget=0.0)
+
+        self.assertEqual(hosts, (engine.GOOGLEVIDEO_FALLBACK_HOST,))
+        self.assertIn("слишком медленно", note)
+
+    def test_video_server_found_in_time_is_used(self) -> None:
+        page = b'"url":"https://rr3---sn-abc.googlevideo.com/videoplayback?x"'
+
+        hosts, note = self._discover([b"<html>", page], budget=60.0)
+
+        self.assertEqual(hosts, ("rr3---sn-abc.googlevideo.com",))
+        self.assertIn("получен от YouTube", note)
