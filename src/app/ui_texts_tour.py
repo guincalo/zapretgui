@@ -343,12 +343,14 @@ TEXTS_TOUR: dict[str, dict[str, str]] = {
             "Это небольшой прокси, который работает прямо на вашем компьютере. Telegram подключается к нему, "
             "а он доводит соединение до серверов Telegram обходным путём — так мессенджер работает, когда "
             "его замедляют или блокируют.\n\n"
+            "Включайте его, если Telegram долго не может подключиться или не грузит сообщения и медиа. "
             "Кружок и подпись показывают, запущен ли прокси. Кнопка справа запускает и останавливает его."
         ),
         "en": (
             "This is a small proxy that runs right on your computer. Telegram connects to it, and it "
             "carries the connection to Telegram servers by a roundabout path — so the messenger works "
             "when it is throttled or blocked.\n\n"
+            "Turn it on if Telegram takes long to connect or does not load messages and media. "
             "The dot and the caption show whether the proxy is running. The button on the right starts "
             "and stops it."
         ),
@@ -373,14 +375,16 @@ TEXTS_TOUR: dict[str, dict[str, str]] = {
     "onboarding.step.telegram_settings.title": {"ru": "Основные настройки", "en": "Basic settings"},
     "onboarding.step.telegram_settings.body": {
         "ru": (
-            "Адрес и порт, на которых прокси ждёт подключений, — менять их обычно не нужно. Режим: SOCKS5 "
-            "подходит почти всем, MTProxy — для тех, кому нужен secret и Fake TLS. «Авто-настройка "
+            "Адрес и порт, на которых прокси ждёт подключений, — менять их обычно не нужно. Режим: SOCKS5 — "
+            "обычный прокси, он подходит почти всем; MTProxy — для опытных: соединение с ключом (secret), которое "
+            "можно замаскировать под обычный сайт (Fake TLS). «Авто-настройка "
             "Telegram» сама открывает ссылку в Telegram при первом запуске прокси.\n\n"
             "Последняя строка ведёт в «Продвинутые настройки» — к ним зайдём через пару шагов."
         ),
         "en": (
             "The address and port the proxy listens on — usually there is no need to change them. Mode: "
-            "SOCKS5 suits almost everyone, MTProxy is for those who need a secret and Fake TLS. Telegram "
+            "SOCKS5 is a plain proxy that suits almost everyone; MTProxy is for experienced users: a connection "
+            "with a key (secret) that can be disguised as an ordinary site (Fake TLS). Telegram "
             "auto-setup opens the link in Telegram on the first proxy start.\n\n"
             "The last row leads to Advanced settings — we will visit them in a couple of steps."
         ),

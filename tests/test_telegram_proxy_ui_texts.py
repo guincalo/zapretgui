@@ -12,8 +12,10 @@ class TelegramProxyUiTextsTests(unittest.TestCase):
 
         self.assertEqual(
             plan.page_subtitle,
-            "Локальный прокси для Telegram. Используйте его, если Telegram подключается нестабильно.",
+            "Небольшой прокси на этом компьютере: Telegram подключается к нему, а он доводит соединение до серверов "
+            "Telegram обходным путём. Включайте, если Telegram долго «подключается» или не грузит сообщения и медиа.",
         )
+        self.assertIn("SOCKS5 — обычный прокси, выбирайте его", plan.proxy_mode_description)
         self.assertEqual(plan.setup_title, "Подключить Telegram")
         self.assertIn("Telegram сам предложит добавить прокси", plan.setup_description)
         self.assertNotIn("Zastogram", plan.setup_description)
