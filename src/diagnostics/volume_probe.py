@@ -28,7 +28,7 @@ import time
 from dataclasses import dataclass
 
 from diagnostics.limits import FREEZE_MAX_BYTES, FREEZE_MIN_BYTES
-from diagnostics.tls_probe import _client_context
+from diagnostics.tls_probe import client_context
 from utils.socket_cancel import SocketCancel, close_quietly
 
 __all__ = [
@@ -225,7 +225,7 @@ def download(
             return VolumeRun(RUN_CANCELLED)
         sock.settimeout(timeout)
         sock.connect((ip, int(port)))
-        wrapped = _client_context().wrap_socket(sock, server_hostname=host, do_handshake_on_connect=False)
+        wrapped = client_context().wrap_socket(sock, server_hostname=host, do_handshake_on_connect=False)
         token.track(wrapped)
         wrapped.settimeout(timeout)
         wrapped.do_handshake()

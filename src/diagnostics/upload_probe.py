@@ -30,7 +30,7 @@ import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 
-from diagnostics.tls_probe import _client_context
+from diagnostics.tls_probe import client_context
 from utils.socket_cancel import SocketCancel, close_quietly
 
 __all__ = [
@@ -132,7 +132,7 @@ def post(
         sock.connect((ip, int(port)))
         # Мелкие куски должны уйти отдельными пакетами, а не склеиться в один.
         sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-        wrapped = _client_context().wrap_socket(sock, server_hostname=host, do_handshake_on_connect=False)
+        wrapped = client_context().wrap_socket(sock, server_hostname=host, do_handshake_on_connect=False)
         token.track(wrapped)
         wrapped.settimeout(timeout)
         wrapped.do_handshake()

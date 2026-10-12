@@ -50,3 +50,37 @@ class ClassifyTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CancellablePauseTests(unittest.TestCase):
+    """Паузы между пробами снимает «Стоп» сразу, а не по окончании паузы."""
+
+    def test_socket_cancel_sleep_ends_at_stop(self) -> None:
+        import threading
+        import time
+
+        from utils.socket_cancel import SocketCancel
+
+        token = SocketCancel()
+        self.assertTrue(token.sleep(0.01))
+        threading.Timer(0.05, token.cancel).start()
+        started = time.monotonic()
+        self.assertFalse(token.sleep(5.0))
+        self.assertLess(time.monotonic() - started, 1.0)
+        self.assertFalse(token.sleep(5.0))
+
+    def test_run_pause_notices_an_outside_stop(self) -> None:
+        import time
+
+        from diagnostics.run_context import Run
+
+        stop = {"now": False}
+        run = Run(lambda: stop["now"], workers=1)
+        try:
+            self.assertTrue(run.pause(0.01))
+            stop["now"] = True
+            started = time.monotonic()
+            self.assertFalse(run.pause(5.0))
+            self.assertLess(time.monotonic() - started, 1.0)
+        finally:
+            run.close()

@@ -179,7 +179,7 @@ class PostTests(unittest.TestCase):
 
     def _post(self, port: int, chunks, **kwargs) -> up.PostResult:
         trusting = ssl.create_default_context(cafile=str(self.cert))
-        with patch.object(up, "_client_context", return_value=trusting):
+        with patch.object(up, "client_context", return_value=trusting):
             return up.post(HOST, "127.0.0.1", "/upload", chunks, port=port, timeout=kwargs.pop("timeout", 2.0), **kwargs)
 
     @staticmethod

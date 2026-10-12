@@ -145,7 +145,7 @@ class DownloadTests(unittest.TestCase):
 
     def _download(self, port: int, **kwargs) -> vp.VolumeRun:
         trusting = ssl.create_default_context(cafile=str(self.cert))
-        with patch.object(vp, "_client_context", return_value=trusting):
+        with patch.object(vp, "client_context", return_value=trusting):
             return vp.download(HOST, "127.0.0.1", "/page", port=port, timeout=2.0, **kwargs)
 
     @staticmethod

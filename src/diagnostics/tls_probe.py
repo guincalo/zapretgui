@@ -41,6 +41,7 @@ __all__ = [
     "KIND_TIMEOUT",
     "KIND_TLS",
     "ProbeResult",
+    "client_context",
     "https_get",
 ]
 
@@ -108,7 +109,7 @@ _context_lock = threading.Lock()
 _context: ssl.SSLContext | None = None
 
 
-def _client_context() -> ssl.SSLContext:
+def client_context() -> ssl.SSLContext:
     """Один контекст на процесс: загрузка хранилища сертификатов не бесплатна."""
     global _context
     with _context_lock:
@@ -216,7 +217,7 @@ def https_get(
         sock.connect((ip, int(port)))
 
         stage = STAGE_TLS
-        wrapped = _client_context().wrap_socket(sock, server_hostname=host, do_handshake_on_connect=False)
+        wrapped = client_context().wrap_socket(sock, server_hostname=host, do_handshake_on_connect=False)
         token.track(wrapped)
         wrapped.settimeout(_remaining())
         wrapped.do_handshake()

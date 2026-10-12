@@ -35,6 +35,9 @@ RECHECK_SAME = "same"
 RECHECK_UNSTABLE = "unstable"
 
 
+# Как часто пауза проверяет «Стоп», заданный снаружи функцией.
+_PAUSE_POLL_S = 0.1
+
 class Stopped(Exception):
     pass
 
@@ -362,6 +365,19 @@ class Run:
 
     def dns_cancelled(self) -> bool:
         return self.stopped() or self.expired()
+
+    def pause(self, seconds: float) -> bool:
+        """Пауза, которую снимают «Стоп» и общий лимит времени. False — проверку сняли.
+
+        Отмена проб видна сразу; «Стоп» снаружи и лимит — опросом раз в десятую долю секунды.
+        """
+        deadline = time.monotonic() + seconds
+        while not self.dns_cancelled():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return True
+            self.probe_cancel.sleep(min(_PAUSE_POLL_S, remaining))
+        return False
 
     def submit(self, fn, *args, **kwargs) -> Future:
         return self.pool.submit(fn, *args, **kwargs)

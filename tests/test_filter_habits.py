@@ -308,7 +308,7 @@ class SiteChoiceTests(unittest.TestCase):
 
         with ThreadPoolExecutor(4) as pool:
             run = SimpleNamespace(
-                submit=pool.submit, wait=lambda future: future.result(), dns_cancelled=lambda: False, probe_cancel=None
+                submit=pool.submit, wait=lambda future: future.result(), dns_cancelled=lambda: False, probe_cancel=None, pause=lambda _seconds: True
             )
             with patch.object(fh, "check_split", fake_split):
                 sections.check_filter_habits(run, collected, lambda _line: None)

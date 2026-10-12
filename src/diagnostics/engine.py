@@ -72,7 +72,7 @@ from diagnostics.limits import (
     SITES_AT_ONCE,
     VIDEO_SERVERS,
 )
-from diagnostics.reach import check_reach as _check_reach, pause as _pause, same_network
+from diagnostics.reach import check_reach as _check_reach, same_network
 from diagnostics.run_context import RECHECK_OPENED, RECHECK_SAME, RECHECK_UNSTABLE, Probe as _Probe, Run as _Run
 from diagnostics.run_context import Live as _Live, Steps as _Steps, Stopped as _Stopped
 from diagnostics.services import (
@@ -656,7 +656,7 @@ def run_blockcheck(
                 run.submit,
                 _wait_plain,
                 connect=lambda address, port: telegram_check.connect_once(address, port, cancel=run.probe_cancel),
-                pause=lambda seconds: _pause(run, seconds),
+                pause=run.pause,
             )
             if scope != SCOPE_MAIN
             else None

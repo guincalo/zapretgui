@@ -10,7 +10,6 @@
 
 from __future__ import annotations
 
-import time
 from concurrent.futures import Future
 from concurrent.futures import TimeoutError as FutureTimeout
 
@@ -27,7 +26,7 @@ from diagnostics.run_context import Probe, Run
 from diagnostics.tls_probe import CONNECT_TIMEOUT, KIND_CANCELLED, KIND_CERT, KIND_CONNECT, ProbeResult
 from utils.windows_dns_query import ERROR_CANCELLED
 
-__all__ = ["check_reach", "pause", "same_network"]
+__all__ = ["check_reach", "same_network"]
 
 
 def _reach_order(probe: Probe, *, local_ok: bool) -> tuple[list[str], str]:
@@ -82,13 +81,6 @@ def _network_of(ip: str) -> str:
     return ".".join(ip.split(".")[:2]) if "." in ip else ip.split(":")[0]
 
 
-def pause(run: Run, seconds: float) -> None:
-    """Пауза, которую снимает «Стоп» и общий лимит времени."""
-    deadline = time.monotonic() + seconds
-    while time.monotonic() < deadline and not run.dns_cancelled():
-        time.sleep(0.05)
-
-
 def check_reach(run: Run, probe: Probe, *, read_limit: int) -> None:
     local = probe.local_check
     order, source = _reach_order(probe, local_ok=bool(local and local.ok))
@@ -134,11 +126,11 @@ def check_reach(run: Run, probe: Probe, *, read_limit: int) -> None:
             if all(item.kind == KIND_CONNECT for item in attempts) and not run.dns_cancelled():
                 # Все адреса пробовались в одну секунду: короткий сбой сети задел бы их
                 # разом. Ещё одна попытка после паузы отделяет сбой от блокировки.
-                pause(run, RETRY_PAUSE_S)
+                run.pause(RETRY_PAUSE_S)
                 if not run.dns_cancelled():
                     attempts.append(_one(order[0]))
         elif attempts[0].kind != KIND_CERT:
-            pause(run, RETRY_PAUSE_S)
+            run.pause(RETRY_PAUSE_S)
             if not run.dns_cancelled():
                 attempts.append(_one(order[0]))
 

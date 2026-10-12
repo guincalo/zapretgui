@@ -34,6 +34,8 @@ class SocketCancel:
         self._lock = threading.Lock()
         self._sockets: set[socket.socket] = set()
         self._cancelled = False
+        # То же «Стоп», но его можно ждать: паузы между пробами снимаются сразу.
+        self._event = threading.Event()
 
     @property
     def cancelled(self) -> bool:
@@ -44,8 +46,13 @@ class SocketCancel:
             self._cancelled = True
             sockets = list(self._sockets)
             self._sockets.clear()
+        self._event.set()
         for sock in sockets:
             close_quietly(sock)
+
+    def sleep(self, seconds: float) -> bool:
+        """Пауза, которую «Стоп» обрывает сразу. False — проверку сняли."""
+        return not self._event.wait(max(0.0, float(seconds)))
 
     def track(self, sock: socket.socket) -> bool:
         """Берёт сокет под отмену. False — отмена уже была, запрос начинать нельзя."""

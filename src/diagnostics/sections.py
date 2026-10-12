@@ -536,8 +536,7 @@ def check_filter_habits(run: Run, collected: dict[str, list[Probe]], emit: Emit,
 
     def _rest(seconds: float) -> None:
         # Передышка между соединениями к одному адресу; «Стоп» её не ждёт.
-        if not run.dns_cancelled():
-            time.sleep(seconds)
+        run.pause(seconds)
 
     probes = [probe for items in collected.values() for probe in items]
     # Дробление сравнивается только там, где блокировка по имени уже доказана. С каждого сервиса —
@@ -712,21 +711,13 @@ def check_crowd(run: Run, collected: dict[str, list[Probe]], services, emit: Emi
     def _together(calls) -> list[str]:
         return [future.result() for future in [run.submit(call) for call in calls]]
 
-    def _wait(seconds: float) -> bool:
-        deadline = time.monotonic() + seconds
-        while time.monotonic() < deadline:
-            if run.dns_cancelled():
-                return False
-            time.sleep(0.1)
-        return True
-
     facts = crowd_probe.collect(
         site.host,
         site.reach.ip,
         hello=_hello,
         together=_together,
         control=lambda: _hello(control.reach.ip, control.host),
-        wait=_wait,
+        wait=run.pause,
         clock=time.monotonic,
         max_wait=max(0.0, run.deadline - time.monotonic() - CROWD_RESERVE_S),
     )

@@ -1488,7 +1488,7 @@ class EngineMixedAnswerTests(unittest.TestCase):
         listener.bind(("127.0.0.1", 0))
         listener.listen(1)
         self.addCleanup(listener.close)
-        with patch.object(tls_probe, "_client_context", return_value=_Context()):
+        with patch.object(tls_probe, "client_context", return_value=_Context()):
             result = https_get(
                 "example.com", "127.0.0.1", timeout=2.0, port=listener.getsockname()[1],
                 read_limit=64_000, cancel=cancel,

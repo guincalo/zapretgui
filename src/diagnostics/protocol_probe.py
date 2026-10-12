@@ -120,9 +120,7 @@ def _timed_http(host: str, ip: str, cancel: SocketCancel) -> tuple[HttpFacts, fl
 
 def _later(delay: float, token: SocketCancel, call: Callable, *args, **kwargs):
     """Вызов через ``delay`` секунд; «Стоп» ждать не заставляет."""
-    deadline = time.monotonic() + delay
-    while time.monotonic() < deadline and not token.cancelled:
-        time.sleep(0.02)
+    token.sleep(delay)
     return call(*args, **kwargs)
 
 
@@ -131,11 +129,8 @@ def _browser_hello(host: str, ip: str, cancel: SocketCancel) -> HelloResult:
     result = browser_hello.send_hello(ip, host, cancel=cancel)
     if result.kind not in (HELLO_RESET, HELLO_TIMEOUT):
         return result
-    deadline = time.monotonic() + BROWSER_RETRY_PAUSE_S
-    while time.monotonic() < deadline:
-        if cancel.cancelled:
-            return HelloResult(HELLO_CANCELLED)
-        time.sleep(0.05)
+    if not cancel.sleep(BROWSER_RETRY_PAUSE_S):
+        return HelloResult(HELLO_CANCELLED)
     return browser_hello.send_hello(ip, host, cancel=cancel)
 
 

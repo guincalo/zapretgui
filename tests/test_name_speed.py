@@ -143,7 +143,7 @@ class NameChoiceTests(unittest.TestCase):
             asked.extend(names)
             return ns.NameFacts((ns.NameRun(ns.SERVER_HOST, ns.RUN_CONNECT),))
 
-        run = SimpleNamespace(dns_cancelled=lambda: False, probe_cancel=None)
+        run = SimpleNamespace(dns_cancelled=lambda: False, pause=lambda _seconds: True, probe_cancel=None)
         with (
             patch.object(sections.net_access, "known_address", return_value="192.0.2.1"),
             patch.object(sections.name_speed, "collect", side_effect=collect),

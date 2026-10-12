@@ -175,7 +175,7 @@ class SectionTests(unittest.TestCase):
             asked.append(host)
             return cp.CrowdFacts(host, ip, HELLO_OK, (HELLO_OK,) * 4, HELLO_OK)
 
-        run = SimpleNamespace(dns_cancelled=lambda: False, probe_cancel=None, submit=None, deadline=10**9)
+        run = SimpleNamespace(dns_cancelled=lambda: False, pause=lambda _seconds: True, probe_cancel=None, submit=None, deadline=10**9)
         lines: list[str] = []
         with patch.object(cp, "collect", side_effect=collect):
             result = sections.check_crowd(run, collected, services, lines.append, tools=tools)
