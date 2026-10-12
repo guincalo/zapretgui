@@ -46,6 +46,7 @@ from dns.dns_providers import (
     is_encrypted_only,
 )
 from dns.server_check_plans import CARD_NETWORK, CARD_OK, CARD_SILENT, CARD_TITLES
+from dns.state import LineCheck
 from dns.ui.now_panel import AdapterChip, DnsNowPanel, NowState
 from dns.ui.provider_grid import ADD_TILE_KEY, PROMO_TILE_KEY, DnsProviderGrid, DnsTile, GridTexts
 from log.log import log
@@ -460,7 +461,8 @@ class NetworkPage(BasePage):
         self._ipv6_available = bool(getattr(state, "ipv6_available", False))
         self._doh_supported = bool(getattr(state, "doh_supported", False))
         self._local_proxy_mode = str(getattr(state, "local_proxy_mode", "") or "")
-        self._line_check = getattr(state, "line_check", None)
+        line_check = getattr(state, "line_check", None)
+        self._line_check = line_check if isinstance(line_check, LineCheck) else None
         self._loaded = True
         self._set_custom_servers(getattr(state, "custom_servers", ()) or (), render=False)
         if [adapter.guid for adapter in self._adapters] != known or not known:
