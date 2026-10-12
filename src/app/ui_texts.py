@@ -2121,6 +2121,14 @@ TEXTS: dict[str, dict[str, str]] = {
         "ru": "DNS поставлен, как вы выбрали. Если сайты перестанут открываться, выберите другой сервер. Что отвечает на вашей линии, покажет BlockCheck → «DNS-серверы».",
         "en": "The DNS is set as you chose. If sites stop opening, pick another server. BlockCheck → “DNS servers” shows what answers on your line.",
     },
+    "page.network.doh_closed.title": {
+        "ru": "DNS поставлен без шифрования",
+        "en": "DNS set without encryption",
+    },
+    "page.network.doh_closed.content": {
+        "ru": "Шифрованный путь (DoH) до этого сервера из вашей сети закрыт, поэтому Windows спрашивает его обычными запросами — провайдер их видит и может подменить. Нужно шифрование — выберите сервер из группы «Шифрованные».",
+        "en": "The encrypted path (DoH) to this server is closed on your network, so Windows asks it with plain queries — your provider sees them and can replace them. If you need encryption, pick a server from the “Encrypted” group.",
+    },
     "page.network.tile.dnssec": {
         "ru": "DNSSEC: сервер проверяет подписи ответов и не отдаёт подделанные.",
         "en": "DNSSEC: the server verifies answer signatures and drops forged ones.",

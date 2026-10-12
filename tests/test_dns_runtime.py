@@ -7,6 +7,7 @@ from dns import runtime, winapi
 from dns.adapters import DnsAdapter
 from dns.address_migration import migrate_outdated_dns_addresses
 from dns.dns_providers import DNS_PROVIDERS, doh_templates
+from dns.reachability import ServerReach
 from dns.state import DnsState
 
 ETH = "{00000000-0000-0000-0000-000000000009}"
@@ -48,12 +49,12 @@ KNOWN = DnsState(
 
 
 class DnsRuntimeTests(unittest.TestCase):
-    reach = staticmethod(lambda ipv4, ipv6, templates=None: "")
+    reach = staticmethod(lambda ipv4, ipv6, templates=None: ServerReach())
 
     def test_server_that_does_not_answer_is_not_applied(self) -> None:
         """Заблокированный провайдером сервер не ставится: с ним не осталось бы DNS."""
         fake = _FakeWinApi()
-        self.reach = lambda ipv4, ipv6, templates=None: "Сервер 144.31.82.230 не отвечает из вашей сети"
+        self.reach = lambda ipv4, ipv6, templates=None: ServerReach(blocked="Сервер 144.31.82.230 не отвечает из вашей сети")
 
         result = self._run(fake, runtime.apply_dns, [ETH, WIFI], ["144.31.82.230"], [])
 
@@ -68,12 +69,21 @@ class DnsRuntimeTests(unittest.TestCase):
             patch.object(runtime, "load_state", return_value=KNOWN),
             patch.object(runtime, "load_custom_servers", return_value=list(custom_servers)),
             # В сеть тесты не ходят: сервер считается отвечающим, если тест не говорит иного.
-            patch.object(runtime, "unreachable_message", self.reach),
+            patch.object(runtime, "check_servers", self.reach),
         ]
         for item in patchers:
             item.start()
             self.addCleanup(item.stop)
         return func(*args)
+
+    def test_closed_doh_is_carried_to_the_result_only_when_dns_is_set(self) -> None:
+        self.reach = lambda ipv4, ipv6, templates=None: ServerReach(doh_closed=True)
+
+        result = self._run(_FakeWinApi(doh=True), runtime.apply_dns, [ETH], ["9.9.9.9"], [])
+        self.assertEqual((result.success, result.doh_closed), (True, True))
+
+        nothing_set = self._run(_FakeWinApi(doh=True), runtime.apply_dns, ["{00000000-0000-0000-0000-00000000dead}"], ["9.9.9.9"], [])
+        self.assertFalse(nothing_set.doh_closed)
 
     def test_apply_writes_both_families_then_flushes_cache(self) -> None:
         fake = _FakeWinApi()

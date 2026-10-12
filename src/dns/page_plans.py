@@ -23,6 +23,8 @@ class NetworkDnsApplyResultPlan:
     adapter_count: int = 0
     success_count: int = 0
     error: str = ""
+    # DNS встал, но шифрование до сервера не доходит (DnsCommandResult.doh_closed).
+    doh_closed: bool = False
 
 
 @dataclass(slots=True)
@@ -91,9 +93,12 @@ def build_provider_dns_apply_result_plan(
     success_count: int,
     ipv6: list[str],
     error: str = "",
+    doh_closed: bool = False,
 ) -> NetworkDnsApplyResultPlan:
     what = f"{name} (IPv4+IPv6)" if ipv6 else name
-    return _apply_result(what, adapter_count=adapter_count, success_count=success_count, error=error)
+    plan = _apply_result(what, adapter_count=adapter_count, success_count=success_count, error=error)
+    plan.doh_closed = bool(doh_closed)
+    return plan
 
 
 def build_flush_dns_cache_result_plan(*, success: bool, message: str, language: str = "ru") -> NetworkFlushDnsCacheResultPlan:

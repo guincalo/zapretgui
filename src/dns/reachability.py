@@ -9,11 +9,17 @@
 Сервер считается живым, если ответил хотя бы один способ: обычный запрос
 (UDP), запрос по TCP или шифрованный (DoH, когда у сервера есть шаблон). Так
 программа не отказывает там, где провайдер режет только открытый DNS.
+
+Обратный случай тоже отмечается: шаблон DoH есть, а шифрованный путь молчит,
+хотя обычный отвечает. Windows записывается с откатом на обычный DNS
+(``winapi.write_dns``), поэтому DNS заработает, но без шифрования — об этом
+человеку надо сказать, иначе он считает свои запросы закрытыми.
 """
 
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from ipaddress import ip_address
 from urllib.parse import urlsplit
 
@@ -35,7 +41,22 @@ def _is_local(address: str) -> bool:
     return ip.is_loopback or ip.is_private or ip.is_link_local
 
 
-def _answers(address: str, template: str) -> bool:
+@dataclass(frozen=True, slots=True)
+class ServerReach:
+    # Почему сервер не ставится; пустая строка — ставить можно.
+    blocked: str = ""
+    # Шифрованный путь закрыт, а обычный отвечает: Windows будет спрашивать без шифрования.
+    doh_closed: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class _Answers:
+    plain: bool
+    # None — шаблона DoH у адреса нет, спрашивать нечем.
+    doh: bool | None
+
+
+def _answers(address: str, template: str) -> _Answers:
     probes = [
         lambda: query_udp(address, PROBE_NAME, TYPE_A, timeout_s=UDP_TIMEOUT_S),
         lambda: query_tcp(address, PROBE_NAME, TYPE_A, timeout_s=TCP_TIMEOUT_S),
@@ -54,11 +75,12 @@ def _answers(address: str, template: str) -> bool:
             )
         )
     with ThreadPoolExecutor(max_workers=len(probes), thread_name_prefix="dns-reach") as pool:
-        return any(future.result().answered for future in [pool.submit(probe) for probe in probes])
+        answered = [future.result().answered for future in [pool.submit(probe) for probe in probes]]
+    return _Answers(plain=any(answered[:2]), doh=answered[2] if len(answered) > 2 else None)
 
 
-def unreachable_message(ipv4: list[str], ipv6: list[str], templates: dict[str, str] | None = None) -> str:
-    """Пустая строка, если сервер отвечает или проверять нечего; иначе — причина отказа.
+def check_servers(ipv4: list[str], ipv6: list[str], templates: dict[str, str] | None = None) -> ServerReach:
+    """Можно ли ставить сервер и дойдёт ли до него шифрование.
 
     Проверяются адреса IPv4; IPv6 — только когда других нет: у многих
     провайдеров IPv6 не работает вовсе, и это не блокировка сервера.
@@ -68,16 +90,20 @@ def unreachable_message(ipv4: list[str], ipv6: list[str], templates: dict[str, s
     if not addresses:
         addresses = [item for item in (str(a or "").strip() for a in ipv6) if item and not _is_local(item)]
     if not addresses:
-        return ""
+        return ServerReach()
     with ThreadPoolExecutor(max_workers=len(addresses), thread_name_prefix="dns-reach") as pool:
-        alive = list(pool.map(lambda address: _answers(address, str(templates.get(address) or "")), addresses))
-    if any(alive):
-        return ""
-    return (
-        f"Сервер {', '.join(addresses)} не отвечает из вашей сети ни обычным, ни шифрованным запросом — "
-        "похоже, его блокирует провайдер. DNS не изменён: с этим сервером интернет перестал бы работать. "
-        "Выберите другой сервер."
-    )
+        answers = list(pool.map(lambda address: _answers(address, str(templates.get(address) or "")), addresses))
+    if not any(item.plain or item.doh for item in answers):
+        return ServerReach(
+            blocked=(
+                f"Сервер {', '.join(addresses)} не отвечает из вашей сети ни обычным, ни шифрованным запросом — "
+                "похоже, его блокирует провайдер. DNS не изменён: с этим сервером интернет перестал бы работать. "
+                "Выберите другой сервер."
+            )
+        )
+    with_doh = [item for item in answers if item.doh is not None]
+    # Хоть один адрес ответил по DoH — Windows шифрует через него.
+    return ServerReach(doh_closed=bool(with_doh) and not any(item.doh for item in with_doh))
 
 
-__all__ = ["unreachable_message"]
+__all__ = ["ServerReach", "check_servers"]

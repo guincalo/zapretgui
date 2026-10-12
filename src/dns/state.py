@@ -26,6 +26,8 @@ class DnsCommandResult:
     total_count: int = 0
     # Движок шифрованного DNS слушает ещё и ::1 (ответ start_local_proxy).
     listen_ipv6: bool = False
+    # DNS поставлен, но DoH до сервера не доходит: Windows спрашивает без шифрования.
+    doh_closed: bool = False
 
 
 @dataclass(frozen=True, slots=True)

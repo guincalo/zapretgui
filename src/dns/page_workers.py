@@ -250,6 +250,7 @@ class DnsApplyWorker(QThread):
                 success_count=int(command_result.affected_count or 0),
                 ipv6=ipv6,
                 error=str(command_result.message or ""),
+                doh_closed=bool(getattr(command_result, "doh_closed", False)),
             )
         else:
             raise ValueError(f"Неизвестное DNS действие: {self._action}")

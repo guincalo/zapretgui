@@ -11,11 +11,11 @@ from __future__ import annotations
 
 from threading import RLock
 
-from dns.reachability import unreachable_message
 from dns import winapi
 from dns.adapters import DnsAdapter, build_dns_adapters, is_dns_adapter
 from dns.custom_servers import custom_doh_templates
 from dns.dns_providers import doh_templates
+from dns.reachability import check_servers
 from dns.state import DnsCommandResult, DnsState
 from log.log import log
 
@@ -117,10 +117,10 @@ def apply_dns(guids: list[str], ipv4: list[str], ipv6: list[str]) -> DnsCommandR
     guids = list(dict.fromkeys(str(item or "").strip() for item in guids if str(item or "").strip()))
     names = {adapter.guid: adapter.name for adapter in load_state().adapters}
     templates = write_doh_templates()
-    blocked = unreachable_message(list(ipv4 or []), list(ipv6 or []), templates)
-    if blocked:
-        log(f"DNS: {blocked}", "WARNING")
-        return DnsCommandResult(success=False, message=blocked, affected_count=0, total_count=len(guids))
+    reach = check_servers(list(ipv4 or []), list(ipv6 or []), templates)
+    if reach.blocked:
+        log(f"DNS: {reach.blocked}", "WARNING")
+        return DnsCommandResult(success=False, message=reach.blocked, affected_count=0, total_count=len(guids))
     errors: list[str] = []
     for guid in guids:
         if guid not in names:
@@ -136,11 +136,15 @@ def apply_dns(guids: list[str], ipv4: list[str], ipv6: list[str]) -> DnsCommandR
     message = "; ".join(errors)
     if message:
         log(f"DNS: {message}", "WARNING")
+    affected = len(guids) - len(errors)
+    if reach.doh_closed and affected:
+        log("DNS: шифрованный путь (DoH) до сервера закрыт — Windows спрашивает его обычными запросами", "WARNING")
     return DnsCommandResult(
         success=not errors,
         message=message,
-        affected_count=len(guids) - len(errors),
+        affected_count=affected,
         total_count=len(guids),
+        doh_closed=reach.doh_closed and affected > 0,
     )
 
 

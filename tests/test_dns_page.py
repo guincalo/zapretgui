@@ -360,6 +360,23 @@ class DnsPageTests(unittest.TestCase):
         page.grid.activated.emit("AdGuard")
         self.info_bar.warning.assert_not_called()
 
+    def test_dns_set_without_encryption_is_said_out_loud(self) -> None:
+        """Windows молча откатывается с DoH на обычный DNS — программа говорит это вслух."""
+        page = self._page()
+        page.grid.activated.emit("AdGuard")
+        payload = page._apply_lane.request.call_args.args[0]
+
+        plain = page_plans.build_provider_dns_apply_result_plan(
+            name="AdGuard", adapter_count=1, success_count=1, ipv6=[], doh_closed=True
+        )
+        page._on_apply_done(payload, {"plan": plain, "state": STATE})
+        self.assertEqual(self.info_bar.warning.call_args.kwargs["title"], "DNS поставлен без шифрования")
+
+        self.info_bar.reset_mock()
+        encrypted = page_plans.build_provider_dns_apply_result_plan(name="AdGuard", adapter_count=1, success_count=1, ipv6=[])
+        page._on_apply_done(payload, {"plan": encrypted, "state": STATE})
+        self.info_bar.warning.assert_not_called()
+
     def test_encrypted_only_server_is_applied_where_windows_can_encrypt(self) -> None:
         page = self._page()
 

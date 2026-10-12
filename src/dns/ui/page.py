@@ -942,6 +942,19 @@ class NetworkPage(BasePage):
                         "Что отвечает на вашей линии, покажет BlockCheck → «DNS-серверы».",
                     ),
                 )
+            elif getattr(plan, "doh_closed", False):
+                # Windows записана с откатом на обычный DNS: без этого окна человек
+                # считал бы запросы зашифрованными.
+                self._info(
+                    "warning",
+                    self._t("page.network.doh_closed.title", "DNS поставлен без шифрования"),
+                    self._t(
+                        "page.network.doh_closed.content",
+                        "Шифрованный путь (DoH) до этого сервера из вашей сети закрыт, поэтому Windows спрашивает "
+                        "его обычными запросами — провайдер их видит и может подменить. Нужно шифрование — "
+                        "выберите сервер из группы «Шифрованные».",
+                    ),
+                )
         state = data.get("state")
         if state is not None:
             self._apply_state(state)
