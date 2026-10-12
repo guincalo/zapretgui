@@ -12,21 +12,8 @@ from PyQt6.QtWidgets import QApplication, QLabel, QWidget
 
 from blockcheck_words import report_with_words, with_words
 from blockcheck.ui.brand_icons import brands_in_text, named_brand, readable_color, site_brand
-from blockcheck.ui.check_results import (
-    BlockcheckSummaryPanel,
-    is_site_problem,
-    site_explanation,
-    site_name,
-    site_note,
-    cut_providers,
-    problem_brand,
-    problem_card_key,
-    problem_finding_card,
-    problem_parts,
-    split_named_sites,
-    split_problem_text,
-    split_server_list,
-)
+from blockcheck.ui.check_results import BlockcheckSummaryPanel, problem_brand, problem_finding_card, problem_parts, split_server_list
+from blockcheck.ui.summary_model import is_site_problem, site_explanation, site_name, site_note, cut_providers, problem_card_key, split_named_sites, split_problem_text
 from blockcheck.ui.result_cards import (
     ANIMATED_BLOCKS,
     TEXT_PREVIEW_LINES,
@@ -793,7 +780,7 @@ class LightAndFittingTests(unittest.TestCase):
         self.assertTrue(band.isHidden())
 
     def test_check_with_a_vpn_running_is_called_out_at_the_top_and_on_the_comparison(self) -> None:
-        from blockcheck.ui.check_results import bypass_warning
+        from blockcheck.ui.summary_model import bypass_warning
 
         self.assertEqual(bypass_warning([]), "")
         panel = BlockcheckSummaryPanel(on_action=lambda *_args: None, on_open=lambda _key: None)

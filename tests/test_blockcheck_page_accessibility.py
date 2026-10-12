@@ -497,7 +497,7 @@ class HistoryCardTests(unittest.TestCase):
     ]
 
     def test_lines_are_newest_first_with_time_scope_and_outcome(self) -> None:
-        from blockcheck.ui.check_results import history_lines
+        from blockcheck.ui.summary_model import history_lines
 
         lines = history_lines(self.RUNS)
 

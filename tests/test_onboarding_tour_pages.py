@@ -224,7 +224,7 @@ class BlockcheckTourGuideTests(unittest.TestCase):
 
 class BlockcheckDemoDataTests(unittest.TestCase):
     def test_example_report_is_drawn_by_the_real_card_builder(self) -> None:
-        from blockcheck.ui.check_results import history_rows
+        from blockcheck.ui.summary_model import history_rows
         from blockcheck.ui.onboarding_demo import demo_history, demo_report
         from blockcheck.ui.onboarding_guide import DEMO_CARD_KEY
         from blockcheck.ui.result_cards_model import build_cards

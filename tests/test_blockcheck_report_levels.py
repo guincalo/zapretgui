@@ -262,7 +262,7 @@ class GroupActionsTests(unittest.TestCase):
         self.assertEqual((acted, opened), ([("dns", "")], ["dns_servers"]))
 
     def test_group_without_a_kind_goes_last(self) -> None:
-        from blockcheck.ui.check_results import group_problems
+        from blockcheck.ui.summary_model import group_problems
 
         problems = [
             {"level": "fail", "kind": "other", "text": "WhatsApp не открывается"},

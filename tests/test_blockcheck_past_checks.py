@@ -12,7 +12,8 @@ from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication
 
 from blockcheck import commands
-from blockcheck.ui.check_results import HISTORY_ALL, HISTORY_SHOWN, BlockcheckHistoryList, history_rows
+from blockcheck.ui.check_results import BlockcheckHistoryList
+from blockcheck.ui.summary_model import HISTORY_ALL, HISTORY_SHOWN, history_rows
 from blockcheck.ui.page import BlockcheckPage
 from blockcheck.ui.past_check_view import report_from_history
 from diagnostics import history

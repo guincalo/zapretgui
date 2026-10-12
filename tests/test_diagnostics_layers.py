@@ -114,6 +114,19 @@ class NetworkGatewayTests(unittest.TestCase):
         self.assertNotIn(services.STEP_FILTER, short)
         self.assertEqual(short, services.progress_steps(services.SCOPE_ALL))
 
+    def test_summary_model_works_without_qt(self) -> None:
+        """Итог для экрана решается без окна: модуль модели не тянет PyQt и qfluentwidgets."""
+        import subprocess
+        import sys
+
+        code = (
+            "import sys; sys.path.insert(0, 'src'); import blockcheck.ui.summary_model, blockcheck.ui.result_cards_model; "
+            "print(sorted(name for name in sys.modules if name.startswith(('PyQt6', 'qfluentwidgets'))))"
+        )
+        root = SRC.parents[1]
+        out = subprocess.run([sys.executable, "-c", code], cwd=root, capture_output=True, text=True, check=True).stdout
+        self.assertEqual(out.strip(), "[]")
+
     def test_engine_stays_small(self) -> None:
         """Движок — порядок проверок и общий отчёт. Новую проверку кладут в свой модуль."""
         lines = len((SRC / "engine.py").read_text(encoding="utf-8").splitlines())
