@@ -61,12 +61,49 @@ class HostsRelayCheckTests(unittest.TestCase):
             patch.object(hosts_module, "safe_read_hosts_file", return_value=""),
             patch.object(hosts_module, "get_relay_addresses", return_value=set(self.RELAYS)),
             patch.object(hosts_module, "unreachable_relays", return_value=["144.31.82.230"]),
+            patch.object(hosts_module, "internet_reachable", return_value=True),
+            patch.object(hosts_module, "is_ipv6_available", return_value=True),
             patch.object(hosts_module.HostsManager, "apply_domain_ip_rows") as write,
         ):
             self.assertFalse(manager.apply_service_dns_selections({"ChatGPT": "zapret_dns"}))
         write.assert_not_called()
         self.assertIn("144.31.82.230", statuses[-1])
         self.assertIn("Файл hosts не изменён", statuses[-1])
+
+    def test_without_internet_the_provider_is_not_blamed(self) -> None:
+        # Молчат и посредник, и контрольные адреса: это нет связи, а не блокировка.
+        from hosts import hosts as hosts_module
+
+        manager = hosts_module.HostsManager.__new__(hosts_module.HostsManager)
+        statuses: list[str] = []
+        manager.set_status = statuses.append
+        with (
+            patch.object(hosts_module, "_build_service_selection_rows", return_value=(list(self.ROWS), True)),
+            patch.object(hosts_module, "service_has_proxy_profiles", return_value=True),
+            patch.object(hosts_module, "safe_read_hosts_file", return_value=""),
+            patch.object(hosts_module, "get_relay_addresses", return_value=set(self.RELAYS)),
+            patch.object(hosts_module, "unreachable_relays", return_value=["144.31.82.230"]),
+            patch.object(hosts_module, "internet_reachable", return_value=False),
+            patch.object(hosts_module, "is_ipv6_available", return_value=True),
+            patch.object(hosts_module.HostsManager, "apply_domain_ip_rows") as write,
+        ):
+            self.assertFalse(manager.apply_service_dns_selections({"ChatGPT": "zapret_dns"}))
+        write.assert_not_called()
+        self.assertIn("Нет связи с интернетом", statuses[-1])
+        self.assertNotIn("провайдер", statuses[-1])
+
+    def test_one_lost_attempt_is_not_a_blocked_relay(self) -> None:
+        attempts = iter([False, True])
+        with patch.object(relay_check, "_connect_once", side_effect=lambda _address: next(attempts)), patch.object(
+            relay_check.time, "sleep"
+        ):
+            self.assertTrue(relay_check._connects("144.31.82.230"))
+
+    def test_ipv6_relays_are_not_probed_without_ipv6(self) -> None:
+        rows = [("chatgpt.com", "2a00:1::5")]
+        with patch.object(relay_check, "_connects", return_value=False) as connects:
+            self.assertEqual(relay_check.unreachable_relays(rows, {"2a00:1::5"}, ipv6=False), [])
+        connects.assert_not_called()
 
     # Настоящий адрес Instagram стоит сразу у нескольких имён и из России без обхода
     # не отвечает. В выпуске 21.1.7.116 он считался посредником и запрещал любую правку hosts.
@@ -98,6 +135,8 @@ class HostsRelayCheckTests(unittest.TestCase):
             patch.object(hosts_module, "safe_read_hosts_file", return_value=written),
             patch.object(hosts_module, "get_relay_addresses", return_value=set(self.RELAYS)),
             patch.object(relay_check, "_connects", side_effect=connects),
+            patch.object(hosts_module, "internet_reachable", return_value=True),
+            patch.object(hosts_module, "is_ipv6_available", return_value=True),
             patch.object(hosts_module.HostsManager, "apply_domain_ip_rows", return_value=True) as write,
         ):
             ok = manager.apply_service_dns_selections(selection)

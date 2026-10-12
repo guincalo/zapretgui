@@ -11,7 +11,7 @@ from .proxy_domains import (
 )
 from .ipv6_detection import is_ipv6_address, is_ipv6_available
 from .adobe_domains import ADOBE_DOMAINS
-from .relay_check import unreachable_relays
+from .relay_check import internet_reachable, unreachable_relays
 from log.log import log
 
 
@@ -619,7 +619,15 @@ class HostsManager:
             return False
 
         # Посредник, заблокированный провайдером, не открыл бы сервис, а сломал его.
-        dead = unreachable_relays(self._new_relay_rows(service_dns), get_relay_addresses())
+        dead = unreachable_relays(self._new_relay_rows(service_dns), get_relay_addresses(), ipv6=is_ipv6_available())
+        if dead and not internet_reachable():
+            # Молчат и контрольные адреса: дело в связи, а не в провайдере и не в посреднике.
+            self.set_status(
+                "Нет связи с интернетом: не отвечают ни сервер-посредник, ни контрольные адреса. "
+                "Файл hosts не изменён — проверьте подключение и попробуйте снова."
+            )
+            log(f"apply_service_dns_selections: нет связи, посредник не проверен: {', '.join(dead)}", "WARNING")
+            return False
         if dead:
             self.set_status(
                 f"Сервер-посредник {', '.join(dead)} не отвечает из вашей сети — похоже, его блокирует провайдер. "
