@@ -16,6 +16,7 @@ from concurrent.futures import Future
 from dataclasses import dataclass
 
 from diagnostics.verdict import Level
+from utils.socket_cancel import SocketCancel
 
 __all__ = ["VoiceReport", "VoiceServer", "check_voice", "summarize_voice"]
 
@@ -71,21 +72,25 @@ def _describe(result) -> tuple[bool, str, bool]:
         return False, "не удалось узнать адрес сервера — проверить его не вышло", False
     if code == "RESET":
         return False, "сервер отклонил запрос (порт закрыт)", True
+    if code == "CANCELLED":
+        return False, "проверку сняли", False
     if code == "UNREACHABLE":
         # Нет маршрута (часто — нет IPv6 или сети вовсе): о закрытом UDP это ничего не говорит.
         return False, "до адреса сервера нет дороги — проверить его не вышло", False
     return False, str(getattr(result, "detail", "") or "ошибка проверки"), False
 
 
-def check_voice(submit: Callable[..., Future], wait: Callable[[Future], object]) -> tuple[VoiceServer, ...]:
-    """Опрашивает все STUN-серверы параллельно. ``submit``/``wait`` — от прогона."""
+def check_voice(
+    submit: Callable[..., Future], wait: Callable[[Future], object], *, cancel: SocketCancel | None = None
+) -> tuple[VoiceServer, ...]:
+    """Опрашивает все STUN-серверы параллельно. ``submit``/``wait``/``cancel`` — от прогона."""
     from blockcheck.data_lists import STUN_TARGETS
     from blockcheck.stun_tester import test_stun
 
     planned = []
     for target in STUN_TARGETS:
         host, port = _parse_target(target["value"])
-        planned.append((target["name"], host, target.get("group", "general"), submit(test_stun, host, port)))
+        planned.append((target["name"], host, target.get("group", "general"), submit(test_stun, host, port, cancel=cancel)))
 
     servers: list[VoiceServer] = []
     for name, host, group, future in planned:

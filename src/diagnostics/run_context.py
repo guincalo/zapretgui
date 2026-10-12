@@ -37,6 +37,8 @@ RECHECK_UNSTABLE = "unstable"
 
 # Как часто пауза проверяет «Стоп», заданный снаружи функцией.
 _PAUSE_POLL_S = 0.1
+# Как часто наблюдатель прогона спрашивает «Стоп» и общий срок.
+_WATCH_S = 0.1
 
 class Stopped(Exception):
     pass
@@ -305,6 +307,16 @@ class Run:
         self._staged: dict[str, list[tuple[Future, Callable, tuple, dict]]] = {}
         # Вопросы к эталонным DNS-серверам: каждый — отдельное шифрованное соединение.
         self.reference_lane = self.lane(REFERENCE_AT_ONCE)
+        # «Стоп» и срок закрывают сокеты сразу, чем бы ни был занят главный поток:
+        # раньше их замечал только тот, кто сам спросил, — скорость, реестр и звонки
+        # досиживали свои секунды.
+        self._closed = threading.Event()
+        threading.Thread(target=self._watch, name="diag-watch", daemon=True).start()
+
+    def _watch(self) -> None:
+        while not self._closed.wait(_WATCH_S):
+            if self.stopped() or self.expired():
+                return
 
     def _cancel_all(self) -> None:
         self.probe_cancel.cancel()
@@ -434,6 +446,7 @@ class Run:
                 continue
 
     def close(self) -> None:
+        self._closed.set()
         self._cancel_all()
         for lane in self._lanes:
             lane.close()

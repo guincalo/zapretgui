@@ -307,7 +307,7 @@ class _Net:
             patch.object(net_access, "system_dns_servers", return_value=("83.220.169.155",)),
             patch.object(sections, "zapret_status", return_value=(True, "✅ Zapret запущен")),
             # Список реестра РКН качается из сети и лежит на диске: в сценариях движка его нет.
-            patch.object(sections, "start_registry", return_value=lambda _seconds: self.registry),
+            patch.object(sections, "start_registry", return_value=lambda _seconds, _cancel: self.registry),
             # Пробы «как работает фильтр» шлют свои приветствия в сеть.
             patch.object(sections, "check_filter_habits", side_effect=lambda _run, _collected, _emit, **_kwargs: self.habits),
             # Место перехвата DNS — настоящие пакеты в сеть: в сценариях движка его нет.

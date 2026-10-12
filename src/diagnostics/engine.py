@@ -647,7 +647,7 @@ def run_blockcheck(
         live.data.update(dict.fromkeys(_REPORT_SECTIONS), other_bypass_tools=list(other_tools), tools_in_path=list(in_path), partial=True)
 
         # Звонки и обрыв на 16 КБ проверяются всегда: режим меняет только список сайтов.
-        voice_future = run.later(STEP_VOICE, check_voice, run.submit, _wait_plain)
+        voice_future = run.later(STEP_VOICE, check_voice, run.submit, _wait_plain, cancel=run.probe_cancel)
         burst_future = run.later(STEP_VOICE, sections.check_udp_burst, run)
         freeze_future = run.later(
             STEP_HOSTINGS,
@@ -778,7 +778,9 @@ def run_blockcheck(
             problems, burst=burst, dns_servers=dns_servers, speed=speed, crowd=crowd, zapret_running=zapret_running
         )
 
-        registry_index = registry_wait(REGISTRY_WAIT_S)
+        registry_index = registry_wait(REGISTRY_WAIT_S, run.probe_cancel)
+        if run.stopped():
+            raise _Stopped()
         services_report = registry.annotate(services_report, registry_index)
         for line in registry.lines(services_report, registry_index):
             emit(line)
@@ -823,7 +825,10 @@ def check_site(host: str, *, should_stop: ShouldStop | None = None, emit: Emit |
         collected = _run_probes(run, services, full=True, emit=emit or (lambda _line: None))
         verdicts = {key: _service_verdict(item, collected[key], zapret_running=zapret_running) for key, item in services.items()}
         report = report_text.services_report(services, verdicts, collected)
-        report = registry.annotate(report, registry_wait(REGISTRY_WAIT_S))
+        registry_index = registry_wait(REGISTRY_WAIT_S, run.probe_cancel)
+        if run.stopped():
+            raise _Stopped()
+        report = registry.annotate(report, registry_index)
         return report[0] if report else None
     except _Stopped:
         return None

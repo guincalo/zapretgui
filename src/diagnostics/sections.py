@@ -41,11 +41,12 @@ from diagnostics.tls_probe import KIND_RESET, ProbeResult
 from diagnostics.verdict import Level, ReachState
 from utils.dns_wire import TYPE_AAAA
 from utils.ip_owner import lookup_ip_owner
+from utils.socket_cancel import SocketCancel
 
 Emit = Callable[[str], None]
 
 
-def start_registry() -> Callable[[float], registry.Index]:
+def start_registry() -> Callable[[float, SocketCancel], registry.Index]:
     """Запускает обновление списка реестра РКН и возвращает «ждалку» его итога.
 
     Список качается своим потоком, а не потоком прогона: если сеть медленная,
@@ -73,8 +74,12 @@ def start_registry() -> Callable[[float], registry.Index]:
 
     threading.Thread(target=_work, name="blockcheck-registry", daemon=True).start()
 
-    def wait(seconds: float) -> registry.Index:
-        done.wait(max(0.0, seconds))
+    def wait(seconds: float, cancel: SocketCancel) -> registry.Index:
+        # «Стоп» снимает ожидание сразу; само скачивание идёт дальше.
+        deadline = time.monotonic() + max(0.0, seconds)
+        while not done.wait(min(0.1, max(0.0, deadline - time.monotonic()))):
+            if cancel.cancelled or time.monotonic() >= deadline:
+                break
         return result[0] if result else registry.load(folder)
 
     return wait

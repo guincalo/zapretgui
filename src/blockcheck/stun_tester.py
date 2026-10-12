@@ -9,6 +9,7 @@ from blockcheck.config import STUN_TIMEOUT
 from utils.net_failure import FAILURE_RESET, FAILURE_TIMEOUT, FAILURE_UNREACHABLE, classify
 from blockcheck.models import SingleTestResult, TestStatus, TestType
 from utils.net_resolve import DEFAULT_DNS_TIMEOUT, resolve_addrinfo
+from utils.socket_cancel import SocketCancel
 
 
 def build_stun_request() -> bytes:
@@ -158,6 +159,7 @@ def test_stun(
     timeout: int = STUN_TIMEOUT,
     retries: int = 2,
     family: socket.AddressFamily | None = None,
+    cancel: SocketCancel | None = None,
 ) -> SingleTestResult:
     """Test a STUN server via UDP with retries, return SingleTestResult.
 
@@ -170,7 +172,9 @@ def test_stun(
         timeout: Total timeout budget in seconds.
         retries: Number of retry rounds.
         family: Optional forced address family (AF_INET / AF_INET6).
+        cancel: «Стоп» прогона: закрывает сокет сразу; итог — error_code "CANCELLED".
     """
+    token = cancel or SocketCancel()
     start = time.monotonic()
     target_name = f"{host}:{port}"
 
@@ -217,6 +221,8 @@ def test_stun(
             sock = None
             try:
                 sock = socket.socket(af, socktype, proto)
+                if not token.track(sock):
+                    break
                 sock.settimeout(min(per_attempt, max(0.5, remaining)))
 
                 request = build_stun_request()
@@ -276,13 +282,22 @@ def test_stun(
                 break
             finally:
                 if sock:
+                    token.release(sock)
                     try:
                         sock.close()
                     except Exception:
                         pass
 
-        if stop_scan:
+        if stop_scan or token.cancelled:
             break
+
+    if token.cancelled:
+        return SingleTestResult(
+            target_name=target_name, test_type=TestType.STUN,
+            status=TestStatus.ERROR, error_code="CANCELLED",
+            time_ms=round((time.monotonic() - start) * 1000, 2),
+            detail="Проверку сняли",
+        )
 
     return SingleTestResult(
         target_name=target_name, test_type=TestType.STUN,

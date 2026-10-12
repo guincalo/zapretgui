@@ -27,6 +27,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from blockcheck.stun_tester import build_stun_request
+from utils.net_resolve import resolve_addrinfo
 from utils.socket_cancel import SocketCancel, close_quietly
 
 __all__ = ["BURST_OK", "BURST_FREEZE", "BURST_UNKNOWN", "BurstVerdict", "check_bursts", "judge", "lines", "send_burst"]
@@ -34,6 +35,8 @@ __all__ = ["BURST_OK", "BURST_FREEZE", "BURST_UNKNOWN", "BurstVerdict", "check_b
 SERVERS = (("Google", "stun.l.google.com", 19302), ("Cloudflare", "stun.cloudflare.com", 3478))
 PACKETS = 30
 GAP_S = 0.02
+# Сколько ждать адрес сервера.
+RESOLVE_TIMEOUT_S = 4.0
 TAIL_WAIT_S = 1.0
 REPEATS = 2
 # Сколько первых ответов должно прийти, чтобы говорить «начало потока проходит».
@@ -61,7 +64,8 @@ def send_burst(
     token = cancel or SocketCancel()
     sock: socket.socket | None = None
     try:
-        address = socket.getaddrinfo(host, port, socket.AF_INET, socket.SOCK_DGRAM)[0][4]
+        # Со сроком: голый getaddrinfo мог висеть без конца и держать выход из программы.
+        address = resolve_addrinfo(host, port, timeout=RESOLVE_TIMEOUT_S, family=socket.AF_INET, socktype=socket.SOCK_DGRAM)[0][4]
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         if not token.track(sock):
             return None
