@@ -341,8 +341,20 @@ class DnsPageTests(unittest.TestCase):
 
         page.grid.activated.emit("Google DNS")
 
-        self.assertEqual(page._apply_lane.request.call_args.args[0]["name"], "Google DNS")
+        payload = page._apply_lane.request.call_args.args[0]
+        self.assertEqual(payload["name"], "Google DNS")
+        # О блокировке — не до записи, а когда DNS и правда поставлен.
+        self.info_bar.warning.assert_not_called()
+        done = page_plans.build_provider_dns_apply_result_plan(name="Google DNS", adapter_count=1, success_count=1, ipv6=[])
+        page._on_apply_done(payload, {"plan": done, "state": STATE})
         self.assertIn("Google DNS в России блокируется", self.info_bar.warning.call_args.kwargs["title"])
+
+        # Записать не удалось ни на одном адаптере: это «не применён», и о блокировке ни слова.
+        self.info_bar.reset_mock()
+        refused = page_plans.build_provider_dns_apply_result_plan(name="Google DNS", adapter_count=2, success_count=0, ipv6=[])
+        page._on_apply_done(payload, {"plan": refused, "state": STATE})
+        self.assertEqual(self.info_bar.warning.call_count, 1)
+        self.assertEqual(self.info_bar.warning.call_args.kwargs["title"], "DNS не применён")
 
         self.info_bar.reset_mock()
         page.grid.activated.emit("AdGuard")

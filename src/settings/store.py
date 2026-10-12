@@ -580,15 +580,6 @@ def set_telegram_proxy_settings(values: dict[str, Any]) -> dict[str, Any]:
     return copy.deepcopy(updated["telegram_proxy"])
 
 
-def get_dns_settings() -> dict[str, Any]:
-    return _read_section("dns")
-
-
-def set_dns_settings(values: dict[str, Any]) -> dict[str, Any]:
-    updated = _update_settings(lambda data: data["dns"].update(_as_dict(values)))
-    return copy.deepcopy(updated["dns"])
-
-
 def get_hosts_settings() -> dict[str, Any]:
     return _read_section("hosts")
 

@@ -863,16 +863,6 @@ class NetworkPage(BasePage):
         self._pending_choice = name
         self.grid.flash(name)
         self._render()
-        if data.get("status") == STATUS_BLOCKED:
-            self._info(
-                "warning",
-                self._t("page.network.status.blocked.chosen.title", "{name} в России блокируется", name=name),
-                self._t(
-                    "page.network.status.blocked.chosen.content",
-                    "DNS поставлен, как вы выбрали. Если сайты перестанут открываться, выберите другой сервер. "
-                    "Что отвечает на вашей линии, покажет BlockCheck → «DNS-серверы».",
-                ),
-            )
         self._apply_lane.request(
             {
                 "action": "provider",
@@ -913,8 +903,16 @@ class NetworkPage(BasePage):
         elif plan is not None:
             if getattr(plan, "log_message", ""):
                 log(plan.log_message, getattr(plan, "log_level", None) or "INFO")
-            failed = int(getattr(plan, "adapter_count", 0)) - int(getattr(plan, "success_count", 0))
-            if failed > 0:
+            total = int(getattr(plan, "adapter_count", 0))
+            failed = total - int(getattr(plan, "success_count", 0))
+            if total and failed >= total:
+                # Ни один адаптер не изменён — это отказ, а не «встал не везде».
+                self._info(
+                    "warning",
+                    self._t("page.network.error.apply.title", "DNS не применён"),
+                    str(getattr(plan, "error", "") or ""),
+                )
+            elif failed > 0:
                 self._info(
                     "warning",
                     self._t("page.network.error.apply.partial.title", "DNS встал не везде"),
@@ -930,6 +928,18 @@ class NetworkPage(BasePage):
                             str(getattr(plan, "error", "") or ""),
                         )
                         if part
+                    ),
+                )
+            elif payload.get("action") == "provider" and (payload.get("data") or {}).get("status") == STATUS_BLOCKED:
+                # О блокировке выбранного сервера — только когда DNS и правда поставлен.
+                name = str(payload.get("name") or "")
+                self._info(
+                    "warning",
+                    self._t("page.network.status.blocked.chosen.title", "{name} в России блокируется", name=name),
+                    self._t(
+                        "page.network.status.blocked.chosen.content",
+                        "DNS поставлен, как вы выбрали. Если сайты перестанут открываться, выберите другой сервер. "
+                        "Что отвечает на вашей линии, покажет BlockCheck → «DNS-серверы».",
                     ),
                 )
         state = data.get("state")

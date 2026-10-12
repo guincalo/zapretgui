@@ -28,7 +28,6 @@ class NetworkDnsApplyResultPlan:
 @dataclass(slots=True)
 class NetworkFlushDnsCacheResultPlan:
     success: bool
-    infobar_level: str | None
     title: str
     content: str
 
@@ -99,10 +98,9 @@ def build_provider_dns_apply_result_plan(
 
 def build_flush_dns_cache_result_plan(*, success: bool, message: str, language: str = "ru") -> NetworkFlushDnsCacheResultPlan:
     if success:
-        return NetworkFlushDnsCacheResultPlan(success=True, infobar_level=None, title="", content="")
+        return NetworkFlushDnsCacheResultPlan(success=True, title="", content="")
     return NetworkFlushDnsCacheResultPlan(
         success=False,
-        infobar_level="warning",
         title=tr_catalog("page.network.error.title", language=language, default="Ошибка"),
         content=tr_catalog(
             "page.network.error.flush_cache_failed",
