@@ -25,6 +25,7 @@ from diagnostics import (
     protocol_probe,
     quic_probe,
     report_text,
+    subnet_whitelist,
     system_state,
     telegram_check,
 )
@@ -166,6 +167,55 @@ def problem(
     return record
 
 
+# «Не открывается» у контрольного сайта — только когда до него нет дороги.
+# Обрыв после 16 КБ или чужой сертификат — это блокировка, которую лечат
+# иначе, а не «закрыты все зарубежные адреса».
+_NO_ROAD = (ReachState.IP_BLOCK, ReachState.DPI)
+
+
+def _control_keys(services: dict[str, Service]) -> tuple[list[str], list[str], list[str]]:
+    """(все контрольные, зарубежные, российские) — ключи сервисов."""
+    controls = [key for key, service in services.items() if service.control]
+    return (
+        controls,
+        [key for key in controls if not services[key].domestic],
+        [key for key in controls if services[key].domestic],
+    )
+
+
+def _control_down(collected: dict[str, list[Probe]], key: str) -> bool:
+    # Только настоящий провал контрольного сайта: «не успели проверить» (лимит
+    # времени) — не «нет интернета», иначе такой прогон спрятал бы найденные
+    # блокировки остальных сайтов.
+    probes = collected.get(key) or ()
+    return bool(probes) and all(probe.reach_state in _NO_ROAD for probe in probes)
+
+
+def _foreign_reachable(reference: list[dict] | None) -> bool:
+    # Эталонные DNS-серверы — зарубежные адреса, к которым программа ходит напрямую.
+    # Если хоть один ответил, зарубежные адреса не закрыты и интернет есть.
+    return any(item.get("ok") for item in reference or ())
+
+
+def whitelist_suspected(
+    services: dict[str, Service],
+    verdicts: dict[str, ServiceVerdict],
+    collected: dict[str, list[Probe]],
+    reference: list[dict] | None,
+) -> bool:
+    """Признак «белых списков» по контрольным сайтам: российские открываются, зарубежные нет.
+
+    Движок по нему решает, звать ли проверку подсетей (``subnet_whitelist``),
+    которая этот признак подтверждает или снимает.
+    """
+    _controls, foreign, domestic = _control_keys(services)
+    foreign_down = (
+        bool(foreign) and all(_control_down(collected, key) for key in foreign) and not _foreign_reachable(reference)
+    )
+    domestic_up = bool(domestic) and all(verdicts[key].level == Level.OK for key in domestic)
+    return foreign_down and domestic_up
+
+
 def collect_problems(
     services: dict[str, Service],
     verdicts: dict[str, ServiceVerdict],
@@ -179,6 +229,7 @@ def collect_problems(
     ipv6: ipv6_check.Ipv6Verdict | None = None,
     system: tuple[system_state.SystemItem, ...] = (),
     telegram: telegram_check.TelegramReport | None = None,
+    subnets: subnet_whitelist.SubnetVerdict | None = None,
 ) -> tuple[list[dict], list[str], list[str]]:
     """Итог для экрана: проблемы по важности, открывающиеся сервисы, подменённые DNS.
 
@@ -187,35 +238,33 @@ def collect_problems(
     """
     problems: list[dict] = []
 
-    controls = [key for key, service in services.items() if service.control]
-    foreign = [key for key in controls if not services[key].domestic]
-    domestic = [key for key in controls if services[key].domestic]
-    # Только настоящий провал контрольных сайтов: «не успели проверить»
-    # (лимит времени) — не «нет интернета», иначе такой прогон спрятал бы
-    # найденные блокировки остальных сайтов.
-    # «Не открывается» у контрольного сайта — только когда до него нет дороги.
-    # Обрыв после 16 КБ или чужой сертификат — это блокировка, которую лечат
-    # иначе, а не «закрыты все зарубежные адреса».
-    no_road = (ReachState.IP_BLOCK, ReachState.DPI)
-
-    def _down(key: str) -> bool:
-        probes = collected.get(key) or ()
-        return bool(probes) and all(probe.reach_state in no_road for probe in probes)
-
-    # Эталонные DNS-серверы — зарубежные адреса, к которым программа ходит напрямую.
-    # Если хоть один ответил, зарубежные адреса не закрыты и интернет есть.
-    foreign_reachable = any(item.get("ok") for item in reference or ())
-    foreign_down = bool(foreign) and all(_down(key) for key in foreign) and not foreign_reachable
-    domestic_up = bool(domestic) and all(verdicts[key].level == Level.OK for key in domestic)
-    whitelisted = foreign_down and domestic_up
-    offline = bool(controls) and all(_down(key) for key in controls) and not foreign_reachable
+    controls, foreign, domestic = _control_keys(services)
+    whitelisted = whitelist_suspected(services, verdicts, collected, reference)
+    if whitelisted and subnets is not None and subnets.code == subnet_whitelist.CODE_REFUTED:
+        # Зарубежные сети отвечают: закрыты именно контрольные сайты, а не всё зарубежное.
+        whitelisted = False
+    offline = (
+        bool(controls)
+        and all(_control_down(collected, key) for key in controls)
+        and not _foreign_reachable(reference)
+    )
     names = ", ".join(services[key].label for key in foreign)
     if whitelisted:
+        confirmed = subnets is not None and subnets.code == subnet_whitelist.CODE_CONFIRMED
+        sites = (
+            f"Открываются только российские сайты ({', '.join(services[key].label for key in domestic)}), "
+            f"а зарубежные контрольные ({names}) — нет."
+        )
+        how = _whitelist_kind(foreign, collected)
+        text = (
+            f"{sites} Это режим «белых списков»: {subnets.text}; {how}"
+            if confirmed
+            else f"{sites} Похоже на режим «белых списков»: {how}"
+        )
         problems.append(
             problem(
                 Level.FAIL,
-                f"Открываются только российские сайты ({', '.join(services[key].label for key in domestic)}), "
-                f"а зарубежные контрольные ({names}) — нет. Похоже на режим «белых списков»: {_whitelist_kind(foreign, collected)}",
+                text,
                 (
                     "В таком режиме Zapret не помогает: закрыты сами адреса, а не отдельные сайты. "
                     "Обычно это временное ограничение, чаще в мобильных сетях — проверьте другую сеть.",

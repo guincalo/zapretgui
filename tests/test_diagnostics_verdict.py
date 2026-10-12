@@ -210,6 +210,9 @@ class _Net:
         self.status = status
         self.https = https or (lambda host, ip: _ok(ip))
         self.calls: list[tuple[str, str]] = []
+        # Что «нашла» проверка подсетей; сколько раз её звали.
+        self.subnets = None
+        self.subnet_checks = 0
         # Какие записи спрашивали у эталонного DNS (A, AAAA).
         self.doh_types: list[int] = []
         # Что «показали» дополнительные пробы: по умолчанию ничего не выяснили.
@@ -267,6 +270,10 @@ class _Net:
             return self.cause_facts(host, result)
         return engine.block_cause.CauseFacts(host=host, result=result)
 
+    def _subnets(self, _run, _emit):
+        self.subnet_checks += 1
+        return self.subnets
+
     def _doh(self, _run, _host, record_type=engine.DNS_TYPE_A):
         self.doh_types.append(record_type)
         return True, self.reference_v6 if record_type == TYPE_AAAA else self.reference
@@ -305,6 +312,8 @@ class _Net:
             patch.object(sections, "check_crowd", side_effect=self._crowd),
             patch.object(engine.telegram_check, "check_telegram", side_effect=lambda *_a, **_k: self.telegram),
             patch.object(sections, "check_system", side_effect=lambda _run, _services, _zapret=None: self.system_items),
+            # Подсети — десятки настоящих соединений: в сценариях движка их нет.
+            patch.object(sections, "check_subnets", side_effect=self._subnets),
             patch.object(net_access, "hosts_file_ipv4", side_effect=lambda _host: self.hosts),
             # Чужой сертификат читается отдельным соединением — в сценариях движка сети нет.
             patch.object(engine.cert_owner, "collect", side_effect=self._cert),
@@ -1707,7 +1716,7 @@ class BlockcheckScopeTests(unittest.TestCase):
         self.assertEqual(mostly_unknown.level, Level.UNKNOWN)
         self.assertIn("1 из 3", mostly_unknown.headline)
 
-    def _run_all(self, https):
+    def _run_all(self, https, *, subnets=None, net_out: list | None = None):
         from diagnostics.freeze_check import FreezeServer, FreezeState
         from diagnostics.voice_check import VoiceServer
 
@@ -1716,6 +1725,9 @@ class BlockcheckScopeTests(unittest.TestCase):
             voice=(VoiceServer("CF", "stun", True, "отвечает"),),
             freeze=(FreezeServer("Akamai", FreezeState.OK, "получено 32 КБ"),),
         )
+        net.subnets = subnets
+        if net_out is not None:
+            net_out.append(net)
         return net.run(engine.run_blockcheck, "all", emit=lambda _line: None)
 
     def _run_with_telegram(self, connected, *, scope="all"):
@@ -1863,6 +1875,28 @@ class BlockcheckScopeTests(unittest.TestCase):
         self.assertFalse([item for item in result["problems"] if item["action"] in ("strategy", "start_zapret")])
         yandex = next(item for item in result["services"] if item["key"] == "yandex")
         self.assertTrue(yandex["control"] and yandex["domestic"])
+
+    def test_subnets_confirm_or_refute_the_whitelist(self) -> None:
+        """Признак по контрольным сайтам проверяется по десяткам сетей: они его подтверждают или снимают."""
+        from diagnostics import subnet_whitelist as sw
+
+        domestic = {"ya.ru", "vk.com"}
+
+        def _https(host, ip):
+            return _ok(ip) if host in domestic else ProbeResult(ip=ip, kind=KIND_CONNECT)
+
+        confirmed = self._run_all(_https, subnets=sw.SubnetVerdict(sw.CODE_CONFIRMED, 18, 20, 0, 15))
+        self.assertIn("Это режим «белых списков»: из российских сетей отвечают 18 из 20", confirmed["problems"][0]["text"])
+
+        # Зарубежные сети отвечают: закрыты именно контрольные сайты, «белых списков» нет.
+        refuted = self._run_all(_https, subnets=sw.SubnetVerdict(sw.CODE_REFUTED, 19, 20, 12, 15))
+        self.assertFalse(any("белых списков" in item["text"] for item in refuted["problems"]))
+
+    def test_subnets_are_not_checked_without_the_sign(self) -> None:
+        nets: list = []
+        self._run_all(lambda _host, ip: _ok(ip), net_out=nets)
+
+        self.assertEqual(nets[0].subnet_checks, 0)
 
     def test_foreign_controls_open_is_not_whitelist_mode(self) -> None:
         """Один закрытый сайт при живых зарубежных контрольных — обычная блокировка."""

@@ -29,6 +29,7 @@ from diagnostics import (
     report_text,
     self_check,
     speed_check,
+    subnet_whitelist,
     system_state,
     udp_burst,
     upload_probe,
@@ -489,6 +490,20 @@ def emit_system(system, emit: Emit) -> None:
     emit("━━━━━━━━ Состояние системы ━━━━━━━━")
     for item in system:
         emit(f"{SYSTEM_ICON[item.level]} {item.title}: {item.text}")
+
+
+def check_subnets(run: Run, emit: Emit) -> subnet_whitelist.SubnetVerdict | None:
+    """Подтверждение «белых списков» по десяткам сетей; строка в текстовый отчёт."""
+    facts = subnet_whitelist.collect(submit=run.net_lane.submit, cancel=run.probe_cancel)
+    verdict = subnet_whitelist.judge(facts)
+    if verdict is not None:
+        meaning = {
+            subnet_whitelist.CODE_CONFIRMED: "похоже на белый список",
+            subnet_whitelist.CODE_REFUTED: "зарубежные сети открыты — это не белый список",
+            subnet_whitelist.CODE_UNCLEAR: "картина неясная",
+        }[verdict.code]
+        emit(f"ℹ️ Подсети: {verdict.text} — {meaning}")
+    return verdict
 
 
 def emit_network(network, emit: Emit) -> None:

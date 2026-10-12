@@ -779,6 +779,14 @@ def run_blockcheck(
         crowd = _attempt(emit, "Несколько соединений сразу", crowd_call) if full and not run.dns_cancelled() else None
         live.put(filter=filter_place, habits=habits, speed=speed, crowd=crowd)
 
+        reference = run.reference_report()
+        # Признак «белых списков» по контрольным сайтам проверяется по десяткам сетей:
+        # без признака эти сорок соединений не нужны.
+        subnets = (
+            _attempt(emit, "Подсети", functools.partial(sections.check_subnets, run, emit))
+            if problem_rules.whitelist_suspected(services, verdicts, collected, reference) and not run.dns_cancelled()
+            else None
+        )
         problems, working, spoofed = problem_rules.collect_problems(
             services,
             verdicts,
@@ -787,10 +795,11 @@ def run_blockcheck(
             freeze=freeze,
             zapret_running=zapret_running,
             geo_service_for=geo_service_for,
-            reference=run.reference_report(),
+            reference=reference,
             ipv6=ipv6,
             system=system,
             telegram=telegram,
+            subnets=subnets,
         )
         problems = _with_section_problems(
             problems, burst=burst, dns_servers=dns_servers, speed=speed, crowd=crowd, zapret_running=zapret_running
@@ -815,7 +824,7 @@ def run_blockcheck(
             problems=problems,
             working=working,
             spoofed_hosts=spoofed,
-            reference=run.reference_report(),
+            reference=reference,
             timed_out=run.timed_out,
             elapsed=elapsed,
             partial=False,
