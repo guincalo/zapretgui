@@ -17,8 +17,8 @@ from blockcheck.strategy_search.verdict import ProbeOutcome
 from blockcheck.strategy_search.winws_session import SessionStart
 
 OK = ProbeOutcome(rules.PROBE_OK, "HTTP 200", 120.0)
-RESET = ProbeOutcome(rules.PROBE_BLOCKED, "соединение сброшено", 30.0)
-TIMEOUT = ProbeOutcome(rules.PROBE_BLOCKED, "нет шифрования (таймаут)", 4000.0)
+RESET = ProbeOutcome(rules.PROBE_BLOCKED, "соединение сброшено", 30.0, "reset")
+TIMEOUT = ProbeOutcome(rules.PROBE_BLOCKED, "нет шифрования (таймаут)", 4000.0, "timeout")
 NO_CONNECT = ProbeOutcome(rules.PROBE_UNREACHABLE, "сервер не отвечает на подключение", 4000.0)
 
 

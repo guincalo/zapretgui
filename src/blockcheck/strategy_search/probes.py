@@ -18,6 +18,7 @@ from collections.abc import Sequence
 
 from blockcheck.strategy_search import verdict
 from blockcheck.strategy_search.verdict import ProbeOutcome, UdpProbeSpec
+from utils.net_failure import FAILURE_REFUSED, FAILURE_RESET, FAILURE_TIMEOUT, classify
 
 # Бюджет HTTPS-запроса: подключение + шифрование + первый ответ.
 HTTPS_TIMEOUT = 4.0
@@ -187,6 +188,10 @@ def _udp_exchange(address: str, port: int, request: bytes, accept) -> ProbeOutco
     started = time.perf_counter()
     family = socket.AF_INET6 if ":" in address else socket.AF_INET
     last_reason = "нет ответа (таймаут)"
+
+    def spent() -> float:
+        return (time.perf_counter() - started) * 1000
+
     for _attempt in range(UDP_ATTEMPTS):
         sock = socket.socket(family, socket.SOCK_DGRAM)
         try:
@@ -197,20 +202,22 @@ def _udp_exchange(address: str, port: int, request: bytes, accept) -> ProbeOutco
             # мог ответить в другом формате (новая версия протокола), и считать
             # такой ответ блокировкой значило бы подбирать на живом сервере.
             reason = "ответ получен" if accept(data) else "ответ получен (нестандартный)"
-            return ProbeOutcome(verdict.PROBE_OK, reason, (time.perf_counter() - started) * 1000)
-        except socket.timeout:
-            last_reason = "нет ответа (таймаут)"
-        except ConnectionResetError:
-            # ICMP «порт закрыт»: сервер есть, но не слушает — это не DPI.
-            return ProbeOutcome(verdict.PROBE_UNREACHABLE, "порт закрыт", (time.perf_counter() - started) * 1000)
+            return ProbeOutcome(verdict.PROBE_OK, reason, spent())
         except OSError as error:
-            return ProbeOutcome(verdict.PROBE_UNREACHABLE, str(error), (time.perf_counter() - started) * 1000)
+            failure = classify(error)
+            if failure == FAILURE_TIMEOUT:
+                last_reason = "нет ответа (таймаут)"
+                continue
+            if failure == FAILURE_RESET:
+                # У UDP так приходит ICMP «порт закрыт»: сервер есть, но не слушает — это не DPI.
+                return ProbeOutcome(verdict.PROBE_UNREACHABLE, "порт закрыт", spent(), FAILURE_REFUSED)
+            return ProbeOutcome(verdict.PROBE_UNREACHABLE, str(error), spent(), failure)
         finally:
             try:
                 sock.close()
             except OSError:
                 pass
-    return ProbeOutcome(verdict.PROBE_BLOCKED, last_reason, (time.perf_counter() - started) * 1000)
+    return ProbeOutcome(verdict.PROBE_BLOCKED, last_reason, spent(), FAILURE_TIMEOUT)
 
 
 def _stun_request() -> bytes:

@@ -16,6 +16,17 @@ from __future__ import annotations
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 
+from utils.net_failure import (
+    FAILURE_CANCELLED,
+    FAILURE_CERT,
+    FAILURE_CLOSED,
+    FAILURE_HTTP,
+    FAILURE_MALFORMED,
+    FAILURE_RESET,
+    FAILURE_TIMEOUT,
+    FAILURE_TLS,
+)
+
 # --- Исход одной проверки адреса -------------------------------------------
 
 PROBE_OK = "ok"
@@ -39,6 +50,9 @@ class ProbeOutcome:
     state: str
     reason: str = ""
     time_ms: float = 0.0
+    # Вид сбоя из ``utils.net_failure``; пусто, если адрес ответил. Правила опираются
+    # на него, а ``reason`` — только текст для человека.
+    failure: str = ""
 
     @property
     def ok(self) -> bool:
@@ -63,32 +77,32 @@ def judge_https(result) -> ProbeOutcome:
     kind = result.kind
     elapsed = float(result.elapsed_ms or 0.0)
     if kind == tls_probe.KIND_CANCELLED:
-        return ProbeOutcome(PROBE_CANCELLED, "отменено", elapsed)
+        return ProbeOutcome(PROBE_CANCELLED, "отменено", elapsed, FAILURE_CANCELLED)
     if kind == tls_probe.KIND_CONNECT:
-        return ProbeOutcome(PROBE_UNREACHABLE, "сервер не отвечает на подключение", elapsed)
+        return ProbeOutcome(PROBE_UNREACHABLE, "сервер не отвечает на подключение", elapsed, result.connect_fail)
     if kind == tls_probe.KIND_CERT:
         problem = result.cert_problem or "сертификат не прошёл проверку"
-        return ProbeOutcome(PROBE_BLOCKED, f"подменён сертификат: {problem}", elapsed)
+        return ProbeOutcome(PROBE_BLOCKED, f"подменён сертификат: {problem}", elapsed, FAILURE_CERT)
     if kind == tls_probe.KIND_TLS:
-        return ProbeOutcome(PROBE_BLOCKED, "обрыв при установке шифрования", elapsed)
+        return ProbeOutcome(PROBE_BLOCKED, "обрыв при установке шифрования", elapsed, FAILURE_TLS)
     if kind == tls_probe.KIND_RESET:
-        return ProbeOutcome(PROBE_BLOCKED, "соединение сброшено", elapsed)
+        return ProbeOutcome(PROBE_BLOCKED, "соединение сброшено", elapsed, FAILURE_RESET)
     if kind == tls_probe.KIND_TIMEOUT:
         stage = "шифрования" if result.stage == tls_probe.STAGE_TLS else "ответа"
-        return ProbeOutcome(PROBE_BLOCKED, f"нет {stage} (таймаут)", elapsed)
+        return ProbeOutcome(PROBE_BLOCKED, f"нет {stage} (таймаут)", elapsed, FAILURE_TIMEOUT)
     if kind != tls_probe.KIND_OK:
-        return ProbeOutcome(PROBE_BLOCKED, "сервер ответил не по HTTP", elapsed)
+        return ProbeOutcome(PROBE_BLOCKED, "сервер ответил не по HTTP", elapsed, FAILURE_MALFORMED)
 
     status = result.status
     if status is None:
-        return ProbeOutcome(PROBE_BLOCKED, "нет ответа HTTP", elapsed)
+        return ProbeOutcome(PROBE_BLOCKED, "нет ответа HTTP", elapsed, FAILURE_CLOSED)
     if result.body_cut and result.body_size < FREEZE_MAX_BYTES:
         size_kb = max(1, round(result.body_size / 1024))
         if result.body_size >= FREEZE_MIN_BYTES:
-            return ProbeOutcome(PROBE_BLOCKED, f"ответ обрывается на ~{size_kb} КБ (блокировка по объёму)", elapsed)
-        return ProbeOutcome(PROBE_BLOCKED, f"ответ оборвался на ~{size_kb} КБ", elapsed)
+            return ProbeOutcome(PROBE_BLOCKED, f"ответ обрывается на ~{size_kb} КБ (блокировка по объёму)", elapsed, FAILURE_RESET)
+        return ProbeOutcome(PROBE_BLOCKED, f"ответ оборвался на ~{size_kb} КБ", elapsed, FAILURE_RESET)
     if status == 400:
-        return ProbeOutcome(PROBE_BLOCKED, "сервер ответил 400: до него дошли фейковые пакеты", elapsed)
+        return ProbeOutcome(PROBE_BLOCKED, "сервер ответил 400: до него дошли фейковые пакеты", elapsed, FAILURE_HTTP)
     return ProbeOutcome(PROBE_OK, f"HTTP {status}", elapsed)
 
 
@@ -187,9 +201,13 @@ def attempt_needs_network_check(outcomes: Sequence[ProbeOutcome]) -> bool:
             continue
         if outcome.state == PROBE_UNREACHABLE:
             return True
-        if "таймаут" in outcome.reason or "нет ответа" in outcome.reason:
+        if outcome.failure in _SILENT_FAILURES:
             return True
     return False
+
+
+# Тишина и закрытое без ответа соединение: так выглядит и DPI, и пропавший интернет.
+_SILENT_FAILURES = frozenset({FAILURE_TIMEOUT, FAILURE_CLOSED})
 
 
 # --- UDP: голос и игры ------------------------------------------------------------

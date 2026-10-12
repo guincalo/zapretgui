@@ -24,7 +24,6 @@ Windows умеет спрашивать только «свои» DNS-серве
 
 from __future__ import annotations
 
-import errno
 import http.client
 import os
 import socket
@@ -35,6 +34,21 @@ from dataclasses import dataclass
 from ipaddress import ip_address
 
 from utils import http2_post
+# Почему ответа нет: общий словарь видов сбоя всех проверок сети.
+from utils.net_failure import (
+    FAILURE_CANCELLED,
+    FAILURE_CERT,
+    FAILURE_CLOSED,
+    FAILURE_HTTP,
+    FAILURE_MALFORMED,
+    FAILURE_OTHER,
+    FAILURE_REFUSED,
+    FAILURE_RESET,
+    FAILURE_TIMEOUT,
+    FAILURE_TLS,
+    FAILURE_UNREACHABLE,
+    classify,
+)
 from utils.socket_cancel import SocketCancel, close_quietly
 
 TYPE_A = 1
@@ -60,26 +74,11 @@ TRANSPORT_TCP = "tcp"
 TRANSPORT_DOT = "dot"
 TRANSPORT_DOH = "doh"
 
-# Почему ответа нет. Выводы проверок опираются на эти виды, а не на текст ошибки.
-FAILURE_TIMEOUT = "timeout"          # сервер молчит, пакеты пропадают
-FAILURE_REFUSED = "refused"          # на этом порту никто не слушает
-FAILURE_RESET = "reset"              # соединение оборвано по пути или сервером
-FAILURE_CLOSED = "closed"            # сервер закрыл соединение, не ответив
-FAILURE_UNREACHABLE = "unreachable"  # до адреса нет дороги
-FAILURE_TLS = "tls"                  # шифрование не установилось
-FAILURE_CERT = "cert"                # сервер предъявил чужой сертификат
-FAILURE_HTTP = "http"                # сервер ответил ошибкой HTTP
-FAILURE_MALFORMED = "malformed"      # пришло не то, что должно
-FAILURE_CANCELLED = "cancelled"
-FAILURE_OTHER = "other"
 
 DEFAULT_TIMEOUT_S = 2.0
 # Шифрованный запрос — это ещё соединение и рукопожатие TLS.
 ENCRYPTED_TIMEOUT_S = 4.0
 _DOH_CONTENT_TYPE = "application/dns-message"
-# WSAENETUNREACH, WSAEHOSTUNREACH: Python не всегда переводит их в errno.
-_UNREACHABLE_WINERRORS = frozenset({10051, 10065})
-_UNREACHABLE_ERRNOS = frozenset({errno.ENETUNREACH, errno.EHOSTUNREACH})
 # Больше 512 байт по UDP сервер пришлёт, только если мы об этом попросили (EDNS0).
 _EDNS_UDP_SIZE = 1232
 _MAX_POINTER_HOPS = 32
@@ -297,33 +296,14 @@ class _Cancelled(Exception):
 
 
 def _failure_for(exc: BaseException) -> str:
-    """Вид сбоя по исключению. Порядок важен: частные случаи идут раньше общих."""
-    import ssl
-
+    """Вид сбоя по исключению: свои исключения разбора — здесь, остальное — общий словарь."""
     if isinstance(exc, _Cancelled):
         return FAILURE_CANCELLED
-    if isinstance(exc, (socket.timeout, TimeoutError)):
-        return FAILURE_TIMEOUT
-    if isinstance(exc, ssl.SSLCertVerificationError):
-        return FAILURE_CERT
-    if isinstance(exc, (ssl.SSLEOFError, ssl.SSLZeroReturnError)):
-        # Соединение закрыли посреди рукопожатия: это не «шифры не сошлись».
-        return FAILURE_CLOSED
-    if isinstance(exc, ssl.SSLError):
-        return FAILURE_TLS
-    if isinstance(exc, ConnectionRefusedError):
-        return FAILURE_REFUSED
-    if isinstance(exc, (ConnectionResetError, ConnectionAbortedError, BrokenPipeError)):
-        return FAILURE_RESET
     if isinstance(exc, _ConnectionClosed):
         return FAILURE_CLOSED
     if isinstance(exc, DnsWireError):
         return FAILURE_MALFORMED
-    if isinstance(exc, OSError) and (
-        exc.errno in _UNREACHABLE_ERRNOS or getattr(exc, "winerror", None) in _UNREACHABLE_WINERRORS
-    ):
-        return FAILURE_UNREACHABLE
-    return FAILURE_OTHER
+    return classify(exc)
 
 
 def _failed(transport: str, exc: BaseException, cancel: SocketCancel | None) -> DnsQueryResult:

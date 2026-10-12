@@ -112,8 +112,26 @@ class BaselineRuleTests(unittest.TestCase):
 
     def test_only_ambiguous_failures_need_network_check(self) -> None:
         self.assertFalse(rules.attempt_needs_network_check([self.BLOCKED]))
-        self.assertTrue(rules.attempt_needs_network_check([ProbeOutcome(rules.PROBE_BLOCKED, "нет ответа (таймаут)")]))
+        self.assertTrue(rules.attempt_needs_network_check([ProbeOutcome(rules.PROBE_BLOCKED, "нет ответа (таймаут)", failure="timeout")]))
         self.assertTrue(rules.attempt_needs_network_check([self.GONE]))
+
+    def test_network_check_follows_the_failure_kind_not_the_wording(self) -> None:
+        # Правило не ищет слово «таймаут» в тексте: формулировку можно менять, вид сбоя — нет.
+        self.assertFalse(rules.attempt_needs_network_check([ProbeOutcome(rules.PROBE_BLOCKED, "нет ответа (таймаут)", failure="reset")]))
+        self.assertTrue(rules.attempt_needs_network_check([ProbeOutcome(rules.PROBE_BLOCKED, "сервер замолчал", failure="timeout")]))
+
+    def test_https_result_carries_the_failure_kind(self) -> None:
+        timeout = rules.judge_https(tls_probe.ProbeResult(ip="1.1.1.1", kind=tls_probe.KIND_TIMEOUT, stage=tls_probe.STAGE_TLS))
+        no_status = rules.judge_https(tls_probe.ProbeResult(ip="1.1.1.1", kind=tls_probe.KIND_OK))
+        silent_connect = rules.judge_https(
+            tls_probe.ProbeResult(ip="1.1.1.1", kind=tls_probe.KIND_CONNECT, connect_fail=tls_probe.CONNECT_TIMEOUT)
+        )
+        reset = rules.judge_https(tls_probe.ProbeResult(ip="1.1.1.1", kind=tls_probe.KIND_RESET))
+
+        self.assertEqual((timeout.failure, no_status.failure, silent_connect.failure), ("timeout", "closed", "timeout"))
+        self.assertTrue(rules.attempt_needs_network_check([timeout]))
+        self.assertTrue(rules.attempt_needs_network_check([no_status]))
+        self.assertFalse(rules.attempt_needs_network_check([reset]))
 
     def test_final_verdict(self) -> None:
         self.assertEqual(rules.final_verdict([True, True, True]), rules.VERDICT_WORKING)
@@ -126,7 +144,7 @@ class UdpRuleTests(unittest.TestCase):
     primary = UdpProbeSpec("Цель", "stun", "stun.example", 3478, "9.9.9.9", primary=True)
     canary = UdpProbeSpec("Rust", "source_a2s", "205.0.0.1", 28015, "205.0.0.1")
     OK = ProbeOutcome(rules.PROBE_OK)
-    SILENT = ProbeOutcome(rules.PROBE_BLOCKED, "нет ответа (таймаут)")
+    SILENT = ProbeOutcome(rules.PROBE_BLOCKED, "нет ответа (таймаут)", failure="timeout")
 
     def test_baseline_keeps_only_silent_probes(self) -> None:
         state, chosen, _reason = rules.decide_udp_baseline([(self.primary, self.OK), (self.canary, self.SILENT)])
