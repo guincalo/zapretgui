@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dns.commands import (
     apply_dns,
+    check_dns_answering,
     consume_warmed_state,
     delete_custom_server,
     duplicate_custom_server,
@@ -28,6 +29,7 @@ __all__ = [
     "DnsCommandResult",
     "DnsState",
     "apply_dns",
+    "check_dns_answering",
     "consume_warmed_state",
     "delete_custom_server",
     "duplicate_custom_server",

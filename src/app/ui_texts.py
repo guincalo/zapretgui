@@ -2133,6 +2133,22 @@ TEXTS: dict[str, dict[str, str]] = {
         "ru": "DNS поставлен, как вы выбрали. Если сайты перестанут открываться, выберите другой сервер. Что отвечает на вашей линии, покажет BlockCheck → «DNS-серверы».",
         "en": "The DNS is set as you chose. If sites stop opening, pick another server. BlockCheck → “DNS servers” shows what answers on your line.",
     },
+    "page.network.now.answering": {
+        "ru": "Отвечает: {who}",
+        "en": "Answering: {who}",
+    },
+    "page.network.now.answering.foreign": {
+        "ru": " — не выбранный сервер",
+        "en": " — not the chosen server",
+    },
+    "page.network.now.intercepted": {
+        "ru": "Вы выбрали {name}, но отвечает не он, а {owner}: провайдер или роутер перехватывает обычные DNS-запросы. Выберите сервер из группы «Шифрованные» — его ответы не подменить.",
+        "en": "You chose {name}, but {owner} answers instead: your provider or router intercepts plain DNS queries. Pick a server from the “Encrypted” group — its answers cannot be replaced.",
+    },
+    "page.network.now.intercepted.unknown": {
+        "ru": "Вы выбрали {name}, но отвечает не он, а чужая сеть: провайдер или роутер перехватывает обычные DNS-запросы. Выберите сервер из группы «Шифрованные» — его ответы не подменить.",
+        "en": "You chose {name}, but another network answers instead: your provider or router intercepts plain DNS queries. Pick a server from the “Encrypted” group — its answers cannot be replaced.",
+    },
     "page.network.doh_closed.title": {
         "ru": "DNS поставлен без шифрования",
         "en": "DNS set without encryption",

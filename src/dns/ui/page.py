@@ -24,6 +24,7 @@
 from __future__ import annotations
 
 import re
+import time
 from textwrap import fill
 
 from urllib.parse import urlsplit
@@ -62,6 +63,8 @@ FILTER_ALL = "all"
 RECOMMENDED_PROVIDER = ("Безопасные", "Quad9")
 # Группа, которую экскурсия открывает как пример обхода гео-ограничений.
 ONBOARDING_AI_GROUP = "Для ИИ"
+# Сколько помнить, кто отвечает на DNS: чтобы не спрашивать сеть при каждом входе на страницу.
+ANSWERING_CACHE_S = 600.0
 # Свой сервер проекта: его значок и цвет берёт рекламная плитка рядом с «Автоматически».
 PROMO_PROVIDER = ("Для ИИ", "Zapret DNS")
 # Значки сервисов на рекламной плитке: то, что сервер открывает (имя значка, цвет).
@@ -157,6 +160,9 @@ class NetworkPage(BasePage):
         self._flushing = False
         self._latency: dict[str, float | None] = {}
         self._intercepted = False
+        # Кто на самом деле отвечает: (адрес, режим шифрованного DNS) → (когда узнали, dns.answering.Answering).
+        self._answering: dict[tuple[str, str], tuple[float, object]] = {}
+        self._answering_pending: tuple[str, str] | None = None
 
         self._load_lane = LatestWorkerLane(
             name="dns_page_load",
@@ -188,6 +194,15 @@ class NetworkPage(BasePage):
             ),
             on_result=lambda _payload, report: self._on_latency_done(report),
             on_error=lambda _payload, _error: self._on_latency_done(None),
+            log_fn=log,
+        )
+        self._answering_lane = LatestWorkerLane(
+            name="dns_answering",
+            create_worker=lambda request_id, payload: self._dns.create_dns_answering_worker(
+                request_id, address=payload[0], parent=self
+            ),
+            on_result=lambda payload, result: self._on_answering_done(payload, result),
+            on_error=lambda payload, _error: self._on_answering_done(payload, None),
             log_fn=log,
         )
         self._custom_lane = LatestWorkerLane(
@@ -391,6 +406,7 @@ class NetworkPage(BasePage):
             self._apply_lane,
             self._flush_lane,
             self._latency_lane,
+            self._answering_lane,
             self._custom_lane,
             self._site_lane,
             self._isp_lane,
@@ -468,6 +484,7 @@ class NetworkPage(BasePage):
         if [adapter.guid for adapter in self._adapters] != known or not known:
             self.now_panel.set_adapters([self._adapter_chip(adapter) for adapter in self._adapters])
         self._render()
+        self._request_answering()
 
     def _adapter_chip(self, adapter) -> AdapterChip:
         if adapter.internet:
@@ -547,7 +564,7 @@ class NetworkPage(BasePage):
             addresses = self._addresses_text(plan.ipv4, plan.ipv6)
             return NowState(
                 self._t("page.network.dns.auto", "Автоматически (DHCP)"),
-                f"{detail}   {addresses}" if addresses else detail,
+                self._with_answering(f"{detail}   {addresses}" if addresses else detail, plan),
                 "fa5s.sync",
             )
         if plan.kind == "mixed":
@@ -557,7 +574,7 @@ class NetworkPage(BasePage):
                 "fa5s.random",
                 "#d29922",
             )
-        detail = self._addresses_text(plan.ipv4, plan.ipv6)
+        detail = self._with_answering(self._addresses_text(plan.ipv4, plan.ipv6), plan)
         if plan.kind == "provider" and plan.provider:
             data = self._provider(plan.provider) or {}
             return NowState(plan.provider, detail, data.get("icon", ""), data.get("color", ""))
@@ -1044,7 +1061,7 @@ class NetworkPage(BasePage):
         self._measuring = True
         self._latency = {}
         self._intercepted = False
-        self.now_panel.set_notice("")
+        self._render_notice()
         self.latency_summary.hide()
         self._retranslate()
         self._render()
@@ -1055,17 +1072,104 @@ class NetworkPage(BasePage):
         self._latency = dict(getattr(report, "results", {}) or {})
         self._intercepted = bool(getattr(report, "intercepted", False))
         self._retranslate()
-        self.now_panel.set_notice(
-            self._t(
+        self._render_notice()
+        self._update_latency_summary()
+        self._render()
+
+    # ── кто отвечает на самом деле ──────────────────────────
+
+    def _answering_key(self, plan) -> tuple[str, str] | None:
+        """Что проверять: первый адрес на адаптерах и режим шифрованного DNS. None — проверять нечего."""
+        if plan.kind not in ("auto", "provider", "custom") or not plan.ipv4:
+            return None
+        return plan.ipv4[0], self._local_proxy_mode
+
+    def _current_answering(self, plan):
+        key = self._answering_key(plan)
+        found = self._answering.get(key) if key is not None else None
+        return found[1] if found is not None else None
+
+    def _request_answering(self) -> None:
+        """Узнаёт в фоне, кто отвечает; итог хранится 10 минут, во время экскурсии не спрашиваем."""
+        from ui.onboarding import is_onboarding_tour_active
+
+        if self._closed or not self._loaded or is_onboarding_tour_active(self.window()):
+            return
+        key = self._answering_key(self._current_plan())
+        if key is None or key == self._answering_pending:
+            return
+        found = self._answering.get(key)
+        if found is not None and time.monotonic() - found[0] < ANSWERING_CACHE_S:
+            return
+        self._answering_pending = key
+        self._answering_lane.request(key)
+
+    def _on_answering_done(self, key, result) -> None:
+        if self._answering_pending == key:
+            self._answering_pending = None
+        if result is None or self._closed:
+            return
+        self._answering[key] = (time.monotonic(), result)
+        self._render()
+        self._render_notice()
+
+    def _with_answering(self, detail: str, plan) -> str:
+        """Вторая строка под адресами: «Отвечает: Cloudflare (AS13335)». Не узнали — строки нет."""
+        answering = self._current_answering(plan)
+        owner = str(getattr(answering, "owner", "") or "")
+        asn = str(getattr(answering, "asn", "") or "")
+        if not owner and not asn:
+            return detail
+        who = f"{owner} (AS{asn})" if owner and asn else (owner or f"AS{asn}")
+        line = self._t("page.network.now.answering", "Отвечает: {who}", who=who)
+        if self._interception_shown(plan, answering):
+            line += self._t("page.network.now.answering.foreign", " — не выбранный сервер")
+        return f"{detail}\n{line}" if detail else line
+
+    def _interception_shown(self, plan, answering) -> bool:
+        """Перехват называется, только когда выбран конкретный сервер обычным путём.
+
+        Канарейка идёт по обычному порту 53: шифрованный режим она не касается, а при
+        «Автоматически» сервер и так провайдерский.
+        """
+        return (
+            bool(getattr(answering, "intercepted", False))
+            and plan.kind in ("provider", "custom")
+            and not self._local_proxy_mode
+        )
+
+    def _render_notice(self) -> None:
+        """Подпись-предупреждение под панелью: одна на два источника, чтобы они не стирали друг друга."""
+        plan = self._current_plan() if self._loaded else dns_page_plans.CurrentDnsPlan(kind="none")
+        answering = self._current_answering(plan)
+        if self._interception_shown(plan, answering):
+            name = plan.provider or self._t("page.network.now.custom.title", "Свой DNS")
+            owner = str(getattr(answering, "owner", "") or "")
+            text = (
+                self._t(
+                    "page.network.now.intercepted",
+                    "Вы выбрали {name}, но отвечает не он, а {owner}: провайдер или роутер перехватывает обычные "
+                    "DNS-запросы. Выберите сервер из группы «Шифрованные» — его ответы не подменить.",
+                    name=name,
+                    owner=owner,
+                )
+                if owner
+                else self._t(
+                    "page.network.now.intercepted.unknown",
+                    "Вы выбрали {name}, но отвечает не он, а чужая сеть: провайдер или роутер перехватывает "
+                    "обычные DNS-запросы. Выберите сервер из группы «Шифрованные» — его ответы не подменить.",
+                    name=name,
+                )
+            )
+        elif self._intercepted:
+            text = self._t(
                 "page.network.latency.intercepted",
                 "Похоже, DNS-запросы перехватываются по пути (провайдером или роутером): ответил даже адрес, "
                 "где DNS-сервера нет. Цифры показывают перехватчик, а не выбранные серверы.",
             )
-            if self._intercepted
-            else ""
-        )
-        self._update_latency_summary()
-        self._render()
+        else:
+            text = ""
+        self.now_panel.set_notice(text)
 
     def _update_latency_summary(self) -> None:
         best_name, best_ms = "", None

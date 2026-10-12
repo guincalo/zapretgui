@@ -53,6 +53,7 @@ def _feature(state=STATE):
         create_dns_apply_worker=Mock(),
         create_dns_flush_cache_worker=Mock(),
         create_dns_latency_worker=Mock(),
+        create_dns_answering_worker=Mock(),
         create_isp_dns_warning_worker=Mock(),
         create_custom_server_worker=Mock(),
     )
@@ -346,6 +347,45 @@ class DnsPageTests(unittest.TestCase):
         done = page_plans.build_provider_dns_apply_result_plan(name="Google DNS", adapter_count=1, success_count=1, ipv6=[])
         page._on_apply_done(payload, {"plan": done, "state": replace(STATE, line_check=line)})
         self.info_bar.warning.assert_not_called()
+
+    def test_panel_says_who_really_answers_and_warns_about_interception(self) -> None:
+        from dns.answering import Answering
+
+        page = self._page(state=replace(STATE, adapters=(ETHERNET,)))
+        key = page._answering_lane.request.call_args.args[0]
+        self.assertEqual(key, ("1.1.1.1", ""))
+
+        page._on_answering_done(key, Answering(owner="Cloudflare", asn="13335"))
+        self.assertIn("Отвечает: Cloudflare (AS13335)", page.now_panel.detail_label.text())
+        self.assertEqual(page.now_panel.notice_label.text(), "")
+
+        page._on_answering_done(key, Answering(owner="Rostelecom", asn="12389", intercepted=True))
+        self.assertIn("Rostelecom (AS12389) — не выбранный сервер", page.now_panel.detail_label.text())
+        self.assertIn("Вы выбрали Cloudflare, но отвечает не он, а Rostelecom", page.now_panel.notice_label.text())
+
+        # Замер скорости не стирает предупреждение, найденное этой проверкой.
+        page._measure_latency()
+        self.assertIn("отвечает не он", page.now_panel.notice_label.text())
+
+        # Итог помнится: повторный вход не спрашивает сеть заново.
+        page._answering_lane.request.reset_mock()
+        page._request_answering()
+        page._answering_lane.request.assert_not_called()
+
+    def test_interception_is_not_blamed_on_automatic_or_encrypted_dns(self) -> None:
+        from dns.answering import Answering
+
+        for state in (
+            replace(STATE, adapters=(WIFI_ADAPTER,)),
+            replace(STATE, adapters=(ETHERNET,), local_proxy_mode="anonymized"),
+        ):
+            with self.subTest(state=state.adapters[0].name, proxy=state.local_proxy_mode):
+                page = self._page(state=state)
+                key = page._answering_lane.request.call_args.args[0]
+                page._on_answering_done(key, Answering(owner="Rostelecom", asn="12389", intercepted=True))
+                self.assertIn("Отвечает: Rostelecom (AS12389)", page.now_panel.detail_label.text())
+                self.assertNotIn("не выбранный сервер", page.now_panel.detail_label.text())
+                self.assertEqual(page.now_panel.notice_label.text(), "")
 
     def test_tiles_carry_status_dnssec_and_group_notes(self) -> None:
         page = self._page()

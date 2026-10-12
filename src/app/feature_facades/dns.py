@@ -14,6 +14,7 @@ class DnsFeature:
     create_dns_check_save_worker: Callable
     create_page_load_worker: Callable
     create_dns_latency_worker: Callable
+    create_dns_answering_worker: Callable
     create_dns_flush_cache_worker: Callable
     create_isp_dns_warning_worker: Callable
     create_dns_apply_worker: Callable
@@ -49,6 +50,7 @@ def build_dns_feature() -> DnsFeature:
     mark_isp_dns_warning_shown = lambda *args, **kwargs: _public().mark_isp_dns_warning_shown(*args, **kwargs)
     flush_dns_cache = lambda *args, **kwargs: _public().flush_dns_cache(*args, **kwargs)
     measure_dns_latency = lambda *args, **kwargs: _public().measure_dns_latency(*args, **kwargs)
+    check_dns_answering = lambda *args, **kwargs: _public().check_dns_answering(*args, **kwargs)
     run_dns_poisoning_check = lambda *args, **kwargs: _commands().run_dns_poisoning_check(*args, **kwargs)
     save_dns_check_results = lambda *args, **kwargs: _commands().save_dns_check_results(*args, **kwargs)
     run_domain_lookup = lambda *args, **kwargs: _commands().run_domain_lookup(*args, **kwargs)
@@ -123,6 +125,11 @@ def build_dns_feature() -> DnsFeature:
 
         return DnsPageLoadWorker(request_id, load_state, parent)
 
+    def _create_dns_answering_worker(request_id: int, *, address: str, parent=None):
+        from dns.page_workers import DnsAnsweringWorker
+
+        return DnsAnsweringWorker(request_id, address=address, check_dns_answering=check_dns_answering, parent=parent)
+
     def _create_dns_latency_worker(request_id: int, *, servers, parent=None):
         from dns.page_workers import DnsLatencyWorker
 
@@ -177,6 +184,7 @@ def build_dns_feature() -> DnsFeature:
         create_dns_check_save_worker=_create_dns_check_save_worker,
         create_page_load_worker=_create_page_load_worker,
         create_dns_latency_worker=_create_dns_latency_worker,
+        create_dns_answering_worker=_create_dns_answering_worker,
         create_dns_flush_cache_worker=_create_dns_flush_cache_worker,
         create_isp_dns_warning_worker=_create_isp_dns_warning_worker,
         create_dns_apply_worker=_create_dns_apply_worker,

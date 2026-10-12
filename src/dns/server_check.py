@@ -53,7 +53,7 @@ from urllib.parse import urlsplit
 
 from utils.address_kinds import is_stub_address
 from utils.dns_interception import canary_answered
-from utils.dns_reference import REFERENCE_RESOLVERS
+from utils.dns_reference import reference_ask
 from utils.dns_wire import (
     FAILURE_CANCELLED,
     FAILURE_CLOSED,
@@ -533,20 +533,6 @@ def probe_address(target: CheckTarget, cancel: SocketCancel, should_stop: Should
         )
 
 
-def _reference_ask(cancel: SocketCancel) -> Callable[[str, int], DnsQueryResult | None]:
-    """Служебный вопрос шифрованным путём: о владельце сети не должен отвечать перехватчик."""
-
-    def ask(name: str, rtype: int) -> DnsQueryResult | None:
-        last = None
-        for resolver in REFERENCE_RESOLVERS:
-            last = query_doh(resolver.address, name, rtype, timeout_s=ENCRYPTED_TIMEOUT_S, cancel=cancel)
-            if last.answered or last.failure == FAILURE_CANCELLED:
-                return last
-        return last
-
-    return ask
-
-
 def _lookup_owners_stoppably(rows: Iterable[Observation], stopped: Callable[[], bool]) -> tuple[tuple[str, IpOwner], ...]:
     """Владельцы сетей, но с «Стопом» и своим сроком: эталоны бывают закрыты и молчат подолгу."""
     cancel = SocketCancel()
@@ -572,7 +558,7 @@ def _lookup_owners(rows: Iterable[Observation], cancel: SocketCancel) -> tuple[t
     )
     if not addresses:
         return ()
-    ask = _reference_ask(cancel)
+    ask = reference_ask(cancel, timeout_s=ENCRYPTED_TIMEOUT_S)
     with ThreadPoolExecutor(max_workers=min(24, len(addresses)), thread_name_prefix="dns-owner") as pool:
         found = list(pool.map(lambda ip: lookup_ip_owner(ip, ask), addresses))
     return tuple((ip, owner) for ip, owner in zip(addresses, found) if owner is not None)

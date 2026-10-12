@@ -144,6 +144,12 @@ def flush_dns_cache() -> DnsCommandResult:
     return _flush_dns_cache()
 
 
+def check_dns_answering(address: str):
+    from dns.answering import check_answering
+
+    return check_answering(address)
+
+
 def measure_dns_latency(servers: list[str]):
     from dns.latency import measure_dns_latency as _measure_dns_latency
 

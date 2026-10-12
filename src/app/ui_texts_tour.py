@@ -203,14 +203,18 @@ TEXTS_TOUR: dict[str, dict[str, str]] = {
         "ru": (
             "DNS — служба, которая по имени сайта находит его адрес. Провайдер может подменять её ответы, "
             "и тогда сайт не открывается, даже если обход работает.\n\n"
-            "Карточка показывает, какой DNS стоит сейчас. В строке «Применять к» отмечаются сетевые "
+            "Карточка показывает, какой DNS стоит сейчас, а под адресами — кто отвечает на самом деле: "
+            "программа проверяет это сама и предупредит, если вместо выбранного сервера отвечает сеть "
+            "провайдера. В строке «Применять к» отмечаются сетевые "
             "адаптеры — обычно это ваш Wi‑Fi или кабель. «Замерить скорость» сравнит серверы по времени "
             "ответа, «Сбросить кэш DNS» заставит Windows забыть старые адреса."
         ),
         "en": (
             "DNS is the service that finds a site's address by its name. Your provider may spoof its "
             "answers, and then a site does not open even when the bypass works.\n\n"
-            "The card shows which DNS is set now. The Apply to row marks the network adapters — usually "
+            "The card shows which DNS is set now and, under the addresses, who really answers: the app "
+            "checks it by itself and warns you if your provider's network answers instead of the chosen "
+            "server. The Apply to row marks the network adapters — usually "
             "your Wi‑Fi or cable. Measure speed compares servers by response time, Flush DNS cache makes "
             "Windows forget old addresses."
         ),

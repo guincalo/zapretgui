@@ -58,6 +58,28 @@ class DnsLatencyWorker(QThread):
         self.completed.emit(self._request_id, report)
 
 
+class DnsAnsweringWorker(QThread):
+    """Кто на самом деле отвечает на DNS-запросы: completed(request_id, dns.answering.Answering)."""
+
+    completed = pyqtSignal(int, object)
+    failed = pyqtSignal(int, str)
+
+    def __init__(self, request_id: int, *, address: str, check_dns_answering: Callable[[str], Any], parent=None):
+        super().__init__(parent)
+        self._request_id = int(request_id)
+        self._address = str(address or "")
+        self._check_dns_answering = check_dns_answering
+
+    def run(self) -> None:
+        try:
+            result = self._check_dns_answering(self._address)
+        except Exception as exc:
+            log(f"DnsAnsweringWorker: не удалось узнать, кто отвечает на DNS: {exc}", "DEBUG")
+            self.failed.emit(self._request_id, str(exc))
+            return
+        self.completed.emit(self._request_id, result)
+
+
 class DnsFlushCacheWorker(QThread):
     completed = pyqtSignal(int, object)
     failed = pyqtSignal(int, str)
