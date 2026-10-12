@@ -207,13 +207,22 @@ class ArchitectureCleanupContractTests(unittest.TestCase):
         )
 
     def test_source_does_not_use_old_display_theme_names(self) -> None:
-        patterns = ("Светлая синяя", "Темная синяя", "Светлая", "Темная")
+        # Ловим старые названия тем как значения в коде: строку, равную
+        # названию целиком ("Темная", "Светлая синяя"). Обычные слова в
+        # комментариях и описаниях рисунка ("Светлая полоса на макушке")
+        # к темам не относятся и проверку не ломают.
+        patterns = {"Светлая синяя", "Темная синяя", "Светлая", "Темная"}
         offenders: list[str] = []
         for path in SRC_ROOT.rglob("*.py"):
-            text = path.read_text(encoding="utf-8", errors="replace")
-            for line_number, line in enumerate(text.splitlines(), 1):
-                if any(pattern in line for pattern in patterns):
-                    offenders.append(f"{path.relative_to(REPO_ROOT)}:{line_number}: {line.strip()}")
+            text = path.read_text(encoding="utf-8-sig", errors="replace")
+            tree = ast.parse(text, filename=str(path))
+            for node in ast.walk(tree):
+                if (
+                    isinstance(node, ast.Constant)
+                    and isinstance(node.value, str)
+                    and node.value.strip() in patterns
+                ):
+                    offenders.append(f"{path.relative_to(REPO_ROOT)}:{node.lineno}: {node.value.strip()}")
 
         self.assertEqual(
             offenders,

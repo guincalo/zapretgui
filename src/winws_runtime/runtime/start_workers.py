@@ -14,7 +14,7 @@ from winws_runtime.runtime.preset_launch_service import (
     PresetLaunchService,
     ensure_required_files_fast,
 )
-from ui.performance_metrics import log_ui_timing_since
+from app.performance_metrics import log_ui_timing_since
 
 
 @dataclass(frozen=True)

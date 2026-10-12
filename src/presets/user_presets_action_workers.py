@@ -5,7 +5,7 @@ import time
 from PyQt6.QtCore import QThread, pyqtSignal
 
 from log.log import log
-from ui.performance_metrics import log_ui_timing_since
+from app.performance_metrics import log_ui_timing_since
 
 
 class UserPresetActivateWorker(QThread):

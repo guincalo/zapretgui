@@ -7,7 +7,7 @@ from PyQt6.QtCore import QObject, pyqtSignal
 from log.log import log
 from settings.mode import is_orchestra_launch_method, is_preset_launch_method
 from winws_runtime.runtime.sync_shutdown import shutdown_runtime_sync
-from ui.performance_metrics import log_ui_timing_since
+from app.performance_metrics import log_ui_timing_since
 
 
 class PresetLaunchStopWorker(QObject):
