@@ -310,7 +310,15 @@ def collect_problems(
             advice = tuple(item for item in verdict.advice if item != ADVICE_DNS)
             # Стратегия помогает только от DPI и обрыва. При чужом сертификате,
             # недоступном адресе или без адреса кнопка подбора увела бы не туда.
-            bypassable = next((probe for probe in broken if probe.reach_state in BYPASSABLE), None)
+            # Сайт, который не открылся и из-за рубежа, не блокируют — он лежит сам: подбор не поможет.
+            bypassable = next(
+                (
+                    probe
+                    for probe in broken
+                    if probe.reach_state in BYPASSABLE and probe.kind != block_kind.KIND_DOWN
+                ),
+                None,
+            )
             action = ""
             if bypassable is not None:
                 action = _zapret_action(zapret_running)

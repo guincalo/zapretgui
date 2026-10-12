@@ -45,6 +45,7 @@ from diagnostics import (
     block_cause,
     cert_owner,
     net_access,
+    outside_check,
     protocol_probe,
     quic_probe,
     registry,
@@ -59,6 +60,7 @@ from diagnostics import report_text
 from diagnostics.levels import level_rank
 from diagnostics.report_upgrade import REPORT_VERSION
 from diagnostics.limits import (
+    OUTSIDE_NEEDS_S,
     FREEZE_MAX_BYTES,
     DISCOVERY_READ_BUDGET_S,
     DISCOVERY_TIMEOUT,
@@ -443,6 +445,7 @@ def _run_probes(
             done_probes.append((key, target, None, str(exc)))
     if full:
         done_probes = _recheck_failed(run, services, done_probes)
+        _ask_outside(run, services, done_probes)
 
     collected: dict[str, list[_Probe]] = {key: [] for key in services}
     current_service = ""
@@ -459,6 +462,31 @@ def _run_probes(
             emit(line)
     emit("")
     return collected
+
+
+def _ask_outside(run: _Run, services: dict[str, Service], done_probes: list) -> None:
+    """Сайты без дороги и после перепроверки: живы ли они снаружи (сервер Zapret DNS).
+
+    Только встроенные сайты: свои домены пользователя (ключ ``user:``) на сервер
+    не уходят. Контрольные не спрашиваются: по ним судят о сети целиком.
+    """
+    failed = [
+        probe
+        for key, _target, probe, _error in done_probes
+        if probe is not None
+        and probe.reach_state in (ReachState.IP_BLOCK, ReachState.DPI)
+        and not key.startswith("user:")
+        and not services[key].control
+    ]
+    if not failed or run.dns_cancelled() or run.deadline - time.monotonic() < OUTSIDE_NEEDS_S:
+        return
+    answers = outside_check.ask(
+        [probe.host for probe in failed],
+        server_ips=lambda: net_access.doh_lookup(run, outside_check.SERVER_HOST)[1],
+        cancel=run.probe_cancel,
+    )
+    for probe in failed:
+        probe.outside = answers.get(probe.host, "")
 
 
 def _recheck_failed(run: _Run, services: dict[str, Service], done_probes: list) -> list:

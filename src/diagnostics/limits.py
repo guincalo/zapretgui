@@ -19,6 +19,7 @@ __all__ = [
     "HEAD_START_S",
     "HTTPS_TIMEOUT",
     "NET_AT_ONCE",
+    "OUTSIDE_NEEDS_S",
     "NET_AT_ONCE_WEAK",
     "REACH_ADDRESSES",
     "READ_TIMEOUT",
@@ -110,6 +111,8 @@ NET_AT_ONCE_WEAK = 24
 NET_AT_ONCE = 40
 # Запас небольшой: повтор, который не успел, просто оставляет первый результат.
 RECHECK_NEEDS_S = 12.0
+# Сколько должно оставаться до общего срока, чтобы спросить сервер за рубежом («жив ли сайт снаружи»).
+OUTSIDE_NEEDS_S = 20.0
 FREEZE_READ_TIMEOUT = 4.0
 
 # Откуда взят адрес, по которому проверяли сайт.

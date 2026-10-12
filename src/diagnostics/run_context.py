@@ -19,6 +19,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 
 from diagnostics import block_cause, block_kind, protocol_probe, quic_probe, volume_probe
+from diagnostics.outside_check import OUTSIDE_DOWN
 from diagnostics.limits import NET_AT_ONCE, NET_AT_ONCE_WEAK, REFERENCE_AT_ONCE, RUN_DEADLINE
 from diagnostics.services import Target
 from diagnostics.tls_probe import KIND_CONNECT, ProbeResult, client_context
@@ -93,6 +94,8 @@ class Probe:
     # Чем кончилась повторная проверка поодиночке: ``RECHECK_OPENED`` — сайт открылся
     # (первый сбой дала нагрузка самой проверки), ``RECHECK_SAME`` — не открылся снова.
     rechecked: str = ""
+    # Что ответил сервер за рубежом («up» / «down», ``outside_check``). Пусто — не спрашивали.
+    outside: str = ""
     # Сколько секунд заняла проверка этого адреса: по ней видно, на каких сайтах уходит время.
     seconds: float = 0.0
     # То же по частям проверки (см. ``STAGE_TITLES``): адрес, соединение, причина, объём, дороги.
@@ -147,11 +150,15 @@ class Probe:
     @property
     def kind(self) -> str:
         """Вид блокировки: по адресу, по имени сайта, обрыв после 16 КБ… Пусто — сайт открывается."""
-        return block_kind.site_kind(
+        kind = block_kind.site_kind(
             self.reach_state.value,
             self.cause.code if self.cause else "",
             address_confirmed=self.address_confirmed,
         )
+        # Не открылся и из-за рубежа — не блокировка: сайт не работает сам.
+        if kind and self.outside == OUTSIDE_DOWN and self.reach_state in (ReachState.IP_BLOCK, ReachState.DPI):
+            return block_kind.KIND_DOWN
+        return kind
 
 
 class Steps:

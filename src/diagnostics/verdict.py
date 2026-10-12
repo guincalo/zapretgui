@@ -26,6 +26,7 @@ from enum import Enum
 from diagnostics.block_kind import (
     KIND_CUT,
     KIND_DNS,
+    KIND_DOWN,
     KIND_FINGERPRINT,
     KIND_IP,
     KIND_NO_CONNECT,
@@ -400,6 +401,8 @@ def _advice_for(
     cert_advice = (
         _ADVICE_HOSTS if cert_cause == DnsState.LOCAL else _ADVICE_DNS if cert_cause == DnsState.SPOOFED else _ADVICE_CERT
     )
+    if kind == KIND_DOWN:
+        return (kind_info(KIND_DOWN).cure,)
     if states and states[0] == ReachState.CERT:
         return (cert_advice,)
     if ReachState.CERT in states:
@@ -492,13 +495,13 @@ def summarize_service(
         # При обрыве сайт «открывается» на первые килобайты: честнее сказать, что он не догружается.
         opens = "грузится не до конца" if kind == KIND_CUT else "не открывается"
         headline = f"{label} {opens}: {_reason_for(broken, cause)}"
-        if main.reach in (ReachState.DPI, ReachState.FREEZE) and zapret_running:
+        if main.reach in (ReachState.DPI, ReachState.FREEZE) and zapret_running and kind != KIND_DOWN:
             headline += " — Zapret запущен, но эту блокировку не обходит"
         advice = _advice_for(states, zapret_running=zapret_running, cert_cause=cause, kind=kind)
         if spoofed and _ADVICE_DNS not in advice:
             advice = advice + (_ADVICE_DNS,)
-        # «Причина не ясна» — не установленная блокировка: это замечание, а не тревога.
-        level = Level.WARN if kind == KIND_NO_CONNECT else Level.FAIL
+        # «Причина не ясна» и «не работает сам» — не установленная блокировка: замечание, а не тревога.
+        level = Level.WARN if kind in (KIND_NO_CONNECT, KIND_DOWN) else Level.FAIL
         return ServiceVerdict(level, headline, advice, dns_note, kind)
 
     if main.reach == ReachState.NO_ADDRESS:

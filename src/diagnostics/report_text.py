@@ -12,7 +12,7 @@
 
 from __future__ import annotations
 
-from diagnostics import block_kind, protocol_probe, quic_probe, telegram_check, volume_probe
+from diagnostics import block_kind, outside_check, protocol_probe, quic_probe, telegram_check, volume_probe
 from diagnostics.limits import DNS_ATTEMPTS, HTTPS_TIMEOUT, SOURCE_HOSTS, SOURCE_REFERENCE
 from diagnostics.run_context import RECHECK_OPENED, RECHECK_SAME, Probe
 from diagnostics.services import (
@@ -153,6 +153,12 @@ def sentence(text: str) -> str:
     return text[:1].upper() + text[1:]
 
 
+_OUTSIDE_TEXT = {
+    outside_check.OUTSIDE_UP: "открывается — значит, закрыт он именно на вашей линии",
+    outside_check.OUTSIDE_DOWN: "тоже не открывается — сайт не работает сам",
+}
+
+
 def probe_lines(probe: Probe, *, full: bool) -> list[str]:
     title = f"{probe.host} — {probe.target.purpose}"
     if not full:
@@ -180,6 +186,8 @@ def probe_lines(probe: Probe, *, full: bool) -> list[str]:
         lines.append(f"   {QUIC_ICON[probe.quic.code]} QUIC (UDP 443): {probe.quic.text}")
     if probe.discovery_note:
         lines.append(f"   ℹ️ {probe.discovery_note}")
+    if probe.outside:
+        lines.append(f"   🌍 С сервера Zapret DNS в Нидерландах: {_OUTSIDE_TEXT[probe.outside]}")
     lines.extend(dns_lines(probe, "   "))
     return lines
 
@@ -229,6 +237,8 @@ def target_report(probe: Probe) -> dict:
         "hosts_stale": probe.hosts_stale,
         # Повторная проверка поодиночке: "opened" — открылся со второго раза, "same" — сбой повторился.
         "rechecked": probe.rechecked,
+        # Что ответил сервер за рубежом: "up" — сайт жив, "down" — лежит и там. Пусто — не спрашивали.
+        "outside": probe.outside,
         # Сайт открылся, но через раз или не по каждому адресу: что именно шатается. Пусто — стабилен.
         "unstable": probe.unstable,
         # Чужой сертификат: кто ответил вместо сайта и что с этим делать. None — сертификат в порядке.

@@ -210,6 +210,9 @@ class _Net:
         self.status = status
         self.https = https or (lambda host, ip: _ok(ip))
         self.calls: list[tuple[str, str]] = []
+        # Что ответил сервер за рубежом и о каких сайтах его спрашивали.
+        self.outside: dict[str, str] = {}
+        self.outside_asked: list[str] = []
         # Что «нашла» проверка подсетей; сколько раз её звали.
         self.subnets = None
         self.subnet_checks = 0
@@ -270,6 +273,10 @@ class _Net:
             return self.cause_facts(host, result)
         return engine.block_cause.CauseFacts(host=host, result=result)
 
+    def _outside(self, hosts, **_kwargs):
+        self.outside_asked.extend(hosts)
+        return {host: self.outside[host] for host in hosts if host in self.outside}
+
     def _subnets(self, _run, _emit):
         self.subnet_checks += 1
         return self.subnets
@@ -314,6 +321,8 @@ class _Net:
             patch.object(sections, "check_system", side_effect=lambda _run, _services, _zapret=None: self.system_items),
             # Подсети — десятки настоящих соединений: в сценариях движка их нет.
             patch.object(sections, "check_subnets", side_effect=self._subnets),
+            # «Жив ли сайт снаружи» — запрос к серверу проекта: в сценариях его нет.
+            patch.object(engine.outside_check, "ask", side_effect=self._outside),
             patch.object(net_access, "hosts_file_ipv4", side_effect=lambda _host: self.hosts),
             # Чужой сертификат читается отдельным соединением — в сценариях движка сети нет.
             patch.object(engine.cert_owner, "collect", side_effect=self._cert),
@@ -1412,6 +1421,27 @@ class EngineScenarioTests(unittest.TestCase):
         self.assertEqual(discord["level"], "ok")
         self.assertIn("IPv6", discord["targets"][0]["short"])
         self.assertIn(("discord.com", v6), net.calls)
+
+    def test_site_down_from_abroad_too_is_not_called_a_block(self) -> None:
+        """Сайт без дороги, который не открылся и с сервера за рубежом, — не блокировка."""
+        net = _Net(https=lambda host, ip: ProbeResult(ip=ip, kind=KIND_RESET) if host == "discord.com" else _ok(ip))
+        net.outside = {"discord.com": "down"}
+        result = net.run(engine.run_blockcheck, "main", emit=lambda _line: None)
+
+        discord = next(item for item in result["services"] if item["key"] == "discord")
+        self.assertEqual((discord["kind"], discord["level"]), ("down", "warn"))
+        self.assertIn("Zapret здесь не поможет", discord["advice"][0])
+        self.assertIn("discord.com", net.outside_asked)
+        # Кнопки «Подобрать стратегию» нет: стратегия лежащий сайт не поднимет.
+        problem = next(item for item in result["problems"] if "Discord" in item["text"])
+        self.assertNotIn(problem["action"], ("strategy", "start_zapret"))
+
+    def test_own_domains_and_control_sites_are_not_sent_abroad(self) -> None:
+        net = _Net(https=lambda host, ip: ProbeResult(ip=ip, kind=KIND_RESET))
+        net.run(engine.run_blockcheck, "all", user_domains=("my-own.example",), emit=lambda _line: None)
+
+        self.assertNotIn("my-own.example", net.outside_asked)
+        self.assertFalse({"google.com", "www.google.com", "cloudflare.com", "ya.ru", "vk.com"} & set(net.outside_asked))
 
     def test_ipv6_is_not_tried_when_ipv4_opens(self) -> None:
         net = _Net(reference_v6=("2606:4700::6810:1",))

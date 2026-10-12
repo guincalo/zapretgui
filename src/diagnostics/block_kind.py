@@ -28,6 +28,7 @@ __all__ = [
     "KIND_CUT",
     "KIND_UNSTABLE",
     "KIND_DNS",
+    "KIND_DOWN",
     "KIND_FINGERPRINT",
     "KIND_IP",
     "KIND_NETWORK",
@@ -59,6 +60,8 @@ KIND_UNCLEAR = "unclear"
 KIND_NO_CONNECT = "noconnect"
 # Обычная программа соединяется, а приветствие с составом браузера — нет.
 KIND_FINGERPRINT = "fingerprint"
+# Сайт не открылся и с нашего сервера за рубежом: он не работает сам, это не блокировка.
+KIND_DOWN = "down"
 # Дальше — не про отдельный сайт, а про сеть и компьютер целиком.
 KIND_DNS = "dns"
 KIND_QUIC = "quic"
@@ -152,6 +155,15 @@ KINDS: dict[str, KindInfo] = {
             "и попробуйте другой DNS.",
         ),
         KindInfo(
+            KIND_DOWN,
+            "Сайт не работает сам",
+            "не работает сам",
+            "сайт не открывается и из-за рубежа — похоже, он не работает сам",
+            "Наш сервер в Нидерландах тоже не смог открыть этот сайт. Значит, дело не в блокировке "
+            "провайдера: сайт выключен, сломан или закрыт для всех.",
+            "Zapret здесь не поможет: подождите, пока сайт заработает, и повторите проверку.",
+        ),
+        KindInfo(
             KIND_UNSTABLE,
             "Открываются через раз",
             "через раз",
@@ -228,6 +240,7 @@ KIND_ORDER: tuple[str, ...] = (
     KIND_CERT,
     KIND_UNCLEAR,
     KIND_NO_CONNECT,
+    KIND_DOWN,
     KIND_DNS,
     KIND_QUIC,
     KIND_VOICE,
