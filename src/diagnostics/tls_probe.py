@@ -173,6 +173,9 @@ def https_get(
     понять, что сервер ответил). ``read_timeout`` — сколько ждать следующих
     данных: оборванное на середине тело видно как ``body_cut``.
     """
+    # Контекст — до отсчёта срока: первая загрузка хранилища сертификатов Windows
+    # идёт под замком и съедала у первой волны запросов до полутора секунд из пяти.
+    context = client_context()
     started = time.perf_counter()
     deadline = started + max(0.2, float(timeout))
     token = cancel or SocketCancel()
@@ -217,7 +220,7 @@ def https_get(
         sock.connect((ip, int(port)))
 
         stage = STAGE_TLS
-        wrapped = client_context().wrap_socket(sock, server_hostname=host, do_handshake_on_connect=False)
+        wrapped = context.wrap_socket(sock, server_hostname=host, do_handshake_on_connect=False)
         token.track(wrapped)
         wrapped.settimeout(_remaining())
         wrapped.do_handshake()

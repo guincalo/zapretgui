@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from diagnostics import block_cause, block_kind, protocol_probe, quic_probe, volume_probe
 from diagnostics.limits import NET_AT_ONCE, NET_AT_ONCE_WEAK, REFERENCE_AT_ONCE, RUN_DEADLINE
 from diagnostics.services import Target
-from diagnostics.tls_probe import KIND_CONNECT, ProbeResult
+from diagnostics.tls_probe import KIND_CONNECT, ProbeResult, client_context
 from diagnostics.verdict import DnsJudgement, ReachState
 from utils.dns_reference import REFERENCE_RESOLVERS, ReferenceResolver
 from utils.dns_wire import FAILURE_CANCELLED, DnsQueryResult, failure_text
@@ -303,6 +303,8 @@ class Run:
         self.deadline_seconds = RUN_DEADLINE if deadline is None else float(deadline)
         self.deadline = time.monotonic() + self.deadline_seconds
         self.pool = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="diag")
+        # Хранилище сертификатов грузится в фоне, пока идут первые DNS-запросы.
+        self.pool.submit(client_context)
         self._lanes: list[Lane] = []
         # Шаг → отложенные задачи: (куда положить итог, функция, аргументы).
         self._staged: dict[str, list[tuple[Future, Callable, tuple, dict]]] = {}

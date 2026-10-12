@@ -99,3 +99,36 @@ class BurstResolveTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TlsDeadlineTests(unittest.TestCase):
+    def test_slow_certificate_store_does_not_eat_the_request_deadline(self) -> None:
+        """Первая загрузка хранилища сертификатов не должна съедать срок запроса."""
+        from diagnostics import tls_probe
+
+        real = tls_probe.client_context()
+
+        def slow_context():
+            time.sleep(0.6)
+            return real
+
+        # Сервер принимает соединение и молчит: рукопожатие TLS ждёт весь срок.
+        listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(1)
+        self.addCleanup(listener.close)
+        with patch.object(tls_probe, "client_context", side_effect=slow_context):
+            result = tls_probe.https_get("example.com", "127.0.0.1", timeout=0.2, port=listener.getsockname()[1])
+
+        self.assertEqual(result.stage, tls_probe.STAGE_TLS)
+        self.assertLess(result.elapsed_ms, 450)
+
+    def test_run_warms_the_certificate_store(self) -> None:
+        from diagnostics import run_context
+
+        with patch.object(run_context, "client_context") as warm:
+            run = Run(None, workers=2)
+            run.pool.shutdown(wait=True)
+            run.close()
+
+        warm.assert_called_once_with()
