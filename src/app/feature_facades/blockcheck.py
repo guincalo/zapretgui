@@ -62,6 +62,16 @@ class BlockcheckFeature:
             parent=parent,
         )
 
+    def create_past_report_worker(self, request_id: int, *, log_file: str, parent=None):
+        from blockcheck.workers import BlockcheckPastReportWorker
+
+        return BlockcheckPastReportWorker(
+            request_id,
+            log_file=log_file,
+            load_past_blockcheck_report=self.load_past_blockcheck_report,
+            parent=parent,
+        )
+
     def create_blockcheck_support_prepare_worker(self, request_id: int, **kwargs):
         from blockcheck.workers import BlockcheckSupportPrepareWorker
 

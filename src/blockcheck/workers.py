@@ -27,6 +27,28 @@ class BlockcheckInitialStateWorker(QThread):
         self.completed.emit(self._request_id, result)
 
 
+class BlockcheckPastReportWorker(QThread):
+    """Читает сохранённый отчёт прошлой проверки: completed(request_id, отчёт или None)."""
+
+    completed = pyqtSignal(int, object)
+    failed = pyqtSignal(int, str)
+
+    def __init__(self, request_id: int, *, log_file: str, load_past_blockcheck_report: Callable[[str], Any], parent=None):
+        super().__init__(parent)
+        self._request_id = int(request_id)
+        self._log_file = str(log_file or "")
+        self._load = load_past_blockcheck_report
+
+    def run(self) -> None:
+        try:
+            report = self._load(self._log_file)
+        except Exception as exc:
+            log(f"BlockcheckPastReportWorker: не удалось прочитать отчёт: {exc}", "WARNING")
+            self.failed.emit(self._request_id, str(exc))
+            return
+        self.completed.emit(self._request_id, report)
+
+
 class BlockcheckSupportPrepareWorker(QThread):
     completed = pyqtSignal(int, object)
     failed = pyqtSignal(int, str)

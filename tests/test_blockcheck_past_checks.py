@@ -94,6 +94,26 @@ class _Feature:
         self.asked.append(log_file)
         return self.report
 
+    def create_past_report_worker(self, request_id, *, log_file, parent=None):
+        from blockcheck.workers import BlockcheckPastReportWorker
+
+        return BlockcheckPastReportWorker(
+            request_id, log_file=log_file, load_past_blockcheck_report=self.load_past_blockcheck_report, parent=parent
+        )
+
+
+def _wait_for_past_check(page) -> None:
+    """Отчёт читается в фоновом потоке: ждём, пока прошлая проверка появится на экране."""
+    import time
+
+    deadline = time.monotonic() + 5.0
+    while time.monotonic() < deadline:
+        QApplication.processEvents()
+        view = getattr(page, "_past_check_view", None)
+        if view is not None and not view.isHidden():
+            return
+        time.sleep(0.01)
+
 
 class PastCheckOnScreenTests(unittest.TestCase):
     @classmethod
@@ -153,6 +173,7 @@ class PastCheckOnScreenTests(unittest.TestCase):
         page._show_history(RUNS)
 
         page._history_list.run_opened.emit({**RUNS[2], "log_file": "C:/logs/run.log"})
+        _wait_for_past_check(page)
         view = page._past_check_view
         self.assertFalse(view.isHidden())
         self.assertEqual(feature.asked, ["C:/logs/run.log"])
@@ -190,6 +211,7 @@ class PastCheckOnScreenTests(unittest.TestCase):
         self.assertFalse(page._tabs_pivot.isHidden())
 
         page._history_list.run_opened.emit({**RUNS[2], "log_file": "C:/logs/run.log"})
+        _wait_for_past_check(page)
         page._escape_shortcut.activated.emit()
         self.assertTrue(view.isHidden())
         self.assertFalse(page._tabs_pivot.isHidden())
@@ -247,6 +269,7 @@ class PastCheckOnScreenTests(unittest.TestCase):
     def test_without_the_saved_file_the_page_shows_the_history_record_and_says_so(self) -> None:
         page = self._page(_Feature(None))
         page._open_past_check(RUNS[0])
+        _wait_for_past_check(page)
 
         view = page._past_check_view
         self.assertFalse(view.note_label.isHidden())

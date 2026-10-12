@@ -45,6 +45,7 @@ from ui.accessibility import set_control_accessibility, set_state_text
 from ui.combo_accessibility import set_combo_items_accessibility
 from ui.segmented_accessibility import set_segmented_items_accessibility
 from ui.latest_value_worker_state import LatestValueWorkerState
+from ui.latest_worker_lane import LatestWorkerLane
 from ui.one_shot_worker_runtime import OneShotWorkerRuntime
 from ui.queued_worker_state import QueuedWorkerState
 from app.ui_texts import tr as tr_catalog
@@ -203,6 +204,16 @@ class BlockcheckPage(BasePage):
         self._support_prepare_state = LatestValueWorkerState(self._support_prepare_runtime, empty_value=None)
         self._user_domain_action_runtime = OneShotWorkerRuntime()
         self._user_domain_action_state = QueuedWorkerState(self._user_domain_action_runtime)
+        # Отчёт прошлой проверки читается с диска в фоне; открывается последняя нажатая строка.
+        self._past_report_lane = LatestWorkerLane(
+            name="blockcheck past report",
+            create_worker=lambda request_id, run: self._blockcheck.create_past_report_worker(
+                request_id, log_file=str(run.get("log_file") or ""), parent=self
+            ),
+            on_result=self._show_past_check,
+            on_error=lambda run, _error: self._show_past_check(run, None),
+            log_fn=log,
+        )
         self._build_ui()
         self._request_page_initial_state_load()
         try:
@@ -775,9 +786,9 @@ class BlockcheckPage(BasePage):
         return str(self._scope_combo.currentData() or SCOPE_MAIN)
 
     def _on_start(self):
-        if self._run_runtime.is_running():
+        # Закрытую страницу не запускаем: поздние сигналы прошлого запуска уже никто не ждёт.
+        if self._run_runtime.is_running() or self._cleanup_in_progress:
             return
-        self._cleanup_in_progress = False
         self._last_report = None
         self._report_lines = []
         self._summary_panel.set_pending()
@@ -1129,10 +1140,17 @@ class BlockcheckPage(BasePage):
         return self._past_check_view
 
     def _open_past_check(self, run: dict) -> None:
-        """Нажатие на строку «Прошлых проверок»: та проверка целиком, назад ведёт строка пути."""
+        """Нажатие на строку «Прошлых проверок»: та проверка целиком, назад ведёт строка пути.
+
+        Отчёт каждой проверки сохранён рядом с её журналом; читает его функция BlockCheck
+        в фоновом потоке, а не страница в потоке окна.
+        """
+        self._past_report_lane.request(dict(run))
+
+    def _show_past_check(self, run: dict, report) -> None:
+        if self._cleanup_in_progress:
+            return
         view = self._ensure_past_check_view()
-        # Отчёт каждой проверки сохранён рядом с её журналом; читает его функция BlockCheck, не страница.
-        report = self._blockcheck.load_past_blockcheck_report(str(run.get("log_file") or ""))
         self._show_over_tabs(view)
         view.show_run(run, report)
         view.setFocus()
@@ -1715,6 +1733,7 @@ class BlockcheckPage(BasePage):
 
     def cleanup(self) -> None:
         self._cleanup_in_progress = True
+        self._past_report_lane.close()
         self._initial_state_runtime.stop(
             blocking=False,
             log_fn=log,
