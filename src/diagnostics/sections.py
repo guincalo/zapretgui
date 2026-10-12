@@ -418,13 +418,23 @@ def live_services(services: dict, verdict_of: Callable, publish: Callable[[list]
     """
     lock = threading.Lock()
     done: dict[str, list[Probe]] = {}
+    # Готовые записи сервисов: пересчитывается только тот, что сейчас завершился,
+    # а не все готовые на каждом сайте (было O(N²) сборок за прогон).
+    entries: dict[str, dict] = {}
 
     def on_probe(key: str, probe: Probe) -> None:
         with lock:
-            done.setdefault(key, []).append(probe)
-            ready = {name: list(done[name]) for name in services if len(done.get(name, ())) >= len(services[name].targets)}
-        verdicts = {name: verdict_of(services[name], probes) for name, probes in ready.items()}
-        publish(report_text.services_report({name: services[name] for name in ready}, verdicts, ready))
+            probes = done.setdefault(key, [])
+            probes.append(probe)
+            if len(probes) < len(services[key].targets):
+                return
+            probes = list(probes)
+        service = {key: services[key]}
+        entry = report_text.services_report(service, {key: verdict_of(services[key], probes)}, {key: probes})[0]
+        with lock:
+            entries[key] = entry
+            # Под замком: снимок, собранный раньше, не перебьёт более полный.
+            publish([entries[name] for name in services if name in entries])
 
     return on_probe
 
