@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from blockcheck.strategy_search.probe_profile import PROTOCOL_UDP_GAMES
 import os
 from dataclasses import dataclass
 
@@ -104,7 +105,7 @@ def prepare_strategy_scan_support_request(
         "В архив добавлен лог перебора стратегий, если он уже был создан. "
         f"Цель сканирования: {target}. Протокол: {protocol_label}. Режим: {mode_label}."
     )
-    if scan_protocol == "udp_games":
+    if scan_protocol == PROTOCOL_UDP_GAMES:
         extra_note += (
             " Для UDP Games в обращении полезно отдельно указать, был ли выбран полный охват ipset или только игровые ipset."
         )

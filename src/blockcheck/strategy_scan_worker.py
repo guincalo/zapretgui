@@ -6,6 +6,7 @@
 вопрос «цель открывается и без обхода — проверять всё равно?».
 """
 
+from blockcheck.strategy_search.probe_profile import PROTOCOL_STUN_VOICE, PROTOCOL_TCP_HTTPS, PROTOCOL_UDP_GAMES
 import logging
 import queue
 import threading
@@ -42,7 +43,7 @@ class StrategyScanWorker(QObject):
         self,
         target: str,
         mode: str = "quick",
-        scan_protocol: str = "tcp_https",
+        scan_protocol: str = PROTOCOL_TCP_HTTPS,
         udp_games_scope: str = "all",
         *,
         from_start: bool = False,
@@ -152,7 +153,7 @@ class StrategyScanWorker(QObject):
         падает — вместо него проверяется свежий rr-хост этой сети, а профиль
         пишется на googlevideo.com, чтобы подошёл любой видеосервер.
         """
-        if self._scan_protocol in ("stun_voice", "udp_games"):
+        if self._scan_protocol in (PROTOCOL_STUN_VOICE, PROTOCOL_UDP_GAMES):
             return ""
 
         from blockcheck.googlevideo_discovery import (

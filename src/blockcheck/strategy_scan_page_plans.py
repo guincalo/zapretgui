@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from blockcheck.strategy_search.probe_profile import PROTOCOL_STUN_VOICE, PROTOCOL_TCP_HTTPS, PROTOCOL_UDP_GAMES
 from pathlib import Path
 
 from blockcheck.strategy_scan_state import (
@@ -35,14 +36,14 @@ def tr_catalog(key: str, *, language: str | None = None, default: str = "", **kw
 
 def build_protocol_ui_plan(*, scan_protocol: str, current_value: str) -> StrategyScanProtocolUiPlan:
     current = str(current_value or "")
-    is_udp_games = scan_protocol == "udp_games"
-    show_target_controls = scan_protocol != "udp_games"
+    is_udp_games = scan_protocol == PROTOCOL_UDP_GAMES
+    show_target_controls = scan_protocol != PROTOCOL_UDP_GAMES
 
-    if scan_protocol in {"stun_voice", "udp_games"} and current and ":" not in current and not current.upper().startswith("STUN:"):
+    if scan_protocol in {PROTOCOL_STUN_VOICE, PROTOCOL_UDP_GAMES} and current and ":" not in current and not current.upper().startswith("STUN:"):
         current = ""
     # Обратный переход: STUN-сервер из режима звонков/игр — не сайт.
     lowered = current.strip().lower()
-    if scan_protocol == "tcp_https" and (":" in lowered or lowered.startswith("stun")):
+    if scan_protocol == PROTOCOL_TCP_HTTPS and (":" in lowered or lowered.startswith("stun")):
         current = ""
 
     normalized = normalize_target_input(current, scan_protocol)
@@ -65,7 +66,7 @@ def build_udp_scope_hint_plan(
     scope_all_label: str,
     scope_games_only_label: str,
 ) -> StrategyScanUdpHintPlan:
-    if scan_protocol != "udp_games":
+    if scan_protocol != PROTOCOL_UDP_GAMES:
         return StrategyScanUdpHintPlan(
             visible=False,
             text="",
@@ -89,7 +90,7 @@ def build_udp_scope_hint_plan(
 
 def build_quick_target_menu_plan(*, scan_protocol: str, current_value: str) -> StrategyScanQuickMenuPlan:
     current = normalize_target_input(current_value, scan_protocol)
-    options = load_quick_domains() if scan_protocol == "tcp_https" else load_quick_stun_targets()
+    options = load_quick_domains() if scan_protocol == PROTOCOL_TCP_HTTPS else load_quick_stun_targets()
     return StrategyScanQuickMenuPlan(
         options=options,
         current_value=current,
@@ -122,9 +123,9 @@ def build_idle_interaction_plan(*, is_udp_games: bool) -> StrategyScanInteractio
 
 # Подписи страницы подбора: их берут и сборка страницы, и смена языка.
 PROTOCOL_ITEMS = (
-    ("page.strategy_scan.protocol_tcp", "Сайты и приложения", "tcp_https"),
-    ("page.strategy_scan.protocol_stun", "Голосовые звонки", "stun_voice"),
-    ("page.strategy_scan.protocol_games", "Онлайн-игры", "udp_games"),
+    ("page.strategy_scan.protocol_tcp", "Сайты и приложения", PROTOCOL_TCP_HTTPS),
+    ("page.strategy_scan.protocol_stun", "Голосовые звонки", PROTOCOL_STUN_VOICE),
+    ("page.strategy_scan.protocol_games", "Онлайн-игры", PROTOCOL_UDP_GAMES),
 )
 # Пояснение и значок плитки для каждого пункта PROTOCOL_ITEMS (по порядку).
 PROTOCOL_TILE_DETAILS = (
@@ -158,7 +159,7 @@ def geo_service_for_target(geo_sites, *, scan_protocol: str, target_input: str) 
     Гео-сайт сам ограничивает доступ из России: стратегия Zapret его не чинит.
     Проверяются только сайты — у голоса и игр цель не сайт.
     """
-    if geo_sites is None or scan_protocol != "tcp_https":
+    if geo_sites is None or scan_protocol != PROTOCOL_TCP_HTTPS:
         return ""
     return str(geo_sites.service_for(normalize_target_input(target_input, scan_protocol)) or "")
 
@@ -176,7 +177,7 @@ def geo_site_notice_text(service: str, *, language: str | None = None) -> str:
 
 def geo_site_question_text(service: str, target_input: str, *, language: str | None = None) -> str:
     # Тот же адрес, с которым запустился бы подбор.
-    target = normalize_target_input(target_input, "tcp_https")
+    target = normalize_target_input(target_input, PROTOCOL_TCP_HTTPS)
     return tr_catalog(
         "page.strategy_scan.geo_site.question_text",
         language=language,

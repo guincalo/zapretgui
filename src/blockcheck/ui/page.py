@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+from blockcheck.strategy_search.probe_profile import PROTOCOL_STUN_VOICE, PROTOCOL_TCP_HTTPS
 import logging
 import time
 from dataclasses import replace
@@ -1205,7 +1206,7 @@ class BlockcheckPage(BasePage):
         page = self._strategy_tab_page
         prefill = getattr(page, "prefill_target", None)
         if callable(prefill):
-            prefill(target, protocol="stun_voice" if action == "strategy_voice" else "tcp_https")
+            prefill(target, protocol=PROTOCOL_STUN_VOICE if action == "strategy_voice" else PROTOCOL_TCP_HTTPS)
 
     def _reset_ui(self):
         reset_blockcheck_running_ui(

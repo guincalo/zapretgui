@@ -4,6 +4,7 @@ Can be used as a standalone page or embedded as a tab inside BlockCheck.
 Tests strategies one by one through winws2 + HTTPS probe.
 """
 
+from blockcheck.strategy_search.probe_profile import PROTOCOL_TCP_HTTPS, PROTOCOL_UDP_GAMES
 import logging
 from collections import deque
 from pathlib import Path
@@ -103,7 +104,7 @@ class StrategyScanPage(BasePage):
         self._geo_sites_runtime = OneShotWorkerRuntime()
         self._result_rows: list[dict] = []
         self._scan_target: str = ""
-        self._scan_protocol: str = "tcp_https"
+        self._scan_protocol: str = PROTOCOL_TCP_HTTPS
         self._scan_mode: str = "quick"
         self._scan_worker = None
         self._run_log_file: Path | None = None
@@ -547,7 +548,7 @@ class StrategyScanPage(BasePage):
             owner=self,
         )
 
-    def prefill_target(self, target: str, *, protocol: str = "tcp_https") -> None:
+    def prefill_target(self, target: str, *, protocol: str = PROTOCOL_TCP_HTTPS) -> None:
         """BlockCheck нашёл проблему: подставляет, что подбирать, но не запускает поиск."""
         if self._strategy_scan_run_runtime.is_running():
             return
@@ -555,7 +556,7 @@ class StrategyScanPage(BasePage):
         if index >= 0 and index != self._protocol_combo.currentIndex():
             self._protocol_combo.setCurrentIndex(index)
         value = str(target or "").strip()
-        if value and protocol == "tcp_https":
+        if value and protocol == PROTOCOL_TCP_HTTPS:
             self._target_input.setText(value)
         try:
             self._start_btn.setFocus()
@@ -1141,21 +1142,27 @@ class StrategyScanPage(BasePage):
         """Записать проверенную стратегию в выбранный пресет."""
         self._request_strategy_apply(result)
 
-    def create_strategy_apply_worker(self, request_id: int, *, strategy_args: str, strategy_name: str, apply_lines=()):
+    def create_strategy_apply_worker(
+        self, request_id: int, *, strategy_args: str, strategy_name: str, scan_target: str, scan_protocol: str, apply_lines=()
+    ):
         return self._blockcheck.create_strategy_apply_worker(
             request_id,
             strategy_args=strategy_args,
             strategy_name=strategy_name,
-            scan_target=self._scan_target,
-            scan_protocol=self._scan_protocol,
+            scan_target=scan_target,
+            scan_protocol=scan_protocol,
             apply_lines=tuple(apply_lines or ()),
             parent=self,
         )
 
     def _request_strategy_apply(self, result) -> None:
+        # Цель и протокол — из самого результата: пока применение ждёт очереди,
+        # на странице мог начаться подбор для другого сайта.
         payload = {
             "strategy_args": str(getattr(result, "strategy_args", "") or ""),
             "strategy_name": str(getattr(result, "strategy_name", "") or ""),
+            "scan_target": str(getattr(result, "target", "") or ""),
+            "scan_protocol": str(getattr(result, "scan_protocol", "") or ""),
             "apply_lines": tuple(getattr(result, "apply_lines", ()) or ()),
         }
         state = self._strategy_apply_state_obj()
@@ -1171,6 +1178,8 @@ class StrategyScanPage(BasePage):
                 request_id,
                 strategy_args=str(payload.get("strategy_args") or ""),
                 strategy_name=str(payload.get("strategy_name") or ""),
+                scan_target=str(payload.get("scan_target") or ""),
+                scan_protocol=str(payload.get("scan_protocol") or ""),
                 apply_lines=tuple(payload.get("apply_lines") or ()),
             )
 
@@ -1309,7 +1318,7 @@ class StrategyScanPage(BasePage):
         )
         self._apply_interaction_plan(
             self._blockcheck.build_idle_interaction_plan(
-                is_udp_games=selection.scan_protocol == "udp_games",
+                is_udp_games=selection.scan_protocol == PROTOCOL_UDP_GAMES,
             )
         )
 

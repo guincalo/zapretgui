@@ -1,143 +1,18 @@
 from __future__ import annotations
 
-from pathlib import Path, PureWindowsPath
 
+from blockcheck.strategy_search.probe_profile import PROTOCOL_STUN_VOICE, PROTOCOL_TCP_HTTPS, PROTOCOL_UDP_GAMES
 from blockcheck.strategy_scan_state import StrategyApplyResult
 from blockcheck.strategy_scan_targeting import (
     default_target_for_protocol,
     normalize_target_domain,
 )
-from config.runtime_layout import APPLICATION_PATHS
-
-
-def _line_option_values(line: str) -> list[str]:
-    _name, separator, value = str(line or "").strip().partition("=")
-    if not separator:
-        return []
-    return [part.strip().strip('"').strip("'") for part in value.split(",") if part.strip()]
-
-
-def _domain_matches_hostlist_entry(target: str, entry: str) -> bool:
-    target = normalize_target_domain(target) or ""
-    entry = normalize_target_domain(str(entry or "").strip().lstrip(".")) or ""
-    if entry.startswith("*."):
-        entry = entry[2:]
-    if not target or not entry:
-        return False
-    return target == entry or target.endswith(f".{entry}")
-
-
-def _hostlist_line_domain(line: str) -> str:
-    stripped = str(line or "").strip()
-    if not stripped or stripped.startswith("#"):
-        return ""
-    stripped = stripped.split("#", 1)[0].strip()
-    if not stripped:
-        return ""
-    return stripped.split()[0].strip()
-
-
-def _hostlist_path_candidates(raw_path: str) -> list[Path]:
-    clean = str(raw_path or "").strip().strip('"').strip("'").lstrip("@")
-    if not clean:
-        return []
-
-    normalized = clean.replace("\\", "/")
-    raw = Path(normalized)
-    base = APPLICATION_PATHS.root
-    file_name = PureWindowsPath(normalized).name
-
-    candidates: list[Path] = []
-    if raw.is_absolute():
-        candidates.append(raw)
-    candidates.append(base / normalized)
-    if file_name:
-        candidates.append(base / "lists" / file_name)
-
-    unique: list[Path] = []
-    seen: set[str] = set()
-    for candidate in candidates:
-        key = str(candidate)
-        if key in seen:
-            continue
-        seen.add(key)
-        unique.append(candidate)
-    return unique
-
-
-def _hostlist_contains_target(raw_path: str, target: str) -> bool:
-    for candidate in _hostlist_path_candidates(raw_path):
-        try:
-            with candidate.open("r", encoding="utf-8-sig", errors="ignore") as handle:
-                for line in handle:
-                    if _domain_matches_hostlist_entry(target, _hostlist_line_domain(line)):
-                        return True
-        except OSError:
-            continue
-    return False
-
-
-def _ports_include(ports: str, wanted_port: int) -> bool:
-    for raw_part in str(ports or "").split(","):
-        part = raw_part.strip()
-        if not part:
-            continue
-        if "-" in part:
-            start_text, _separator, end_text = part.partition("-")
-            try:
-                start = int(start_text.strip())
-                end = int(end_text.strip())
-            except ValueError:
-                continue
-            if start <= wanted_port <= end:
-                return True
-            continue
-        try:
-            if int(part) == wanted_port:
-                return True
-        except ValueError:
-            continue
-    return False
-
-
-def _profile_accepts_tcp_https(profile) -> bool:
-    for line in getattr(profile.match, "filter_lines", []) or []:
-        stripped = str(line or "").strip().lower()
-        if not stripped.startswith("--filter-tcp="):
-            continue
-        if _ports_include(stripped.partition("=")[2], 443):
-            return True
-    return False
-
-
-def _profile_host_match_contains_target(profile, target: str) -> bool:
-    for line in getattr(profile.match, "hostlist_domains_lines", []) or []:
-        if any(_domain_matches_hostlist_entry(target, value) for value in _line_option_values(line)):
-            return True
-
-    for line in getattr(profile.match, "hostlist_lines", []) or []:
-        if any(_hostlist_contains_target(value, target) for value in _line_option_values(line)):
-            return True
-
-    return False
-
-
-def _find_existing_tcp_https_profile_for_target(profiles, target: str):
-    normalized_target = normalize_target_domain(target) or ""
-    if not normalized_target:
-        return None
-    for profile in profiles:
-        if not _profile_accepts_tcp_https(profile):
-            continue
-        if _profile_host_match_contains_target(profile, normalized_target):
-            return profile
-    return None
 
 
 _WINDIVERT_PORT_FILTER_OPTIONS = ("--wf-tcp-out", "--wf-tcp-in", "--wf-udp-out", "--wf-udp-in")
 _SCANNED_PAYLOADS = {
-    "tcp_https": ("tls_client_hello",),
-    "stun_voice": ("stun", "discord_ip_discovery"),
+    PROTOCOL_TCP_HTTPS: ("tls_client_hello",),
+    PROTOCOL_STUN_VOICE: ("stun", "discord_ip_discovery"),
 }
 
 
@@ -304,7 +179,6 @@ def plan_selected_preset_strategy_apply(
     *,
     strategy_lines: list[str],
     ready_strategy_lines: list[str],
-    match_target: str = "",
     scan_protocol: str = "",
 ):
     """Чистый план правки выбранного пресета: (новый пресет, "created"/"updated", expect).
@@ -329,6 +203,12 @@ def plan_selected_preset_strategy_apply(
     _merge_preamble_lines(updated.preamble_lines, profile_preset.preamble_lines)
 
     new_profile = profile_preset.profiles[0]
+    # Обновляется только profile самой цели: тот же отбор трафика и те же имена,
+    # что у найденной стратегии (его создало прошлое «Применить»). Общий profile,
+    # в списке которого цель лишь одна из многих, не трогается: стратегия
+    # проверена на одном сайте, а остальные сайты общего profile-а работали со
+    # своей. Для цели появляется свой profile выше общего (решение пользователя
+    # 2026-10-12).
     existing_profile = next(
         (
             profile
@@ -337,8 +217,6 @@ def plan_selected_preset_strategy_apply(
         ),
         None,
     )
-    if existing_profile is None and str(scan_protocol or "").strip() == "tcp_https":
-        existing_profile = _find_existing_tcp_https_profile_for_target(updated.profiles, match_target)
     if existing_profile is not None:
         planned, expect = _with_strategy_in_existing_profile(
             updated,
@@ -360,7 +238,6 @@ def apply_profile_to_selected_preset(
     profile_feature,
     strategy_lines: list[str],
     ready_strategy_lines: list[str],
-    match_target: str = "",
     scan_protocol: str = "",
 ) -> tuple[str, str, tuple[str, ...]]:
     """Пишет найденную стратегию в выбранный пресет.
@@ -381,7 +258,6 @@ def apply_profile_to_selected_preset(
             source,
             strategy_lines=strategy_lines,
             ready_strategy_lines=ready_strategy_lines,
-            match_target=match_target,
             scan_protocol=scan_protocol,
         )
         planned, report = with_declared_blobs(planned, strategy_lines, load_catalog)
@@ -424,9 +300,9 @@ def apply_strategy(
         raise RuntimeError("У стратегии нет проверенного профиля — запустите подбор ещё раз")
     target = scan_target or default_target_for_protocol(scan_protocol)
 
-    if scan_protocol == "stun_voice":
+    if scan_protocol == PROTOCOL_STUN_VOICE:
         applied_profile = f"голосовые звонки, проверка {target}"
-    elif scan_protocol == "udp_games":
+    elif scan_protocol == PROTOCOL_UDP_GAMES:
         applied_profile = f"игры UDP, проверка {target}"
     else:
         applied_profile = normalize_target_domain(target) or target
@@ -435,7 +311,6 @@ def apply_strategy(
         profile_feature=profile_feature,
         strategy_lines=new_strategy_lines,
         ready_strategy_lines=str(strategy_args or "").splitlines(),
-        match_target=target,
         scan_protocol=scan_protocol,
     )
 

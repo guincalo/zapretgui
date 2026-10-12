@@ -59,8 +59,16 @@ class StrategyScanApplyRuntimeArchitectureTests(unittest.TestCase):
         page._strategy_apply_start_scheduled = False
         page.create_strategy_apply_worker = Mock()
 
-        old = SimpleNamespace(strategy_args="--lua-desync=fake", strategy_name="old", apply_lines=("--a",))
-        new = SimpleNamespace(strategy_args="--lua-desync=multisplit", strategy_name="new", apply_lines=("--b",))
+        old = SimpleNamespace(
+            strategy_args="--lua-desync=fake", strategy_name="old", target="discord.com", scan_protocol="tcp_https", apply_lines=("--a",)
+        )
+        new = SimpleNamespace(
+            strategy_args="--lua-desync=multisplit",
+            strategy_name="new",
+            target="stun.l.google.com:19302",
+            scan_protocol="stun_voice",
+            apply_lines=("--b",),
+        )
         StrategyScanPage._request_strategy_apply(page, old)
         StrategyScanPage._request_strategy_apply(page, new)
 
@@ -70,6 +78,9 @@ class StrategyScanApplyRuntimeArchitectureTests(unittest.TestCase):
             {
                 "strategy_args": "--lua-desync=multisplit",
                 "strategy_name": "new",
+                # Цель и протокол едут с результатом, а не берутся со страницы в момент запуска.
+                "scan_target": "stun.l.google.com:19302",
+                "scan_protocol": "stun_voice",
                 "apply_lines": ("--b",),
             },
         )

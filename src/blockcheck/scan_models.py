@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from blockcheck.strategy_search.probe_profile import PROTOCOL_TCP_HTTPS
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -20,7 +21,7 @@ class StrategyProbeResult:
     time_ms: float
     # Почему не засчитана (пусто, если работает).
     error: str = ""
-    scan_protocol: str = "tcp_https"
+    scan_protocol: str = PROTOCOL_TCP_HTTPS
     # ``blockcheck.strategy_search.verdict.VERDICT_*``.
     verdict: str = ""
     attempts_ok: int = 0
@@ -44,7 +45,7 @@ class StrategyScanReport:
     # Цель открывалась и без обхода (пользователь решил проверять всё равно
     # или отказался от подбора).
     baseline_accessible: bool = False
-    scan_protocol: str = "tcp_https"
+    scan_protocol: str = PROTOCOL_TCP_HTTPS
     # Причина аварийной остановки подбора (нет интернета, WinDivert недоступен,
     # блокировка по адресу, которую стратегии не снимают); пусто — подбор
     # завершился или отменён пользователем.

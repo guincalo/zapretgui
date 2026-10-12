@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+from blockcheck.strategy_search.probe_profile import PROTOCOL_TCP_HTTPS, PROTOCOL_UDP_GAMES
 from dataclasses import dataclass, field
 
 # Сколько записей держать, чтобы раздел настроек не рос бесконечно.
@@ -16,11 +17,11 @@ MAX_FAILED = 1000
 
 
 def history_key(scan_protocol: str, target: str, udp_games_scope: str = "all") -> str:
-    protocol = str(scan_protocol or "tcp_https").strip().lower() or "tcp_https"
+    protocol = str(scan_protocol or PROTOCOL_TCP_HTTPS).strip().lower() or PROTOCOL_TCP_HTTPS
     normalized = str(target or "").strip().lower()
     if not normalized:
         return ""
-    if protocol == "udp_games":
+    if protocol == PROTOCOL_UDP_GAMES:
         return f"{protocol}|{udp_games_scope or 'all'}|{normalized}"
     return f"{protocol}|{normalized}"
 

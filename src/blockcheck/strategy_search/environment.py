@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+from blockcheck.strategy_search.probe_profile import PROTOCOL_STUN_VOICE, PROTOCOL_UDP_GAMES
 import logging
 import os
 import time
@@ -73,7 +74,7 @@ class RealEnvironment:
         from profile.strategy_catalog import load_strategy_catalogs
         from settings.mode import ENGINE_WINWS2
 
-        catalog_name = {"stun_voice": "voice", "udp_games": "udp"}.get(scan_protocol, "tcp")
+        catalog_name = {PROTOCOL_STUN_VOICE: "voice", PROTOCOL_UDP_GAMES: "udp"}.get(scan_protocol, "tcp")
         app_paths = AppPaths(user_root=APPLICATION_PATHS.root, local_root=APPLICATION_PATHS.root)
         entries = load_strategy_catalogs(app_paths, ENGINE_WINWS2).get(catalog_name, {})
         return [

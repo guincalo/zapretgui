@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from blockcheck.strategy_search.probe_profile import PROTOCOL_STUN_VOICE, PROTOCOL_TCP_HTTPS, PROTOCOL_UDP_GAMES
 import re
 from pathlib import Path
 
@@ -12,11 +13,11 @@ _quick_stun_targets_cache: list[str] | None = None
 
 def scan_protocol_from_value(value) -> str:
     raw = str(value or "").strip().lower()
-    if raw == "stun_voice":
-        return "stun_voice"
-    if raw == "udp_games":
-        return "udp_games"
-    return "tcp_https"
+    if raw == PROTOCOL_STUN_VOICE:
+        return PROTOCOL_STUN_VOICE
+    if raw == PROTOCOL_UDP_GAMES:
+        return PROTOCOL_UDP_GAMES
+    return PROTOCOL_TCP_HTTPS
 
 
 def mode_from_index(index: int) -> str:
@@ -33,7 +34,7 @@ def build_selection_state(
     scan_protocol = scan_protocol_from_value(protocol_value)
     udp_games_scope = (
         normalize_udp_games_scope(udp_scope_value)
-        if scan_protocol == "udp_games"
+        if scan_protocol == PROTOCOL_UDP_GAMES
         else "all"
     )
     return StrategyScanSelectionState(
@@ -52,9 +53,9 @@ def normalize_udp_games_scope(scope: str) -> str:
 
 def default_target_for_protocol(scan_protocol: str) -> str:
     protocol = (scan_protocol or "").strip().lower()
-    if protocol == "stun_voice":
+    if protocol == PROTOCOL_STUN_VOICE:
         return "stun.l.google.com:19302"
-    if protocol == "udp_games":
+    if protocol == PROTOCOL_UDP_GAMES:
         return "stun.cloudflare.com:3478"
     return "discord.com"
 
@@ -124,7 +125,7 @@ def normalize_target_domain(value: str) -> str:
 
 def normalize_target_input(value: str, scan_protocol: str) -> str:
     protocol = (scan_protocol or "").strip().lower()
-    if protocol in {"stun_voice", "udp_games"}:
+    if protocol in {PROTOCOL_STUN_VOICE, PROTOCOL_UDP_GAMES}:
         host, port = stun_target_parts(value)
         if not host:
             return ""
@@ -235,7 +236,7 @@ def load_quick_stun_targets() -> list[str]:
     seen: set[str] = set()
     for item in raw_targets:
         value = str(item.get("value", ""))
-        normalized = normalize_target_input(value, "stun_voice")
+        normalized = normalize_target_input(value, PROTOCOL_STUN_VOICE)
         if not normalized or normalized in seen:
             continue
         seen.add(normalized)

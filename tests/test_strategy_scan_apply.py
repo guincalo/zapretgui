@@ -180,52 +180,55 @@ class StrategyScanApplyTests(unittest.TestCase):
         self.assertIn("--lua-desync=fake:blob=tls_google", feature.saved_text)
         self.assertNotIn("--lua-desync=pass", feature.saved_text)
 
-    def test_apply_updates_existing_hostlist_profile_for_target_domain(self) -> None:
-        from blockcheck import strategy_scan_apply
+    def test_apply_leaves_a_shared_profile_alone_and_gives_the_target_its_own(self) -> None:
+        # Решение пользователя 2026-10-12: стратегия проверена на одном сайте, поэтому
+        # общий profile со списком сайтов не трогается — у цели появляется свой profile выше.
+        from profile.parser import parse_preset_text
+        from settings.mode import ENGINE_WINWS2
+
+        shared = [
+            "--new",
+            "--name=youtube.com (интерфейс)",
+            "--filter-tcp=80,443",
+            "--hostlist=lists/youtube.txt",
+            "--out-range=-d8",
+            "--payload=tls_client_hello",
+            "--lua-desync=hostfakesplit:host=ozon.ru:tcp_ts=-1000:tcp_md5:repeats=4",
+        ]
+        with TemporaryDirectory() as temp_dir:
+            lists_dir = Path(temp_dir) / "lists"
+            lists_dir.mkdir()
+            (lists_dir / "youtube.txt").write_text("youtube.com\nvimeo.com\n", encoding="utf-8")
+            feature = _PresetFeature("\n".join([*shared, ""]))
+            result = _apply(feature, temp_dir)
+
+        self.assertEqual(result.operation, "created")
+        preset = parse_preset_text(feature.saved_text, engine=ENGINE_WINWS2, source_name="Selected.txt")
+        self.assertEqual(len(preset.profiles), 2)
+        own, kept = preset.profiles
+        self.assertIn("--hostlist-domains=www.youtube.com", "\n".join(own.match.hostlist_domains_lines))
+        self.assertIn("--lua-desync=fake:blob=tls_google", feature.saved_text)
+        # Общий profile — строка в строку как был.
+        for line in shared[1:]:
+            self.assertIn(line, feature.saved_text)
+        self.assertTrue(kept.enabled)
+
+    def test_apply_again_updates_the_targets_own_profile(self) -> None:
+        # Второе «Применить» для той же цели меняет её собственный profile, а не плодит новые.
         from profile.parser import parse_preset_text
         from settings.mode import ENGINE_WINWS2
 
         with TemporaryDirectory() as temp_dir:
-            lists_dir = Path(temp_dir) / "lists"
-            lists_dir.mkdir()
-            (lists_dir / "youtube.txt").write_text("youtube.com\n", encoding="utf-8")
+            feature = _PresetFeature("--new\n--name=Общий\n--filter-tcp=443\n--hostlist-domains=youtube.com,vimeo.com\n--lua-desync=pass\n")
+            first = _apply(feature, temp_dir)
+            second = _apply(feature, temp_dir, strategy_args="--lua-desync=multisplit:pos=2")
 
-            from config.runtime_layout import ApplicationPaths
-
-            feature = _PresetFeature(
-                "\n".join(
-                    [
-                        "--new",
-                        "--name=youtube.com (интерфейс)",
-                        "--filter-tcp=80,443",
-                        "--hostlist=lists/youtube.txt",
-                        "--out-range=-d8",
-                        "--payload=tls_client_hello",
-                        "--lua-desync=hostfakesplit:host=ozon.ru:tcp_ts=-1000:tcp_md5:repeats=4",
-                        "",
-                    ]
-                )
-            )
-
-            with patch.object(
-                strategy_scan_apply,
-                "APPLICATION_PATHS",
-                ApplicationPaths.from_root(temp_dir),
-            ):
-                result = _apply(feature, temp_dir)
-
-        self.assertEqual(result.operation, "updated")
+        self.assertEqual((first.operation, second.operation), ("created", "updated"))
         preset = parse_preset_text(feature.saved_text, engine=ENGINE_WINWS2, source_name="Selected.txt")
-        self.assertEqual(len(preset.profiles), 1)
-        self.assertIn("--name=youtube.com (интерфейс)", feature.saved_text)
-        self.assertIn("--filter-tcp=80,443", feature.saved_text)
-        self.assertIn("--hostlist=lists/youtube.txt", feature.saved_text)
-        self.assertIn("--out-range=-d8", feature.saved_text)
-        self.assertIn("--payload=tls_client_hello", feature.saved_text)
-        self.assertIn("--lua-desync=fake:blob=tls_google", feature.saved_text)
-        self.assertNotIn("--hostlist-domains=www.youtube.com", feature.saved_text)
-        self.assertNotIn("hostfakesplit:host=ozon.ru", feature.saved_text)
-
+        self.assertEqual(len(preset.profiles), 2)
+        self.assertIn("--lua-desync=multisplit:pos=2", feature.saved_text)
+        self.assertNotIn("--lua-desync=fake:blob=tls_google", feature.saved_text)
+        self.assertIn("--hostlist-domains=youtube.com,vimeo.com\n--lua-desync=pass", feature.saved_text)
 
     def test_apply_to_composite_profile_writes_one_union_payload_and_resolves(self) -> None:
         from core.paths import AppPaths

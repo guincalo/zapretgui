@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from blockcheck.strategy_search.probe_profile import PROTOCOL_UDP_GAMES
 from datetime import datetime
 from pathlib import Path
 
@@ -44,7 +45,7 @@ def make_run_log_path(
     safe_protocol = _sanitize_slug(scan_protocol, "protocol")
     safe_scope = _sanitize_slug(udp_games_scope, "scope")
     safe_target = _sanitize_slug(target, "target")
-    scope_suffix = f"_{safe_scope}" if scan_protocol == "udp_games" else ""
+    scope_suffix = f"_{safe_scope}" if scan_protocol == PROTOCOL_UDP_GAMES else ""
     filename = (
         f"blockcheck_run_{ts}_strategy_scan_{safe_mode}_{safe_protocol}"
         f"{scope_suffix}_{safe_target}.log"
@@ -70,7 +71,7 @@ def start_run_log(
         f"Mode: {mode}\n"
         f"Protocol: {scan_protocol}\n"
     )
-    if scan_protocol == "udp_games":
+    if scan_protocol == PROTOCOL_UDP_GAMES:
         header += f"UDP games scope: {udp_games_scope}\n"
     header += (
         f"Target: {target}\n"
