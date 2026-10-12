@@ -479,6 +479,9 @@ def build_history_entry(report: DomainLookupReport) -> dict | None:
         level = "warn"
     elif not report.primary_ip or report.timed_out:
         level = "warn"
+    elif site_level == "unknown":
+        # Открывается ли сайт, проверка не узнала: это «не узнали», а не «всё хорошо».
+        level = "unknown"
     else:
         level = "ok"
     return history.domain_entry(report.target, level, problems[0] if problems else build_status(report).text, problems)

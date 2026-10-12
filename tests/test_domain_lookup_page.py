@@ -93,6 +93,16 @@ class LookupCardsTests(unittest.TestCase):
         entry = plans.build_history_entry(report)
         self.assertEqual((entry["level"], entry["problems"][0]), ("fail", self.SITE["headline"]))
 
+    def test_site_that_could_not_be_checked_is_unknown_in_history_not_ok(self) -> None:
+        from dns import domain_lookup_plans as plans
+
+        honest = engine.annotate_answers(
+            [engine.ResolverAnswer(engine.DnsServer("Хороший", "9.9.9.9"), "ok", ipv4=("93.184.216.34",), elapsed_ms=10.0)]
+        )
+        site = {"level": "unknown", "headline": "Сайт проверить не удалось", "targets": []}
+        entry = plans.build_history_entry(_report(answers=honest, site=site))
+        self.assertEqual(entry["level"], "unknown")
+
     def test_dns_server_tile_opens_its_own_page_and_shows_the_service_logo(self) -> None:
         from blockcheck.ui.result_cards import ResultDetailView, line_icon, plain_tile
         from blockcheck.ui.result_cards_model import Line, Section

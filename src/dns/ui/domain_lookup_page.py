@@ -450,6 +450,9 @@ class DomainLookupPage(BasePage):
     def _on_failed(self, error: str) -> None:
         if self._closed:
             return
+        # Отложенный промежуточный отчёт не должен через миг затереть сообщение об ошибке.
+        self._stage_timer.stop()
+        self._pending_stage = None
         self.status_lines.set_lines(
             (plans.InfoLine(f"{self._t('status.failed', 'Проверка не удалась')}: {error}", plans.TONE_ERROR),)
         )
