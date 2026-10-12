@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+from settings.schema import TAB_HISTORY_LIMIT
 from dataclasses import replace
 
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
@@ -170,7 +171,8 @@ TILE_MIN_WIDTH = 340
 STAGE_REDRAW_MS = 300
 
 HISTORY_TITLE = "Прошлые проверки"
-HISTORY_SHOWN = 20
+# Столько прошлых проверок вкладки показывается — столько же хранит история.
+HISTORY_SHOWN = TAB_HISTORY_LIMIT
 
 
 def history_groups(runs, title: str = HISTORY_TITLE) -> tuple:

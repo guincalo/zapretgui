@@ -20,6 +20,7 @@ from __future__ import annotations
 import re
 import socket
 import time
+from diagnostics.levels import FAIL, OK, UNKNOWN, WARN, worst
 from collections import Counter
 from collections.abc import Callable, Iterable
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
@@ -38,7 +39,6 @@ from utils.dns_wire import (
     STATUS_ERROR,
     STATUS_NXDOMAIN,
     STATUS_OK,
-    STATUS_REFUSED,
     STATUS_TIMEOUT,
     TYPE_A,
     TYPE_AAAA,
@@ -57,10 +57,11 @@ KIND_DOMAIN = "domain"
 KIND_IP = "ip"
 KIND_INVALID = "invalid"
 
-LEVEL_OK = "ok"
-LEVEL_WARN = "warn"
-LEVEL_FAIL = "fail"
-LEVEL_UNKNOWN = "unknown"
+# Уровни строк — общие для всех проверок (diagnostics.levels).
+LEVEL_OK = OK
+LEVEL_WARN = WARN
+LEVEL_FAIL = FAIL
+LEVEL_UNKNOWN = UNKNOWN
 
 SERVER_WINDOWS = "windows"
 SERVER_SYSTEM = "system"
@@ -659,12 +660,10 @@ def annotate_answers(answers: Iterable[ResolverAnswer]) -> tuple[ResolverAnswer,
     for item in items:
         level, note = LEVEL_OK, ""
         if item.status == STATUS_OK:
-            order = {LEVEL_OK: 0, LEVEL_UNKNOWN: 1, LEVEL_WARN: 2, LEVEL_FAIL: 3}
             notes: list[str] = []
             for ip in item.addresses:
                 ip_level, ip_note = classify_ip(ip)
-                if order[ip_level] > order[level]:
-                    level = ip_level
+                level = worst((level, ip_level))
                 if ip_note and ip_note not in notes:
                     notes.append(ip_note)
             note = ", ".join(notes)
@@ -674,9 +673,8 @@ def annotate_answers(answers: Iterable[ResolverAnswer]) -> tuple[ResolverAnswer,
                 note = "у других серверов адрес есть"
             else:
                 level = LEVEL_UNKNOWN
-        elif item.status == STATUS_REFUSED:
-            level, note = LEVEL_UNKNOWN, item.note
         else:
+            # Отказ сервера или сбой запроса: о самом адресе это ничего не говорит.
             level, note = LEVEL_UNKNOWN, item.note
         result.append(replace(item, level=level, note=note))
     return tuple(result)

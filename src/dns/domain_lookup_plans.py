@@ -45,7 +45,6 @@ TONE_SUCCESS = "success"
 TONE_WARNING = "warning"
 TONE_ERROR = "error"
 
-NEIGHBORS_SHOWN_LIMIT = 300
 
 _LEVEL_TONES = {LEVEL_OK: TONE_SUCCESS, LEVEL_WARN: TONE_WARNING, LEVEL_FAIL: TONE_ERROR, LEVEL_UNKNOWN: TONE_MUTED}
 
@@ -83,10 +82,6 @@ class AnswerRow:
 class InfoLine:
     text: str
     tone: str = TONE_MUTED
-
-
-def level_tone(level: str) -> str:
-    return _LEVEL_TONES.get(level, TONE_MUTED)
 
 
 def source_title(key: str) -> str:
@@ -420,21 +415,6 @@ def _capital_first(text: str) -> str:
     return text[:1].upper() + text[1:]
 
 
-def build_neighbors_text(report: DomainLookupReport) -> str:
-    """Текст блока «Кто ещё на этом адресе»: по разделу на источник."""
-    if not report.primary_ip:
-        return ""
-    blocks: list[str] = []
-    for source in report.sources:
-        header = f"{source_title(source.key)} — {_source_state(source)}"
-        names = [source.extra] if source.extra else []
-        names += list(source.names[:NEIGHBORS_SHOWN_LIMIT])
-        if len(source.names) > NEIGHBORS_SHOWN_LIMIT:
-            names.append(f"… и ещё {len(source.names) - NEIGHBORS_SHOWN_LIMIT} (полный список — в отчёте)")
-        blocks.append("\n".join([header, *(f"    {name}" for name in names)]))
-    return "\n\n".join(blocks)
-
-
 def count_neighbors(report: DomainLookupReport) -> int:
     names: set[str] = set()
     for source in report.sources:
@@ -550,7 +530,6 @@ def build_text_report(report: DomainLookupReport) -> str:
 
 __all__ = [
     "FILTER_MARK",
-    "NEIGHBORS_SHOWN_LIMIT",
     "TONE_ACCENT",
     "TONE_ERROR",
     "TONE_MUTED",
@@ -565,7 +544,6 @@ __all__ = [
     "build_answer_groups",
     "build_neighbor_groups",
     "build_history_entry",
-    "build_neighbors_text",
     "build_path_rows",
     "build_network_lines",
     "build_path_lines",
@@ -574,6 +552,5 @@ __all__ = [
     "build_status",
     "build_text_report",
     "count_neighbors",
-    "level_tone",
     "source_title",
 ]

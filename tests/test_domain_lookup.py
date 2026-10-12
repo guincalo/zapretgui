@@ -519,8 +519,8 @@ class PlansTests(unittest.TestCase):
         self.assertEqual(plans.count_neighbors(report), 6)
         self.assertEqual(plans.build_status(report).tone, plans.TONE_SUCCESS)
 
-    def test_long_lists_are_cut_on_screen_but_not_in_report(self) -> None:
-        names = tuple(f"host{index}.example" for index in range(plans.NEIGHBORS_SHOWN_LIMIT + 5))
+    def test_long_lists_stay_whole_in_the_report(self) -> None:
+        names = tuple(f"host{index}.example" for index in range(305))
         report = engine.DomainLookupReport(
             target="1.2.3.4",
             kind=engine.KIND_IP,
@@ -528,11 +528,6 @@ class PlansTests(unittest.TestCase):
             sources=(engine.NeighborSource(engine.SOURCE_THC, engine.SOURCE_OK, names=names, total=9000),),
         )
 
-        screen = plans.build_neighbors_text(report)
-
-        self.assertIn(f"показано {len(names)} из 9000", screen)
-        self.assertIn("и ещё 5", screen)
-        self.assertNotIn(names[-1], screen)
         self.assertIn(names[-1], plans.build_text_report(report))
 
 

@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+from settings.schema import TAB_HISTORY_LIMIT
 from PyQt6.QtCore import QTimer, pyqtSignal
 from PyQt6.QtWidgets import QVBoxLayout, QWidget
 from qfluentwidgets import FluentIcon, PrimaryPushButton, PushButton, StrongBodyLabel
@@ -30,7 +31,8 @@ _STAGE_INTERVAL_MS = 120
 
 
 # Столько прошлых проверок видно на вкладке.
-HISTORY_SHOWN = 20
+# Столько прошлых проверок вкладки показывается — столько же хранит история.
+HISTORY_SHOWN = TAB_HISTORY_LIMIT
 
 
 class ServerCheckPage(BasePage):
