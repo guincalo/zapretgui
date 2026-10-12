@@ -9,6 +9,14 @@ class StrategyScanRunLogState:
     path: Path | None
 
 
+# Что стало с Zapret после «Применить» (см. ui.page_deps.system._ensure_zapret_for_strategy).
+STRATEGY_ZAPRET_RESTARTING = "restarting"  # работал — перезапустится с новым пресетом сам
+STRATEGY_ZAPRET_STARTED = "started"  # был выключен — запущен
+STRATEGY_ZAPRET_FAILED = "failed"  # запустить не удалось
+STRATEGY_ZAPRET_OTHER_METHOD = "other_method"  # выбран не Zapret 2 — стратегия ждёт в его пресете
+STRATEGY_ZAPRET_SCAN_RUNNING = "scan_running"  # подбор ещё идёт: Zapret не трогаем
+
+
 @dataclass(slots=True)
 class StrategyApplyResult:
     strategy_name: str

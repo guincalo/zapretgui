@@ -442,18 +442,49 @@ class StageEventTests(unittest.TestCase):
 
 
 class BatchTests(unittest.TestCase):
-    def test_whole_quick_batch_is_tested_even_after_finding_working(self) -> None:
+    def test_quick_mode_stops_at_the_first_reliable_strategy(self) -> None:
+        # Человеку нужна рабочая стратегия, а не все рабочие: «Быстрый» заканчивает на первой надёжной.
         candidates = [cand(f"s{i}", f"f{i % 5}") for i in range(40)]
-        env = FakeEnv(network=blocked_unless("s0", "s1", "s2", "s3"), candidates=candidates)
+        env = FakeEnv(network=blocked_unless("s3"), candidates=candidates)
         report, events = run(env)
 
         self.assertEqual(report.total_available, 40)
-        self.assertEqual(report.total_tested, 30)
-        self.assertEqual(len(events.results), 30)
+        self.assertEqual([result.strategy_id for result in report.working_strategies], ["s3"])
+        self.assertEqual(events.results[-1].strategy_id, "s3")
+        self.assertLess(report.total_tested, 30)
+
+    def test_all_mode_tests_every_strategy(self) -> None:
+        candidates = [cand(f"s{i}", f"f{i % 5}") for i in range(40)]
+        env = FakeEnv(network=blocked_unless("s0", "s1", "s2", "s3"), candidates=candidates)
+        report, _events = run(env, mode="all")
+
+        self.assertEqual(report.total_tested, 40)
+        self.assertEqual(len(report.working_strategies), 4)
+
+    def test_empty_quick_batch_continues_with_the_next_strategies(self) -> None:
+        # В первых 30 ни одна не подошла — подбор сам берёт следующие, не дожидаясь нового запуска.
+        candidates = [cand(f"s{i}", f"f{i % 5}") for i in range(40)]
+        env = FakeEnv(network=blocked_unless("s37"), candidates=candidates)
+        report, events = run(env)
+
+        self.assertEqual([result.strategy_id for result in report.working_strategies], ["s37"])
+        self.assertGreater(report.total_tested, 30)
+        self.assertTrue(any("ни одна не подошла" in line for line in events.logs))
+
+    def test_recommended_and_popular_strategies_go_first(self) -> None:
+        from blockcheck.strategy_search.ordering import order_candidates
+
+        plain = Candidate("plain", "plain", "--lua-desync=fake:id=plain")
+        risky = Candidate("risky", "risky", "--lua-desync=fake:id=risky", label="experimental")
+        popular = Candidate("popular", "popular", "--lua-desync=fake:id=popular", usage=5)
+        trusted = Candidate("trusted", "trusted", "--lua-desync=fake:id=trusted", label="recommended")
+
+        ordered = [item.strategy_id for item in order_candidates([risky, plain, popular, trusted])]
+        self.assertEqual(ordered, ["trusted", "popular", "plain", "risky"])
 
     def test_history_records_confirmed_and_failed(self) -> None:
         env = FakeEnv(network=blocked_unless("good"), candidates=[cand("good"), cand("bad", "multisplit")])
-        run(env)
+        run(env, mode="all")
 
         key, confirmed, failed = env.history_saved
         self.assertEqual(key, "tcp_https|discord.com")
@@ -563,7 +594,7 @@ class UdpTests(unittest.TestCase):
             return OK if running == "good" else TIMEOUT
 
         env = FakeEnv(network=network, candidates=[cand("good"), cand("bad", "udplen")], addresses=("8.8.8.8",))
-        _report, events = run(env, target="stun.l.google.com:19302", scan_protocol="stun_voice")
+        _report, events = run(env, target="stun.l.google.com:19302", scan_protocol="stun_voice", mode="all")
 
         by_id = {result.strategy_id: result for result in events.results}
         self.assertTrue(by_id["good"].success)

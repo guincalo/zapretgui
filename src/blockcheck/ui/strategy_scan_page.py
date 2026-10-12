@@ -4,6 +4,8 @@ Can be used as a standalone page or embedded as a tab inside BlockCheck.
 Tests strategies one by one through winws2 + HTTPS probe.
 """
 
+from blockcheck.strategy_scan_page_plans import best_working_index
+from blockcheck.strategy_scan_state import STRATEGY_ZAPRET_FAILED, STRATEGY_ZAPRET_SCAN_RUNNING
 from blockcheck.strategy_search.probe_profile import PROTOCOL_TCP_HTTPS, PROTOCOL_UDP_GAMES
 import logging
 from collections import deque
@@ -81,8 +83,11 @@ class StrategyScanPage(BasePage):
         create_geo_sites_worker=None,
         open_hosts_editor=None,
         open_dns_settings=None,
+        ensure_zapret_for_strategy=None,
     ):
         self._embedded = bool(embedded)
+        # После «Применить»: запустить или перезапустить Zapret, чтобы стратегия заработала сразу.
+        self._ensure_zapret_for_strategy = ensure_zapret_for_strategy
         super().__init__(
             title=tr_catalog("page.blockcheck_public.title", default="Подбор стратегии"),
             subtitle=tr_catalog("page.blockcheck_public.subtitle",
@@ -830,15 +835,8 @@ class StrategyScanPage(BasePage):
         self._scan_panel.set_phrases(strategy_phrases(args, self._ui_language))
 
     def _on_apply_best(self) -> None:
-        """«Применить лучшую» — самая быстрая из надёжных стратегий."""
-        working = [
-            (float(row.get("time_ms") or 1e9), index)
-            for index, row in enumerate(self._result_rows)
-            if row.get("success")
-        ]
-        if not working:
-            return
-        _time, index = min(working)
+        """«Применить лучшую» — та же, что названа в итоге подбора."""
+        index = best_working_index(self._result_rows)
         if 0 <= index < len(self._result_objects):
             self._on_apply_strategy(self._result_objects[index])
 
@@ -1201,7 +1199,7 @@ class StrategyScanPage(BasePage):
             return
         if self._strategy_apply_state_obj().has_pending():
             return
-        message_plan = self._blockcheck.build_apply_success_plan(result)
+        message_plan = self._blockcheck.build_apply_success_plan(result, zapret=self._zapret_after_apply())
 
         show = InfoBarHelper.warning if message_plan.kind == "warning" else InfoBarHelper.success
         show(
@@ -1209,6 +1207,18 @@ class StrategyScanPage(BasePage):
             tr_catalog(message_plan.title_key, default=message_plan.title_default),
             message_plan.body_text,
         )
+
+    def _zapret_after_apply(self) -> str:
+        """Запускает Zapret для применённой стратегии; во время подбора его не трогает."""
+        if self._ensure_zapret_for_strategy is None:
+            return ""
+        if self._strategy_scan_run_runtime.is_running():
+            return STRATEGY_ZAPRET_SCAN_RUNNING
+        try:
+            return str(self._ensure_zapret_for_strategy() or "")
+        except Exception:
+            logger.exception("Failed to start Zapret after applying a strategy")
+            return STRATEGY_ZAPRET_FAILED
 
     def _on_strategy_apply_failed(self, request_id: int, error: str) -> None:
         if not self._strategy_apply_runtime.is_current(

@@ -5226,12 +5226,12 @@ TEXTS_EXTRA: dict[str, dict[str, str]] = {
         "en": "Roblox, Steam, Amazon and more",
     },
     "page.strategy_scan.mode_quick.hint": {
-        "ru": "≈ 1–3 минуты",
-        "en": "≈ 1–3 minutes",
+        "ru": "до первой рабочей, обычно 1–3 минуты",
+        "en": "until the first working one, usually 1–3 minutes",
     },
     "page.strategy_scan.mode_standard.hint": {
-        "ru": "≈ 3–7 минут",
-        "en": "≈ 3–7 minutes",
+        "ru": "до трёх рабочих, ≈ 3–7 минут",
+        "en": "until three working ones, ≈ 3–7 minutes",
     },
     "page.strategy_scan.mode_full.hint": {
         "ru": "долго — самое время для чая ☕",

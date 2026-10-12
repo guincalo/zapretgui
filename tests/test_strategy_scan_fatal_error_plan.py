@@ -100,3 +100,47 @@ class StrategyScanResultPresentationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ApplyMessageTests(unittest.TestCase):
+    """После «Применить» человек узнаёт, заработает ли стратегия и что делать дальше."""
+
+    def _result(self, operation: str = "created"):
+        from blockcheck.strategy_scan_state import StrategyApplyResult
+
+        return StrategyApplyResult(
+            strategy_name="fake split", applied_profile="discord.com", selected_file_name="Default.txt", operation=operation
+        )
+
+    def test_message_says_what_happened_to_zapret_and_what_next(self) -> None:
+        from blockcheck import strategy_scan_state as state
+
+        started = page_plans.build_apply_success_plan(self._result(), zapret=state.STRATEGY_ZAPRET_STARTED)
+        self.assertEqual(started.kind, "success")
+        self.assertIn("Zapret запущен", started.body_text)
+        self.assertIn("Проверка сайтов", started.body_text)
+        self.assertNotIn("profile", started.body_text)
+
+        other = page_plans.build_apply_success_plan(self._result(), zapret=state.STRATEGY_ZAPRET_OTHER_METHOD)
+        self.assertEqual(other.kind, "warning")
+        self.assertIn("Zapret 2", other.body_text)
+
+        failed = page_plans.build_apply_success_plan(self._result("updated"), zapret=state.STRATEGY_ZAPRET_FAILED)
+        self.assertEqual(failed.kind, "warning")
+        self.assertIn("профиль сайта discord.com", failed.body_text)
+
+    def test_zapret_is_not_touched_while_a_scan_runs(self) -> None:
+        from types import SimpleNamespace
+        from unittest.mock import Mock
+
+        from blockcheck import strategy_scan_state as state
+        from blockcheck.ui.strategy_scan_page import StrategyScanPage
+
+        page = StrategyScanPage.__new__(StrategyScanPage)
+        page._ensure_zapret_for_strategy = Mock(return_value=state.STRATEGY_ZAPRET_STARTED)
+        page._strategy_scan_run_runtime = SimpleNamespace(is_running=lambda: True)
+        self.assertEqual(page._zapret_after_apply(), state.STRATEGY_ZAPRET_SCAN_RUNNING)
+        page._ensure_zapret_for_strategy.assert_not_called()
+
+        page._strategy_scan_run_runtime = SimpleNamespace(is_running=lambda: False)
+        self.assertEqual(page._zapret_after_apply(), state.STRATEGY_ZAPRET_STARTED)

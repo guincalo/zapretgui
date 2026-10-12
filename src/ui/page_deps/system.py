@@ -1,5 +1,11 @@
 from __future__ import annotations
 
+from blockcheck.strategy_scan_state import (
+    STRATEGY_ZAPRET_FAILED,
+    STRATEGY_ZAPRET_OTHER_METHOD,
+    STRATEGY_ZAPRET_RESTARTING,
+    STRATEGY_ZAPRET_STARTED,
+)
 from app.page_names import PageName
 from ui.page_deps.types import (
     CustomDnsServerPageDeps,
@@ -320,11 +326,28 @@ def build_blockcheck_page_kwargs(
         # Гео-сайты каталога hosts: подбор предупреждает, что им нужна не стратегия.
         return blockcheck_feature.create_geo_sites_worker(request_id, parent=parent)
 
+    def _ensure_zapret_for_strategy() -> str:
+        """После «Применить»: чтобы найденная стратегия заработала сразу.
+
+        Стратегия пишется в пресет Zapret 2. Работающий Zapret сам перезапустится с
+        изменённым пресетом; выключенный запускается здесь — человек явно нажал
+        «Применить». Другой способ запуска не трогаем, а говорим об этом.
+        """
+        from settings.dpi.launch_method import get_current_launch_method
+        from settings.mode import ZAPRET2_MODE
+
+        if get_current_launch_method(default="") != ZAPRET2_MODE:
+            return STRATEGY_ZAPRET_OTHER_METHOD
+        if runtime_feature.is_running():
+            return STRATEGY_ZAPRET_RESTARTING
+        return STRATEGY_ZAPRET_STARTED if runtime_feature.start() else STRATEGY_ZAPRET_FAILED
+
     return {
         "blockcheck_feature": blockcheck_feature,
         "dns_feature": dns_feature,
         "create_strategy_scan_worker": _create_strategy_scan_worker,
         "create_geo_sites_worker": _create_geo_sites_worker,
+        "ensure_zapret_for_strategy": _ensure_zapret_for_strategy,
         # «Поймали провайдера на подмене DNS» → кнопка ведёт на «Настройка DNS».
         "open_dns_settings": (lambda: show_page(PageName.NETWORK)) if show_page is not None else None,
     }

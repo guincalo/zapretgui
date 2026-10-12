@@ -26,6 +26,7 @@
 from __future__ import annotations
 
 import logging
+import statistics
 from collections import deque
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
@@ -33,7 +34,14 @@ from typing import Protocol
 
 from blockcheck.scan_models import StrategyProbeResult, StrategyScanReport
 from blockcheck.strategy_search import verdict as rules
-from blockcheck.strategy_search.ordering import Candidate, batch_for_mode, habit_note, order_candidates
+from blockcheck.strategy_search.ordering import (
+    Candidate,
+    batch_for_mode,
+    continuation,
+    habit_note,
+    order_candidates,
+    stop_after_for_mode,
+)
 from blockcheck.strategy_search.probe_profile import (
     PROTOCOL_STUN_VOICE,
     PROTOCOL_TCP_HTTPS,
@@ -222,8 +230,9 @@ class StrategySearch:
         failed_ids: list[str] = []
         key = self._history_key()
         try:
-            batch, total = self._select_batch(key)
+            batch, total, ordered = self._select_batch(key)
             report.total_available = total
+            stop_after = stop_after_for_mode(self._request.mode)
             self._events.log(
                 f"Подбор: {self._protocol_label()}, цель {self._request.target}, "
                 f"проверим {len(batch)} из {total} стратегий"
@@ -258,7 +267,17 @@ class StrategySearch:
 
             queue: deque[tuple[Candidate, bool]] = deque((candidate, False) for candidate in batch)
             index = 0
-            while queue and not self.cancelled:
+            while not self.cancelled:
+                if not queue:
+                    # Пачка кончилась, а надёжной нет — берём следующую, пока есть куда.
+                    more = [] if working or self._target.forced else continuation(ordered, self._request.mode, len(batch))
+                    if not more:
+                        break
+                    self._events.log(
+                        f"Из {len(batch)} проверенных ни одна не подошла — проверяем следующие {len(more)}"
+                    )
+                    batch = [*batch, *more]
+                    queue.extend((candidate, False) for candidate in more)
                 candidate, rechecked = queue.popleft()
                 self._events.strategy_started(candidate.name, index, len(batch), candidate.args)
                 self._events.phase(f"[{index + 1}/{len(batch)}] {candidate.name}")
@@ -280,6 +299,11 @@ class StrategySearch:
                 if result.success:
                     working.append(result)
                     confirmed_ids.append(candidate.strategy_id)
+                    if stop_after and len(working) >= stop_after and not self._target.forced:
+                        # Нашлась надёжная — человеку нужна рабочая стратегия, а не все рабочие.
+                        index += 1
+                        self._events.log(f"Найдено надёжных: {len(working)} — подбор закончен, остальные не нужны")
+                        break
                 else:
                     failed.append(result)
                     if run.verdict == rules.VERDICT_FAILED:
@@ -352,7 +376,7 @@ class StrategySearch:
             self._events.log(f"По последней проверке BlockCheck: {habit_note(habit)}.")
         if not ordered:
             raise ScanFatal("Каталог стратегий пуст: переустановите программу.", STOP_OTHER)
-        return batch_for_mode(ordered, self._request.mode), len(ordered)
+        return batch_for_mode(ordered, self._request.mode), len(ordered), ordered
 
     # --- Проверка «до подбора» ----------------------------------------------------
 
@@ -606,7 +630,8 @@ class StrategySearch:
             strategy_args=candidate.args,
             target=self._request.target,
             success=success,
-            time_ms=passed[0].time_ms if passed else 0.0,
+            # Медиана удачных попыток: время одной первой пробы — случайность, по ней «лучшую» не выбрать.
+            time_ms=statistics.median(attempt.time_ms for attempt in passed) if passed else 0.0,
             error="" if success else (run.reason or self._verdict_text(run.verdict)),
             scan_protocol=self._protocol,
             verdict=run.verdict,

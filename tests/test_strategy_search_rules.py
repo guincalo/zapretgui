@@ -376,3 +376,31 @@ class HistoryTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ControlAliveTests(unittest.TestCase):
+    def test_first_open_site_answers_without_waiting_for_slow_ones(self) -> None:
+        import time
+
+        from blockcheck.strategy_search import probes
+
+        def fake_get(host, ip, path, **_kwargs):
+            if host != probes.CONTROL_HOSTS[0]:
+                time.sleep(2.0)
+            return tls_probe.ProbeResult(ip=ip, kind=tls_probe.KIND_OK, status=200)
+
+        started = time.monotonic()
+        with patch.object(probes, "resolve_target_addresses", return_value=(["192.0.2.1"], "")), patch(
+            "diagnostics.tls_probe.https_get", side_effect=fake_get
+        ):
+            self.assertTrue(probes.control_alive())
+        self.assertLess(time.monotonic() - started, 1.0)
+
+
+class BestStrategyTests(unittest.TestCase):
+    def test_best_is_the_fastest_reliable_one(self) -> None:
+        from blockcheck.strategy_scan_page_plans import best_working_index
+
+        rows = [{"success": False, "time_ms": 5}, {"success": True, "time_ms": 300}, {"success": True, "time_ms": 120}]
+        self.assertEqual(best_working_index(rows), 2)
+        self.assertEqual(best_working_index([{"success": False}]), -1)

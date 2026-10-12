@@ -71,14 +71,28 @@ class RealEnvironment:
     def load_candidates(self, scan_protocol: str) -> list[Candidate]:
         from config.runtime_layout import APPLICATION_PATHS
         from core.paths import AppPaths
-        from profile.strategy_catalog import load_strategy_catalogs
+        from profile.strategy_catalog import load_strategy_catalogs_with_signature
+        from profile.strategy_usage import load_builtin_strategy_usage
         from settings.mode import ENGINE_WINWS2
 
         catalog_name = {PROTOCOL_STUN_VOICE: "voice", PROTOCOL_UDP_GAMES: "udp"}.get(scan_protocol, "tcp")
         app_paths = AppPaths(user_root=APPLICATION_PATHS.root, local_root=APPLICATION_PATHS.root)
-        entries = load_strategy_catalogs(app_paths, ENGINE_WINWS2).get(catalog_name, {})
+        signature, catalogs = load_strategy_catalogs_with_signature(app_paths, ENGINE_WINWS2)
+        entries = catalogs.get(catalog_name, {})
+        try:
+            # Как часто стратегия стоит в готовых пресетах — подсказка порядку, не фильтр.
+            usage = load_builtin_strategy_usage(app_paths, ENGINE_WINWS2, catalogs, signature).services
+        except Exception:
+            logger.debug("strategy usage for search order failed", exc_info=True)
+            usage = {}
         return [
-            Candidate(strategy_id, getattr(entry, "name", "") or strategy_id, getattr(entry, "args", "") or "")
+            Candidate(
+                strategy_id,
+                getattr(entry, "name", "") or strategy_id,
+                getattr(entry, "args", "") or "",
+                label=str(getattr(entry, "label", "") or ""),
+                usage=int(usage.get((catalog_name, strategy_id), 0)),
+            )
             for strategy_id, entry in entries.items()
         ]
 

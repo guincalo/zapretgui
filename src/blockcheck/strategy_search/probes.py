@@ -169,7 +169,10 @@ def control_alive(*, cancel=None) -> bool:
         result = https_get(host, addresses[0], "/", timeout=CONTROL_TIMEOUT, cancel=cancel)
         return result.status is not None
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=len(CONTROL_HOSTS)) as pool:
+    # Первый открывшийся сайт — ответ: медленные остальные не ждём (раньше выход из
+    # «with» дожидался всех и добавлял секунды к каждой проверке связи).
+    pool = concurrent.futures.ThreadPoolExecutor(max_workers=len(CONTROL_HOSTS))
+    try:
         futures = [pool.submit(_one, host) for host in CONTROL_HOSTS]
         for future in concurrent.futures.as_completed(futures):
             try:
@@ -177,7 +180,9 @@ def control_alive(*, cancel=None) -> bool:
                     return True
             except Exception:
                 continue
-    return False
+        return False
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
 
 
 # --- UDP ----------------------------------------------------------------------------

@@ -4,6 +4,11 @@ from blockcheck.strategy_search.probe_profile import PROTOCOL_STUN_VOICE, PROTOC
 from pathlib import Path
 
 from blockcheck.strategy_scan_state import (
+    STRATEGY_ZAPRET_FAILED,
+    STRATEGY_ZAPRET_OTHER_METHOD,
+    STRATEGY_ZAPRET_RESTARTING,
+    STRATEGY_ZAPRET_SCAN_RUNNING,
+    STRATEGY_ZAPRET_STARTED,
     StrategyScanPanelOutcome,
     StrategyApplyResult,
     StrategyScanFinishPlan,
@@ -140,8 +145,8 @@ MODE_ITEMS = (
 )
 # Подсказка о времени для каждого пункта MODE_ITEMS (по порядку).
 MODE_HINTS = (
-    ("page.strategy_scan.mode_quick.hint", "≈ 1–3 минуты"),
-    ("page.strategy_scan.mode_standard.hint", "≈ 3–7 минут"),
+    ("page.strategy_scan.mode_quick.hint", "до первой рабочей, обычно 1–3 минуты"),
+    ("page.strategy_scan.mode_standard.hint", "до трёх рабочих, ≈ 3–7 минут"),
     ("page.strategy_scan.mode_full.hint", "долго — самое время для чая ☕"),
 )
 
@@ -217,19 +222,33 @@ def build_language_plan(*, language: str) -> StrategyScanLanguagePlan:
     )
 
 
-def build_apply_success_plan(result: StrategyApplyResult) -> StrategyScanUiMessagePlan:
+# Что сказать о Zapret после «Применить» и что делать дальше.
+_ZAPRET_AFTER_APPLY = {
+    STRATEGY_ZAPRET_RESTARTING: "Zapret перезапускается с новой стратегией. Потом проверьте сайт на вкладке «Проверка сайтов».",
+    STRATEGY_ZAPRET_STARTED: "Zapret запущен с новой стратегией. Проверьте сайт на вкладке «Проверка сайтов».",
+    STRATEGY_ZAPRET_FAILED: "Запустить Zapret не удалось — запустите его на главной странице, чтобы стратегия заработала.",
+    STRATEGY_ZAPRET_OTHER_METHOD: (
+        "Стратегия записана в пресет Zapret 2, а сейчас выбран другой способ запуска — "
+        "переключитесь на Zapret 2, чтобы она заработала."
+    ),
+    STRATEGY_ZAPRET_SCAN_RUNNING: "Подбор ещё идёт — когда он закончится, запустите Zapret, если он выключен.",
+}
+
+
+def build_apply_success_plan(result: StrategyApplyResult, *, zapret: str = "") -> StrategyScanUiMessagePlan:
     operation = str(getattr(result, "operation", "") or "").strip().lower()
     if operation == "updated":
         title_default = "Стратегия обновлена"
-        body_text = f"{result.strategy_name} заменена в существующем profile: {result.applied_profile}"
+        body_text = f"{result.strategy_name} записана в профиль сайта {result.applied_profile}"
     else:
         title_default = "Стратегия применена"
-        body_text = f"{result.strategy_name} применена к profile: {result.applied_profile}"
+        body_text = f"{result.strategy_name} записана в новый профиль: {result.applied_profile}"
+    after = _ZAPRET_AFTER_APPLY.get(str(zapret or ""), "")
     blob_warnings = tuple(getattr(result, "blob_warnings", ()) or ())
-    if blob_warnings:
-        body_text = "\n".join((body_text, *blob_warnings))
+    body_text = "\n".join(part for part in (body_text, after, *blob_warnings) if part)
+    trouble = bool(blob_warnings) or zapret in (STRATEGY_ZAPRET_FAILED, STRATEGY_ZAPRET_OTHER_METHOD)
     return StrategyScanUiMessagePlan(
-        kind="warning" if blob_warnings else "success",
+        kind="warning" if trouble else "success",
         title_key="page.strategy_scan.applied",
         title_default=title_default,
         body_text=body_text,
@@ -469,6 +488,12 @@ _STOP_TITLES = {
 }
 
 
+def best_working_index(result_rows: list[dict]) -> int:
+    """Какую из надёжных стратегий применять: самую быструю по медиане попыток. -1 — надёжных нет."""
+    working = [(float(row.get("time_ms") or 1e9), index) for index, row in enumerate(result_rows) if row.get("success")]
+    return min(working)[1] if working else -1
+
+
 def build_panel_outcome(report, result_rows: list[dict]) -> StrategyScanPanelOutcome:
     """Что показать в панели итога: заголовок с улыбкой, точное объяснение, лучшая стратегия."""
     target = str(getattr(report, "target", "") or "")
@@ -495,7 +520,8 @@ def build_panel_outcome(report, result_rows: list[dict]) -> StrategyScanPanelOut
             ),
         )
     if working:
-        best_index, best = min(working, key=lambda item: float(item[1].get("time_ms") or 1e9))
+        best_index = best_working_index(result_rows)
+        best = result_rows[best_index]
         count = len(working)
         noun = _plural(count, "надёжная стратегия", "надёжные стратегии", "надёжных стратегий")
         best_time = float(best.get("time_ms") or 0)

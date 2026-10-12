@@ -29,6 +29,15 @@ PASS_FUNCTION = "pass"
 FAILED_MEMORY_SECONDS = 14 * 24 * 3600
 
 MODE_BATCH_SIZES = {"quick": 30, "standard": 80}
+# Сколько надёжных стратегий достаточно, чтобы закончить подбор: человеку нужна
+# рабочая, а не все рабочие. «Все стратегии» проверяет каталог целиком.
+MODE_STOP_AFTER = {"quick": 1, "standard": 3}
+# Ни одна из пачки не подошла — подбор сам берёт следующую, но не дальше стольких.
+MODE_AUTO_CONTINUE_LIMIT = {"quick": 80, "standard": 160}
+
+# Метка стратегии в каталоге → очередь внутри своего приёма: проверенные авторами
+# раньше, опытные и «осторожно» — позже. Ничего не выбрасывается.
+_LABEL_RANK = {"stock": 0, "recommended": 0, "": 1, "experimental": 2, "caution": 2}
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,6 +45,15 @@ class Candidate:
     strategy_id: str
     name: str
     args: str
+    # Метка каталога (recommended, stock, experimental, caution) — пусто, если её нет.
+    label: str = ""
+    # На скольких сервисах стратегия стоит в готовых пресетах программы.
+    usage: int = 0
+
+
+def candidate_rank(candidate: Candidate) -> tuple[int, int]:
+    """Чем меньше, тем раньше внутри своего приёма: метка каталога, потом популярность в пресетах."""
+    return _LABEL_RANK.get(str(candidate.label or "").lower(), 1), -int(candidate.usage or 0)
 
 
 # Простое дробление пакета: куски идут подряд и ничем не прикрыты.
@@ -114,11 +132,15 @@ def technique_key(candidate: Candidate) -> tuple[str, ...]:
 
 
 def interleave_by_technique(candidates: Sequence[Candidate]) -> list[Candidate]:
+    """Приёмы по кругу; внутри приёма и между приёмами — сначала рекомендованные и популярные.
+
+    Сортировка устойчивая: при равных метках и популярности остаётся порядок каталога.
+    """
     groups: OrderedDict[tuple[str, ...], list[Candidate]] = OrderedDict()
     for candidate in candidates:
         groups.setdefault(technique_key(candidate), []).append(candidate)
     ordered: list[Candidate] = []
-    queues = [list(group) for group in groups.values()]
+    queues = sorted((sorted(group, key=candidate_rank) for group in groups.values()), key=lambda group: candidate_rank(group[0]))
     while queues:
         next_round: list[list[Candidate]] = []
         for queue in queues:
@@ -165,3 +187,17 @@ def order_candidates(
 def batch_for_mode(ordered: Sequence[Candidate], mode: str) -> list[Candidate]:
     size = MODE_BATCH_SIZES.get(str(mode or "").strip().lower())
     return list(ordered) if size is None else list(ordered[:size])
+
+
+def stop_after_for_mode(mode: str) -> int:
+    """Сколько надёжных стратегий хватит; 0 — проверять пачку до конца."""
+    return MODE_STOP_AFTER.get(str(mode or "").strip().lower(), 0)
+
+
+def continuation(ordered: Sequence[Candidate], mode: str, tested: int) -> list[Candidate]:
+    """Следующая пачка, если в проверенных ничего не подошло. Пусто — продолжать некуда."""
+    key = str(mode or "").strip().lower()
+    size, limit = MODE_BATCH_SIZES.get(key), MODE_AUTO_CONTINUE_LIMIT.get(key)
+    if size is None or limit is None or tested >= limit:
+        return []
+    return list(ordered[tested : min(tested + size, limit)])
