@@ -59,7 +59,7 @@ _SELECTABLE = Qt.TextInteractionFlag.TextSelectableByMouse
 
 def _status_color(status: str) -> QColor:
     """Цвет вывода непрозрачным: им красят и текст, и метки."""
-    if status == plans.CARD_SILENT:
+    if status in (plans.CARD_SILENT, plans.CARD_UNKNOWN):
         return _cell_color(plans.CELL_MUTED)
     return status_color(status)
 
@@ -109,7 +109,7 @@ class _StatusMark(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(7)
         # Кольцо вместо заливки: «не полностью» отличается от «блокируется» не только цветом.
-        hollow = status in (plans.CARD_PARTIAL, plans.CARD_SILENT)
+        hollow = status in (plans.CARD_PARTIAL, plans.CARD_SILENT, plans.CARD_UNKNOWN)
         dot = ToneDot(lambda _tokens: _solid(_status_color(status)).name(), self, size=9, hollow=hollow)
         layout.addWidget(dot, 0, Qt.AlignmentFlag.AlignVCenter)
         self.label = StrongBodyLabel(plans.CARD_TITLES[status], self)

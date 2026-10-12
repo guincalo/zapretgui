@@ -130,6 +130,8 @@ PROBE_ATTEMPTS = 3
 # потоков и столько же соединений; при 96 адресах разом программа поднимала
 # больше четырёхсот потоков, и на этом тормозил компьютер в начале проверки.
 # По замеру 32 дают то же общее время: оно упирается в самый медленный адрес.
+# Сколько можно искать владельцев сетей после опроса серверов: дольше — итог без них.
+OWNERS_BUDGET_S = 10.0
 MAX_PARALLEL_ADDRESSES = 32
 RUN_DEADLINE_S = 75.0
 
@@ -545,6 +547,25 @@ def _reference_ask(cancel: SocketCancel) -> Callable[[str, int], DnsQueryResult 
     return ask
 
 
+def _lookup_owners_stoppably(rows: Iterable[Observation], stopped: Callable[[], bool]) -> tuple[tuple[str, IpOwner], ...]:
+    """Владельцы сетей, но с «Стопом» и своим сроком: эталоны бывают закрыты и молчат подолгу."""
+    cancel = SocketCancel()
+    finished = threading.Event()
+
+    def _watch() -> None:
+        until = time.monotonic() + OWNERS_BUDGET_S
+        while not finished.wait(0.2):
+            if stopped() or time.monotonic() >= until:
+                cancel.cancel()
+                return
+
+    threading.Thread(target=_watch, name="dns-owner-stop", daemon=True).start()
+    try:
+        return _lookup_owners(rows, cancel)
+    finally:
+        finished.set()
+
+
 def _lookup_owners(rows: Iterable[Observation], cancel: SocketCancel) -> tuple[tuple[str, IpOwner], ...]:
     addresses = list(
         dict.fromkeys(ip for row in rows for ip in (row.udp_egress, row.secure_egress) if ip)
@@ -560,6 +581,18 @@ def _lookup_owners(rows: Iterable[Observation], cancel: SocketCancel) -> tuple[t
 # ---------------------------------------------------------------------------
 # Выводы
 # ---------------------------------------------------------------------------
+
+
+# Пути сравнения, которые по дороге не подменить. Обычный TCP:53 сюда не входит:
+# перехватчик подменяет его так же, как UDP, — по нему видно лишь, что UDP режут отдельно.
+_ENCRYPTED_PATHS = frozenset({TRANSPORT_DOH, TRANSPORT_DOT})
+
+
+def _path_words(row: Observation) -> tuple[str, str]:
+    """Как назвать путь сравнения: («по шифрованному пути», «шифрованные») или то же про TCP."""
+    if row.secure_via in _ENCRYPTED_PATHS:
+        return "по шифрованному пути", "шифрованные"
+    return "по TCP", "запросы по TCP"
 
 
 def _owner_name(owner: IpOwner | None) -> str:
@@ -608,8 +641,11 @@ def _self_filtered_domains(row: Observation, resolvable: frozenset[str]) -> list
 
     Шифрованный ответ по дороге не подменить, значит так решил сам сервер. Чтобы
     не записать в фильтрацию сайт, которого и правда нет, берём только сайты,
-    настоящий адрес которых в этой же проверке дал другой сервер.
+    настоящий адрес которых в этой же проверке дал другой сервер. Если сравнивали
+    по обычному TCP, вывода нет: такой ответ мог подменить и перехватчик.
     """
+    if row.secure_via not in _ENCRYPTED_PATHS:
+        return []
     filtered: list[str] = []
     for fact in row.domains:
         if fact.domain not in resolvable:
@@ -646,6 +682,7 @@ def judge_row(row: Observation, owner_of, resolvable: frozenset[str] = frozenset
         alive = " (на пинг при этом отвечает)" if row.cell(TRANSPORT_ICMP).ok else ""
         return (Finding(LEVEL_FAIL, CODE_DEAD, f"не отвечает ни одним способом{alive}"),)
 
+    path, path_requests = _path_words(row)
     spoofed = _spoofed_domains(row)
     if spoofed:
         findings.append(
@@ -653,7 +690,7 @@ def judge_row(row: Observation, owner_of, resolvable: frozenset[str] = frozenset
                 LEVEL_FAIL,
                 CODE_SPOOFED,
                 f"обычные ответы подменяются: про {', '.join(spoofed)} приходит «сайта нет» или заглушка, "
-                "хотя по шифрованному пути тот же сервер даёт настоящий адрес",
+                f"хотя {path} тот же сервер даёт настоящий адрес",
             )
         )
     filtered = _self_filtered_domains(row, resolvable)
@@ -675,7 +712,7 @@ def judge_row(row: Observation, owner_of, resolvable: frozenset[str] = frozenset
                 LEVEL_INFO,
                 CODE_FOREIGN_ANSWERS,
                 f"обычные запросы выполняет сеть {_owner_name(foreign)}, "
-                f"а шифрованные — {_owner_name(owner_of(row.secure_egress))}",
+                f"а {path_requests} — {_owner_name(owner_of(row.secure_egress))}",
             )
         )
     if udp.failed:
@@ -995,7 +1032,9 @@ def run_server_check(
     rows = tuple(state.rows[index] for index in sorted(state.rows))
     owners: tuple[tuple[str, IpOwner], ...] = ()
     if not user_stopped:
-        owners = _lookup_owners(rows, SocketCancel())
+        owners = _lookup_owners_stoppably(rows, stopped)
+        # «Стоп», нажатый во время поиска владельцев сетей, — тоже остановка: выводов нет.
+        user_stopped = stopped()
     owner_map = dict(owners)
     resolvable = resolvable_domains(rows)
     rows = tuple(replace(row, findings=judge_row(row, owner_map.get, resolvable)) for row in rows)

@@ -108,6 +108,14 @@ def build_verdict(report: ServerCheckReport) -> Verdict:
         )
     if not report.rows:
         return Verdict(KIND_EMPTY, "Проверять нечего", "В списке нет ни одного DNS-сервера.")
+    if report.timed_out:
+        # Часть адресов не проверена: «всё в порядке» по половине списка было бы неправдой.
+        return Verdict(
+            KIND_STOPPED,
+            "Проверка не успела закончиться",
+            f"Вышло отведённое время. В карточках ниже — то, что успели узнать: {done} из {total} адресов. "
+            "Выводы делаются только по полной проверке — запустите её ещё раз.",
+        )
 
     items = tuple(split_finding(finding) for finding in report.findings)
     codes = {finding.code for finding in report.findings}

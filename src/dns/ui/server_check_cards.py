@@ -64,7 +64,7 @@ _ICON_TILE = 40
 _ICON = 22
 _TRANSPORT_LABELS = ("UDP", "TCP", "DoT", "DoH")
 # Полоса «насколько всё плохо» читается слева направо: от рабочих к молчащим.
-_BAR_ORDER = (plans.CARD_OK, plans.CARD_SELF, plans.CARD_PARTIAL, plans.CARD_NETWORK, plans.CARD_SILENT)
+_BAR_ORDER = (plans.CARD_OK, plans.CARD_SELF, plans.CARD_PARTIAL, plans.CARD_NETWORK, plans.CARD_SILENT, plans.CARD_UNKNOWN)
 _REVEAL_MS = 420
 _REVEAL_STEP_MS = 55
 _REVEAL_ROWS = 9
@@ -394,7 +394,7 @@ class _CardDelegate(QStyledItemDelegate):
     def _road(self, painter: QPainter, rect: QRectF, status: str, accent: QColor, phase: float) -> None:
         y = rect.center().y()
         start, end = rect.left() + 30, rect.right() - 30
-        silent = status == plans.CARD_SILENT
+        silent = status in (plans.CARD_SILENT, plans.CARD_UNKNOWN)
 
         # Компьютер слева, сервер справа.
         outline = QPen(_text_color(150), 1.4)

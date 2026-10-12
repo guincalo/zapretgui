@@ -447,7 +447,7 @@ class RowVerdictTests(unittest.TestCase):
     def test_server_refusing_a_site_even_over_encrypted_path_filters_it_itself(self) -> None:
         refused = sc.DomainFact("rutor.info", udp_status=STATUS_NXDOMAIN, secure_status=STATUS_NXDOMAIN)
         stub = sc.DomainFact("rezka.ag", udp_status=STATUS_OK, udp_ips=("0.0.0.0",), secure_status=STATUS_OK, secure_ips=("0.0.0.0",))
-        row = _row(domains=(refused, stub))
+        row = _row(domains=(refused, stub), secure_via=sc.TRANSPORT_DOH)
 
         # Сайта может и правда не быть: без подтверждения от другого сервера вывода нет.
         self.assertEqual(sc.judge_row(row, OWNERS.get), ())
@@ -458,6 +458,20 @@ class RowVerdictTests(unittest.TestCase):
         self.assertEqual((finding.level, finding.code), (sc.LEVEL_INFO, sc.CODE_SELF_FILTER))
         self.assertIn("rutor.info, rezka.ag", finding.text)
         self.assertIn("решение самого сервера", finding.text)
+
+    def test_plain_tcp_is_not_an_encrypted_path(self) -> None:
+        # DoH и DoT не ответили — сравнивали по обычному TCP:53. Его перехватчик подменяет
+        # так же, как UDP: «сам фильтрует» по нему не выводится, а подмена названа «по TCP».
+        refused = sc.DomainFact("rutor.info", udp_status=STATUS_NXDOMAIN, secure_status=STATUS_NXDOMAIN)
+        row = _row(domains=(refused,), secure_via=sc.TRANSPORT_TCP)
+        self.assertEqual(sc.judge_row(row, OWNERS.get, frozenset({"rutor.info"})), ())
+
+        spoof = sc.DomainFact("rutor.info", udp_status=STATUS_NXDOMAIN, secure_status=STATUS_OK, secure_ips=("6.6.6.6",))
+        (finding,) = sc.judge_row(_row(domains=(spoof,), secure_via=sc.TRANSPORT_TCP), OWNERS.get)
+        self.assertEqual(finding.code, sc.CODE_SPOOFED)
+        self.assertIn("хотя по TCP тот же сервер", finding.text)
+        (finding,) = sc.judge_row(_row(domains=(spoof,), secure_via=sc.TRANSPORT_DOT), OWNERS.get)
+        self.assertIn("хотя по шифрованному пути тот же сервер", finding.text)
 
     def test_resolvable_sites_are_those_some_server_really_resolved(self) -> None:
         honest = _row(GOOGLE, domains=(sc.DomainFact("rutor.info", secure_status=STATUS_OK, secure_ips=("6.6.6.6",)),))
@@ -741,3 +755,57 @@ class RunTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class IncompleteCheckTests(unittest.TestCase):
+    """«Не узнали» — отдельный исход: недопроверенное не выдаётся за «всё в порядке»."""
+
+    def test_unprobed_address_is_not_shown_as_working(self) -> None:
+        from dns import server_check_plans as plans
+
+        unprobed = sc.Observation(target=GOOGLE, cells=tuple((transport, sc.Cell()) for transport in plans.TRANSPORTS))
+        report = sc.ServerCheckReport(rows=(unprobed,), total=1, finished=True)
+        (card,) = plans.build_cards(report)
+        self.assertEqual(card.status, plans.CARD_UNKNOWN)
+        (row,) = plans.build_rows(report)
+        self.assertNotEqual(row.note, "Без замечаний")
+
+    def test_timed_out_check_does_not_say_all_is_well(self) -> None:
+        from diagnostics.history import server_check_entry
+        from dns.server_check_verdict import KIND_STOPPED, build_verdict
+
+        report = sc.ServerCheckReport(rows=(_judged(_row()),), total=40, finished=True, timed_out=True)
+        verdict = build_verdict(report)
+        self.assertEqual(verdict.kind, KIND_STOPPED)
+        self.assertIn("1 из 40", verdict.detail)
+        entry = server_check_entry(report)
+        self.assertEqual((entry["level"], entry["headline"]), ("unknown", "Проверка не успела закончиться"))
+
+
+class OwnerPhaseStopTests(unittest.TestCase):
+    """Поиск владельцев сетей идёт после опроса серверов и тоже слушается «Стопа»."""
+
+    def test_stop_cancels_the_owner_lookup(self) -> None:
+        import time as _time
+
+        def slow_lookup(_rows, cancel):
+            while not cancel.cancelled:
+                _time.sleep(0.01)
+            return ()
+
+        started = _time.monotonic()
+        with patch.object(sc, "_lookup_owners", slow_lookup):
+            self.assertEqual(sc._lookup_owners_stoppably((), lambda: True), ())
+        self.assertLess(_time.monotonic() - started, 2.0)
+
+    def test_stop_during_owner_lookup_marks_the_report_stopped(self) -> None:
+        pressed = {"now": False}
+
+        def lookup(_rows, _cancel):
+            pressed["now"] = True
+            return ()
+
+        with patch.object(sc, "_lookup_owners", lookup):
+            report = RunTests()._run(_Net(), should_stop=lambda: pressed["now"])
+        self.assertTrue(report.stopped)
+        self.assertEqual(report.findings, ())

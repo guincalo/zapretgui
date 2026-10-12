@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 from datetime import datetime
 
-from diagnostics.levels import FAIL, is_open, worst
+from diagnostics.levels import FAIL, UNKNOWN, WARN, is_open, level_rank, worst
 from diagnostics.services import SCOPE_TITLES
 
 __all__ = [
@@ -110,17 +110,21 @@ def server_check_entry(report, *, when: datetime | None = None) -> dict | None:
     if not getattr(report, "finished", False) or getattr(report, "stopped", False) or not report.rows:
         return None
     findings = list(report.findings)
-    order = {"fail": 0, "warn": 1}
-    worst = min(findings, key=lambda item: order.get(str(item.level), 2), default=None)
-    level = str(worst.level) if worst is not None and str(worst.level) in order else "ok"
-    headline = (worst.title or worst.text) if worst is not None and level != "ok" else "Замечаний нет"
+    # Сведения («info») в итог прогона не идут: в истории — только то, что мешает.
+    serious = [item for item in findings if str(item.level) in (FAIL, WARN)]
+    level = worst(item.level for item in serious)
+    first = min(serious, key=lambda item: level_rank(item.level), default=None)
+    headline = (first.title or first.text) if first is not None else "Замечаний нет"
+    if getattr(report, "timed_out", False):
+        # Часть адресов не проверена: «замечаний нет» по половине списка было бы неправдой.
+        level, headline = UNKNOWN, "Проверка не успела закончиться"
     return {
         "kind": KIND_SERVERS,
         "time": (when or datetime.now()).isoformat(timespec="seconds"),
         "title": f"Адресов проверено: {len(report.rows)}",
         "level": level,
         "headline": str(headline),
-        "problems": [str(item.title or item.text) for item in findings if str(item.level) in order],
+        "problems": [str(item.title or item.text) for item in serious],
         "states": {},
         "log_file": "",
     }

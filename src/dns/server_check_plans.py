@@ -131,13 +131,16 @@ CARD_SELF = "self"
 CARD_PARTIAL = "partial"
 CARD_OK = "ok"
 CARD_SILENT = "silent"
-CARD_ORDER = (CARD_NETWORK, CARD_PARTIAL, CARD_SELF, CARD_OK, CARD_SILENT)
+# До адреса проверка не дошла (её остановили или вышло время): о нём ничего не известно.
+CARD_UNKNOWN = "unknown"
+CARD_ORDER = (CARD_NETWORK, CARD_PARTIAL, CARD_SELF, CARD_OK, CARD_SILENT, CARD_UNKNOWN)
 CARD_TITLES = {
     CARD_NETWORK: "Блокируется по дороге",
     CARD_SELF: "Сам не отдаёт часть сайтов",
     CARD_PARTIAL: "Работает не полностью",
     CARD_OK: "Работает",
     CARD_SILENT: "Не отвечает",
+    CARD_UNKNOWN: "Не проверен",
 }
 # Короткие подписи для фильтра и полосы «насколько всё плохо».
 CARD_GROUPS = {
@@ -146,6 +149,7 @@ CARD_GROUPS = {
     CARD_PARTIAL: "Не полностью",
     CARD_OK: "Работают",
     CARD_SILENT: "Молчат",
+    CARD_UNKNOWN: "Не проверены",
 }
 CARD_HINTS = {
     CARD_NETWORK: (
@@ -159,6 +163,7 @@ CARD_HINTS = {
     ),
     CARD_OK: "Отвечает всеми способами, ответы никто не подменяет.",
     CARD_SILENT: "Не отвечает ни одним способом: сервер выключен или закрыт для вашей сети целиком.",
+    CARD_UNKNOWN: "Проверка закончилась раньше, чем дошла до этого адреса, — о нём ничего не известно.",
 }
 # Находки, в которых сеть по дороге виновата доказанно: сервер сам себе противоречит
 # или без имени тот же адрес отвечает.
@@ -326,7 +331,8 @@ def build_rows(report: ServerCheckReport) -> tuple[ServerRow, ...]:
             note = " · ".join(_SHORT_NOTES.get(finding.code) or _sentence(finding.text) for finding in shown)
             note_level = shown[0].level
         else:
-            note = "Без замечаний" if report.finished and not row.findings else ""
+            checked = any(row.cell(transport).state in (STATE_OK, STATE_FAIL) for transport in TRANSPORTS)
+            note = "Без замечаний" if report.finished and checked and not row.findings else ""
             note_level = LEVEL_OK
         rows.append(
             ServerRow(
@@ -346,7 +352,8 @@ def build_rows(report: ServerCheckReport) -> tuple[ServerRow, ...]:
 def _address_status(row: Observation, intercepted: bool) -> str:
     dns_cells = [row.cell(transport) for transport in TRANSPORTS if transport != TRANSPORT_ICMP]
     if not any(cell.state == STATE_OK for cell in dns_cells):
-        return CARD_SILENT if any(cell.state == STATE_FAIL for cell in dns_cells) else CARD_OK
+        # Не ответил ни одним способом — молчит; не спрашивали ни одним — не проверен, а не «работает».
+        return CARD_SILENT if any(cell.state == STATE_FAIL for cell in dns_cells) else CARD_UNKNOWN
     codes = {finding.code for finding in row.findings}
     # Чужая сеть в ответах — вина дороги, только если перехват подтверждён общим итогом.
     if codes & _NETWORK_CODES or (intercepted and CODE_FOREIGN_ANSWERS in codes):
@@ -611,6 +618,7 @@ __all__ = [
     "CARD_SELF",
     "CARD_PARTIAL",
     "CARD_SILENT",
+    "CARD_UNKNOWN",
     "CARD_TITLES",
     "AddressDetails",
     "TRANSPORT_ABOUT",
