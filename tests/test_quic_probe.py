@@ -280,11 +280,45 @@ class CollectTests(unittest.TestCase):
         with ThreadPoolExecutor(4) as pool, patch.object(qp, "quic_hello", hello):
             facts = qp.collect("youtube.com", "203.0.113.5", submit=pool.submit, cancel=SocketCancel())
 
+        # Настоящее имя промолчало, а постороннее прошло — его спрашивают ещё раз.
         self.assertEqual(
             sorted(asked, key=repr),
-            sorted([("203.0.113.5", "youtube.com"), ("203.0.113.5", qp.NEUTRAL_NAME), ("203.0.113.5", None)], key=repr),
+            sorted(
+                [
+                    ("203.0.113.5", "youtube.com"),
+                    ("203.0.113.5", "youtube.com"),
+                    ("203.0.113.5", qp.NEUTRAL_NAME),
+                    ("203.0.113.5", None),
+                ],
+                key=repr,
+            ),
         )
         self.assertEqual((facts.real_ms, facts.neutral_ms, facts.nameless_ms, facts.cancelled), (None, 40.0, 41.0, False))
+        self.assertEqual(qp.judge(facts).code, qp.QUIC_BLOCKED_BY_NAME)
+
+    def test_real_name_answering_on_the_second_try_is_not_a_block(self) -> None:
+        answers = iter([None, 12.0])
+
+        def hello(_ip, name, **_kwargs):
+            return next(answers) if name == "youtube.com" else 40.0
+
+        with ThreadPoolExecutor(4) as pool, patch.object(qp, "quic_hello", hello):
+            facts = qp.collect("youtube.com", "203.0.113.5", submit=pool.submit, cancel=SocketCancel())
+
+        self.assertEqual((facts.real_ms, facts.real_again_ms), (12.0, 12.0))
+        self.assertEqual(qp.judge(facts).code, qp.QUIC_OK)
+
+    def test_silence_everywhere_is_not_asked_again(self) -> None:
+        asked: list = []
+
+        def hello(_ip, name, **_kwargs):
+            asked.append(name)
+
+        with ThreadPoolExecutor(4) as pool, patch.object(qp, "quic_hello", hello):
+            facts = qp.collect("github.com", "203.0.113.5", submit=pool.submit, cancel=SocketCancel())
+
+        self.assertEqual(len(asked), 3)
+        self.assertEqual(qp.judge(facts).code, qp.QUIC_SILENT)
 
 
 if __name__ == "__main__":

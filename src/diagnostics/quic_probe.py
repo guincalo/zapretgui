@@ -56,6 +56,9 @@ class QuicFacts:
     real_ms: float | None = None
     neutral_ms: float | None = None
     nameless_ms: float | None = None
+    # Настоящее имя ещё раз — только когда оно промолчало, а постороннее прошло:
+    # одно молчание UDP ещё не сравнение. None — не ответило или не спрашивали.
+    real_again_ms: float | None = None
     # Проверку сняли раньше, чем она закончилась.
     cancelled: bool = False
 
@@ -117,17 +120,26 @@ def collect(host: str, ip: str, *, submit: Callable, cancel: SocketCancel) -> Qu
     real = submit(quic_hello, ip, host, cancel=cancel)
     neutral = submit(quic_hello, ip, NEUTRAL_NAME, cancel=cancel)
     nameless = submit(quic_hello, ip, None, cancel=cancel)
+    real_ms, neutral_ms, nameless_ms = real.result(), neutral.result(), nameless.result()
+    real_again_ms = None
+    if real_ms is None and (neutral_ms is not None or nameless_ms is not None) and not cancel.cancelled:
+        real_again_ms = quic_hello(ip, host, cancel=cancel)
     return QuicFacts(
         host=host,
-        real_ms=real.result(),
-        neutral_ms=neutral.result(),
-        nameless_ms=nameless.result(),
+        real_ms=real_ms if real_ms is not None else real_again_ms,
+        neutral_ms=neutral_ms,
+        nameless_ms=nameless_ms,
+        real_again_ms=real_again_ms,
         cancelled=cancel.cancelled,
     )
 
 
 def judge(facts: QuicFacts) -> QuicVerdict | None:
-    """Вывод по трём пакетам или None, если проверку сняли."""
+    """Вывод по пакетам или None, если проверку сняли.
+
+    «По имени» говорится, только когда настоящее имя промолчало дважды
+    (``collect`` повторяет его), а постороннее или пустое прошло.
+    """
     if facts.real_ms is not None:
         return QuicVerdict(QUIC_OK, f"отвечает за {max(1, round(facts.real_ms))} мс")
     if facts.cancelled:
@@ -136,7 +148,7 @@ def judge(facts: QuicFacts) -> QuicVerdict | None:
         other = "с посторонним именем" if facts.neutral_ms is not None else "без имени"
         return QuicVerdict(
             QUIC_BLOCKED_BY_NAME,
-            f"блокируется по имени сайта: пакет с именем {facts.host} пропадает, а {other} тот же сервер отвечает",
+            f"блокируется по имени сайта: пакет с именем {facts.host} пропадает и на повторе, а {other} тот же сервер отвечает",
         )
     return QuicVerdict(
         QUIC_SILENT,

@@ -27,6 +27,7 @@ from diagnostics import (
     quic_probe,
     registry,
     report_text,
+    self_check,
     speed_check,
     system_state,
     udp_burst,
@@ -256,8 +257,12 @@ def check_system(
     run: Run, services: dict[str, Service], zapret_running: bool | None = None
 ) -> tuple[system_state.SystemItem, ...]:
     hosts = tuple(dict.fromkeys(target.host for service in services.values() for target in service.targets))
+    # Самопроверка идёт рядом с чтением системы: перехват соединений на компьютере — тоже «Компьютер».
+    intercept = run.submit(self_check.collect, cancel=run.probe_cancel)
     facts = system_state.collect_facts(check_hosts=hosts, clock_skew=lambda: clock_skew(run))
-    return system_state.judge(facts, zapret_running=zapret_running)
+    items = system_state.judge(facts, zapret_running=zapret_running)
+    extra = self_check.judge(intercept.result())
+    return (*items, extra) if extra is not None else items
 
 
 SYSTEM_ICON = {
