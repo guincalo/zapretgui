@@ -58,13 +58,6 @@ ADVICE_FINGERPRINT = (
 BYPASSABLE = (ReachState.DPI, ReachState.FREEZE)
 
 
-# Блокировки, которые VPN или прокси обходит своей дорогой: при них вывод верен только для прямого пути.
-_DIRECT_ROAD_KINDS = (block_kind.KIND_IP, block_kind.KIND_NO_CONNECT, block_kind.KIND_SNI, block_kind.KIND_VOICE)
-ADVICE_OTHER_TOOLS = (
-    "Это результат прямой дороги: проверка идёт мимо запущенных {tools}. Если в браузере или приложении всё "
-    "работает, значит, его ведёт одна из этих программ — блокировка на линии есть, но вам она не мешает."
-)
-
 
 def _zapret_action(zapret_running: bool | None) -> str:
     """Кнопка у обходимой блокировки. «Запустить» — только когда точно известно, что Zapret не запущен."""
@@ -79,7 +72,7 @@ def burst_problems(burst) -> list[dict]:
         problem(
             Level.WARN,
             f"UDP замирает: {burst.text}",
-            ("Подберите стратегию для звонков: «Подбор стратегии» → «Голосовые звонки Discord и Telegram (STUN)».",),
+            ("Нажмите «Подобрать стратегию для звонков» — нужный пункт «Голосовые звонки» выберется сам.",),
             action="strategy_voice",
             kind=block_kind.KIND_VOICE,
             section=SECTION_VOICE,
@@ -186,13 +179,11 @@ def collect_problems(
     ipv6: ipv6_check.Ipv6Verdict | None = None,
     system: tuple[system_state.SystemItem, ...] = (),
     telegram: telegram_check.TelegramReport | None = None,
-    other_tools=(),
 ) -> tuple[list[dict], list[str], list[str]]:
     """Итог для экрана: проблемы по важности, открывающиеся сервисы, подменённые DNS.
 
-    ``other_tools`` — запущенные VPN и программы обхода. Проверка ходит в сеть
-    напрямую, а они умеют вести отдельные программы (например, браузер) своей
-    дорогой: при них «не соединяется» у нас не значит «не открывается в браузере».
+    О запущенных VPN и программах обхода итог говорит один раз, над строками
+    (``summary_model.bypass_warning`` / ``bypass_note``), а не в каждой строке.
     """
     problems: list[dict] = []
 
@@ -291,6 +282,9 @@ def collect_problems(
                     item for item in advice if item not in ADVICE_VIA_ZAPRET
                 )
                 action = "hosts"
+            if not action and verdict.kind == block_kind.KIND_DNS:
+                # Адрес сайта не узнать — помогает другой DNS: кнопка ведёт в его настройку.
+                action = "dns"
             if not action and key == TELEGRAM_SITE and (verdict.kind or block_kind.KIND_OTHER) in _TELEGRAM_PROXY_KINDS:
                 # Telegram закрывают по адресу: стратегия тут бессильна, а у программы есть свой прокси.
                 action = "telegram_proxy"
@@ -500,11 +494,6 @@ def collect_problems(
                 section=SECTION_DNS,
             )
         )
-    tools = ", ".join(other_tools)
-    if tools:
-        for item in problems:
-            if item["kind"] in _DIRECT_ROAD_KINDS:
-                item["advice"].append(ADVICE_OTHER_TOOLS.format(tools=tools))
     problems.sort(key=lambda item: level_rank(item["level"]))
     return problems, working, spoofed
 

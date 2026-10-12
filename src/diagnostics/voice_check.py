@@ -116,7 +116,7 @@ def summarize_voice(servers: tuple[VoiceServer, ...]) -> VoiceReport:
     general_ok = any(item.answered for item in general) if general else True
     telegram_ok = any(item.answered for item in telegram) if telegram else True
     strategy_advice = (
-        "Подберите стратегию для звонков: «Подбор стратегии» → «Голосовые звонки Discord и Telegram (STUN)».",
+        "Нажмите «Подобрать стратегию для звонков» — нужный пункт «Голосовые звонки» выберется сам.",
     )
     if not general_ok:
         return VoiceReport(

@@ -1321,19 +1321,15 @@ class EngineScenarioTests(unittest.TestCase):
         self.assertEqual(discord["targets"][0]["state"], "dpi")
         self.assertNotIn("Discord", result["working"])
 
-    def test_blocks_found_while_vpn_tools_run_are_marked_as_direct_road_only(self) -> None:
-        # Проверка ходит напрямую, а VPN умеет вести браузер своей дорогой: «не соединяется»
-        # у нас при нём не значит «не открывается у человека». Без VPN оговорки нет.
-        def advice(tools):
-            net = _Net(https=lambda host, ip: ProbeResult(ip=ip, kind=KIND_RESET))
-            net.bypass_tools = tools
-            result = net.run(engine.run_blockcheck, "main", emit=lambda _line: None)
-            return [line for item in result["problems"] for line in item["advice"] if "прямой дороги" in line]
+    def test_vpn_caveat_is_said_once_above_not_in_every_row(self) -> None:
+        # О запущенных VPN итог говорит одной строкой над проблемами (bypass_warning/bypass_note),
+        # а не повтором в каждой строке: в отчёте есть список программ, в советах сайтов — нет.
+        net = _Net(https=lambda host, ip: ProbeResult(ip=ip, kind=KIND_RESET))
+        net.bypass_tools = ("sing-box", "WireGuard")
+        result = net.run(engine.run_blockcheck, "main", emit=lambda _line: None)
 
-        marked = advice(("sing-box", "WireGuard"))
-        self.assertTrue(marked)
-        self.assertIn("sing-box, WireGuard", marked[0])
-        self.assertEqual(advice(()), [])
+        self.assertEqual(result["other_bypass_tools"], ["sing-box", "WireGuard"])
+        self.assertFalse([line for item in result["problems"] for line in item["advice"] if "sing-box" in line])
 
     def test_dpi_reset_retries_once_on_another_address_and_reports_strategy(self) -> None:
         lines: list[str] = []
@@ -2128,3 +2124,11 @@ class IcmpAddressTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class NoAddressGoesToDnsTests(unittest.TestCase):
+    def test_site_without_an_address_is_a_dns_problem_with_a_dns_button(self) -> None:
+        net = _Net(system=(), reference=())
+        result = net.run(engine.run_blockcheck, "main", emit=lambda _line: None)
+        discord = next(item for item in result["problems"] if item.get("site") == "discord")
+        self.assertEqual((discord["kind"], discord["action"]), ("dns", "dns"))

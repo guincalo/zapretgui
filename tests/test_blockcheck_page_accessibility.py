@@ -322,13 +322,14 @@ class SummaryPanelTests(unittest.TestCase):
 
         rows = panel.problem_rows()
         rows[0].action_button.click()
-        # У предупреждения про DNS — кнопка «Настройка DNS», у строки «Открываются» кнопки нет.
-        # Она одна на группу и стоит в её заголовке, а не в карточке находки.
+        # У предупреждения про DNS — кнопка «Настройка DNS». Она одна на группу и стоит
+        # в её заголовке, а не в карточке находки.
         [dns_group] = [group for group in panel.problem_groups() if group.shared_action_button is not None]
         self.assertEqual(dns_group.shared_action_button.text(), "Настройка DNS")
         dns_group.shared_action_button.click()
         self.assertIsNone(rows[1].action_button)
-        self.assertIsNone(rows[2].action_button)
+        # Отдельной строки «Открываются: …» нет: открывающиеся сайты показывают плитка и полоса.
+        self.assertEqual(len(rows), 2)
         self.assertEqual(calls, [("strategy", "x.com"), ("dns", "")])
         self.assertIn("Zapret включён", panel.env_label.text())
 
@@ -466,8 +467,8 @@ class BlockKindsOnScreenTests(unittest.TestCase):
         # В группе из одного сайта совет не выносится в заголовок: он в подсказке карточки.
         self.assertEqual(groups[0].shared_advice_lines, [])
         self.assertIn("→ Попробуйте другой DNS", groups[0].rows[0].hint_text)
-        # Все строки по-прежнему доступны списком: группы, затем «Открываются».
-        self.assertEqual(len(panel.problem_rows()), 6)
+        # Все строки по-прежнему доступны списком, по группам.
+        self.assertEqual(len(panel.problem_rows()), 5)
 
     def test_problem_without_kind_gets_its_own_titled_group(self) -> None:
         panel = BlockcheckSummaryPanel()
@@ -773,3 +774,43 @@ class RunWorkflowTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class HonestSummaryTests(unittest.TestCase):
+    """Итог не пугает зря и не молчит, когда ничего не изменилось."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.app = QApplication.instance() or QApplication([])
+
+    def test_sites_open_and_only_side_remarks_is_not_a_red_alarm(self) -> None:
+        panel = BlockcheckSummaryPanel()
+        self.addCleanup(panel.deleteLater)
+        report = {
+            "problems": [{"level": "warn", "text": "IPv6 не работает", "kind": "network", "section": "ipv6", "advice": []}],
+            "services": [{"key": "youtube", "label": "YouTube", "level": "ok", "targets": []}],
+        }
+        panel.show_report(report)
+        self.assertEqual(panel.title_label.text(), "Сайты открываются, есть замечания: 1")
+
+    def test_nothing_changed_since_the_same_check_is_said(self) -> None:
+        panel = BlockcheckSummaryPanel()
+        self.addCleanup(panel.deleteLater)
+        report = {**_REPORT, "changes": [], "previous_time": "2026-10-12T10:00:00"}
+        panel.show_report(report)
+        self.assertIn("ничего не изменилось", panel.changes_label.text())
+        self.assertFalse(panel.changes_label.isHidden())
+
+
+class StartZapretButtonTests(unittest.TestCase):
+    def test_start_button_starts_zapret(self) -> None:
+        from blockcheck.ui.page import BlockcheckPage
+
+        page = BlockcheckPage.__new__(BlockcheckPage)
+        started = []
+        page._start_zapret = lambda: started.append(True) or True
+        page.window = lambda: None
+        with patch("blockcheck.ui.page.InfoBarHelper") as bar:
+            BlockcheckPage._on_problem_action(page, "start_zapret", "")
+        self.assertEqual(started, [True])
+        bar.success.assert_called_once()

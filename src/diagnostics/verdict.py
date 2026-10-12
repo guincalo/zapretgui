@@ -25,6 +25,7 @@ from enum import Enum
 
 from diagnostics.block_kind import (
     KIND_CUT,
+    KIND_DNS,
     KIND_FINGERPRINT,
     KIND_IP,
     KIND_NO_CONNECT,
@@ -501,10 +502,12 @@ def summarize_service(
         return ServiceVerdict(level, headline, advice, dns_note, kind)
 
     if main.reach == ReachState.NO_ADDRESS:
+        # Адреса нет — это дело DNS: такой сайт идёт в группу «DNS» с кнопкой настройки DNS.
         return ServiceVerdict(
             Level.FAIL,
             f"{label} не открывается: не удалось узнать адрес сервера",
             ("Проверьте подключение к интернету.", _ADVICE_DNS),
             dns_note,
+            KIND_DNS,
         )
     return ServiceVerdict(Level.UNKNOWN, f"{label}: проверка не дала ответа", ("Повторите проверку через минуту.",), dns_note)

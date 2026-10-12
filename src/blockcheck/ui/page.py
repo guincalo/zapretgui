@@ -140,6 +140,7 @@ class BlockcheckPage(BasePage):
         create_geo_sites_worker=None,
         open_dns_settings=None,
         ensure_zapret_for_strategy=None,
+        start_zapret=None,
     ):
         super().__init__(
             title=tr_catalog("page.blockcheck.title", default="BlockCheck"),
@@ -159,6 +160,7 @@ class BlockcheckPage(BasePage):
         self._create_geo_sites_worker = create_geo_sites_worker
         self._open_dns_settings = open_dns_settings
         self._ensure_zapret_for_strategy = ensure_zapret_for_strategy
+        self._start_zapret = start_zapret
         self._last_report: dict | None = None
         self._report_lines: list[str] = []
         # Настоящие прошлые проверки: экскурсия на время подменяет их примером.
@@ -1199,6 +1201,18 @@ class BlockcheckPage(BasePage):
         """Кнопки у проблем в итоге: подбор стратегии с нужной целью, запуск
         Zapret, настройка DNS или редактор hosts."""
         if action == "start_zapret":
+            if self._start_zapret is not None:
+                # Кнопка называется «Запустить» — запускаем, а не отправляем искать кнопку дальше.
+                started = bool(self._start_zapret())
+                show = InfoBarHelper.success if started else InfoBarHelper.warning
+                show(
+                    self.window(),
+                    "Zapret запускается" if started else "Zapret не запустился",
+                    "Когда он заработает, нажмите «Проверить» ещё раз — увидите, помог ли он."
+                    if started
+                    else "Откройте главную страницу: там видно, что мешает запуску.",
+                )
+                return
             from ui.workflows.mode import show_active_mode_control_page
 
             show_active_mode_control_page(self.window(), allow_internal=False)

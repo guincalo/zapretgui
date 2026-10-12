@@ -14,7 +14,6 @@ from qfluentwidgets import BreadcrumbBar, CaptionLabel, FluentIcon, PushButton
 
 from blockcheck.ui.check_results import ActionHandler, BlockcheckSummaryPanel
 from blockcheck.ui.result_cards import ResultCardsView
-from diagnostics.levels import is_open
 from ui.accessibility import set_breadcrumb_accessibility, set_control_accessibility, set_state_text
 from ui.fluent_widgets import set_tooltip
 from ui.widgets.tone_group import mute
@@ -36,7 +35,6 @@ def report_from_history(run: dict) -> dict:
             {"level": level, "text": str(text), "kind": "other", "title": "", "target": "", "advice": [], "evidence": [], "action": ""}
             for text in run.get("problems") or ()
         ],
-        "working": [name for name, state in (run.get("states") or {}).items() if is_open(state)],
         "services": [
             {"key": str(name), "label": str(name), "level": str(state), "kind": "", "targets": []}
             for name, state in (run.get("states") or {}).items()

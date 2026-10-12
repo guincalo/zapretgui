@@ -86,7 +86,7 @@ _UNKNOWN_TITLE = "Не удалось проверить"
 _OPEN_ABOUT = "Эти сайты открылись так же, как открылись бы в браузере."
 _UNKNOWN_ABOUT = "Проверка этих сайтов не дала ответа: не хватило времени или не удалось узнать адрес."
 # Порядок долей и плиток: сначала хорошее, затем виды по тяжести.
-_SITE_ORDER = (GROUP_OPEN, KIND_UNSTABLE, KIND_IP, KIND_SNI, KIND_CUT, KIND_STUB, KIND_CERT, KIND_UNCLEAR, KIND_NO_CONNECT, KIND_OTHER, GROUP_UNKNOWN)
+_SITE_ORDER = (GROUP_OPEN, KIND_UNSTABLE, KIND_IP, KIND_SNI, KIND_CUT, KIND_FINGERPRINT, KIND_STUB, KIND_CERT, KIND_UNCLEAR, KIND_NO_CONNECT, KIND_OTHER, GROUP_UNKNOWN)
 
 
 def _is_light(tokens=None) -> bool:

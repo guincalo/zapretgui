@@ -136,7 +136,7 @@ def is_site_problem(problem: dict) -> bool:
     kind = str(problem.get("kind") or KIND_OTHER)
     if kind in NOT_SITE_KINDS or kind == "voice":
         return False
-    return bool(problem.get("title") or problem.get("target") or problem.get("site_key"))
+    return bool(problem.get("title") or problem.get("target") or problem.get("site_key") or problem.get("site"))
 
 
 def site_name(problem: dict) -> str:

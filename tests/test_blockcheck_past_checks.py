@@ -82,7 +82,6 @@ class PastReportFileTests(unittest.TestCase):
     def test_history_record_alone_still_gives_something_to_show(self) -> None:
         shown = report_from_history(RUNS[0])
         self.assertEqual([service["label"] for service in shown["services"]], ["Telegram", "Discord", "YouTube"])
-        self.assertEqual(shown["working"], ["YouTube"])
         self.assertEqual([problem["text"] for problem in shown["problems"]], ["a", "b"])
 
 

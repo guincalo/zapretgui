@@ -773,7 +773,6 @@ def run_blockcheck(
             ipv6=ipv6,
             system=system,
             telegram=telegram,
-            other_tools=other_tools,
         )
         problems = _with_section_problems(
             problems, burst=burst, dns_servers=dns_servers, speed=speed, crowd=crowd, zapret_running=zapret_running

@@ -93,7 +93,7 @@ _ACTION_TEXT = {
 _ACTION_DESCRIPTION = {
     "strategy": "Открывает подбор стратегии",
     "strategy_voice": "Открывает подбор стратегии для голосовых звонков",
-    "start_zapret": "Открывает страницу управления Zapret",
+    "start_zapret": "Запускает Zapret с выбранным пресетом",
     "dns": "Открывает раздел «Настройка DNS», где включается DNS с шифрованием",
     "hosts": "Открывает «Редактор hosts», где сервису включается DNS-профиль",
     "telegram_proxy": "Открывает «Telegram Proxy»: Telegram закрыт по адресу, и обход Zapret ему обычно не помогает",
@@ -617,8 +617,7 @@ class _ProblemRow(QWidget):
     """Находка не про один сайт (DNS, компьютер, сеть, звонки): точка важности, заголовок, пояснение, совет, кнопка.
 
     Перечень DNS-серверов и сайтов показан метками. ``grouped`` — строка стоит
-    в группе: заголовок отделяется от пояснения. ``bare`` — строка вне группы:
-    «Открываются: …» под проблемами. ``card_key`` — карточка с полным отчётом:
+    в группе: заголовок отделяется от пояснения. ``card_key`` — карточка с полным отчётом:
     строка подсвечивается под мышью и открывает его по нажатию или Enter.
     """
 
@@ -630,7 +629,6 @@ class _ProblemRow(QWidget):
         *,
         grouped: bool = False,
         hidden_advice=(),
-        bare: bool = False,
         divided: bool = False,
         card_key: str = "",
         on_open: OpenHandler | None = None,
@@ -653,7 +651,7 @@ class _ProblemRow(QWidget):
         )
         layout = QHBoxLayout(self)
         # ``compact`` — действие и отчёт стоят в заголовке группы: строка ниже и не нажимается.
-        pad = 2 if bare else 6 if compact else 9
+        pad = 6 if compact else 9
         layout.setContentsMargins(0, pad, 0, pad)
         layout.setSpacing(12)
 
@@ -661,7 +659,7 @@ class _ProblemRow(QWidget):
         hollow = self._level not in ("fail", "ok")
         self.icon: BrandIcon | None = None
         self.dot: ToneDot | None = None
-        brand = None if bare else problem_brand(problem)
+        brand = problem_brand(problem)
         if brand is not None:
             self.icon = BrandIcon(brand[0], brand[1], self, size=18)
             layout.addWidget(self.icon, 0, Qt.AlignmentFlag.AlignTop)
@@ -669,19 +667,18 @@ class _ProblemRow(QWidget):
             # Ошибка — закрашенная точка, остальное — кольцо; слово важности в подсказке.
             self.dot = ToneDot(lambda tokens: tone_color(tone, tokens) or _NEUTRAL_DOT, self, hollow=hollow)
             holder = dot_on_first_line(self.dot)
-            if not bare:
-                holder.setFixedWidth(18)
-                self.dot.move(5, self.dot.y())
-                set_tooltip(holder, _LEVEL_WORDS.get(self._level, ""))
+            holder.setFixedWidth(18)
+            self.dot.move(5, self.dot.y())
+            set_tooltip(holder, _LEVEL_WORDS.get(self._level, ""))
             layout.addWidget(holder, 0, Qt.AlignmentFlag.AlignTop)
 
         texts = QVBoxLayout()
         texts.setSpacing(3)
-        if bare or not grouped:
+        if not grouped:
             title, servers, more, rest = str(problem.get("text") or ""), [], 0, ""
         else:
             title, servers, more, rest, _detail = problem_parts(problem)
-        self.text_label = BodyLabel(title, self) if bare or not grouped else StrongBodyLabel(title, self)
+        self.text_label = BodyLabel(title, self) if not grouped else StrongBodyLabel(title, self)
         self.text_label.setWordWrap(True)
         self.text_label.setTextInteractionFlags(text_flags)
         texts.addWidget(self.text_label)
@@ -1032,7 +1029,6 @@ class BlockcheckSummaryPanel(_HeightKeeper, QWidget):
         self._problems_layout.setSpacing(14)
         outer.addWidget(self._problems_host)
         self._groups: list[_ProblemGroup] = []
-        self._bare_rows: list[_ProblemRow] = []
         self.small_groups: ColumnsFlow | None = None
 
         self._theme_refresh = ThemeRefreshBinding(self, self._apply_theme_refresh)
@@ -1046,7 +1042,7 @@ class BlockcheckSummaryPanel(_HeightKeeper, QWidget):
         rows = []
         for group in self._groups:
             rows.extend(group.rows)
-        return [*rows, *self._bare_rows]
+        return rows
 
     def scroll_to_group(self, kind: str) -> bool:
         """Нажатие на плитку вида блокировки: страница прокручивается к его группе. ``False`` — группы нет."""
@@ -1094,12 +1090,17 @@ class BlockcheckSummaryPanel(_HeightKeeper, QWidget):
 
     def _show_changes(self, report: dict | None) -> None:
         changes = [str(item) for item in (report or {}).get("changes") or ()]
+        previous_time = str((report or {}).get("previous_time") or "")
         text = ""
-        if changes:
+        if changes or previous_time:
             from diagnostics.history import format_time
 
-            when = format_time(str((report or {}).get("previous_time") or ""))
-            text = f"С прошлой проверки ({when}) {'; '.join(changes)}."
+            when = format_time(previous_time)
+            if changes:
+                text = f"С прошлой проверки ({when}) {'; '.join(changes)}."
+            elif any(item.get("level") in ("fail", "warn") for item in (report or {}).get("problems") or ()):
+                # После подбора или настройки важно знать и это: помогло не стало.
+                text = f"С прошлой такой же проверки ({when}) ничего не изменилось."
         self.changes_label.setText(text)
         self.changes_label.setVisible(bool(text))
 
@@ -1115,7 +1116,6 @@ class BlockcheckSummaryPanel(_HeightKeeper, QWidget):
             if widget is not None:
                 widget.deleteLater()
         self._groups = []
-        self._bare_rows = []
         self.small_groups = None
         self._problems_host.setVisible(False)
 
@@ -1178,6 +1178,13 @@ class BlockcheckSummaryPanel(_HeightKeeper, QWidget):
             level, title, mood, fun = "ok", "Всё открывается", MOOD_HAPPY, "bc_ok"
         elif not blocking:
             level, title, mood, fun = "unknown", "Часть проверок не дала ответа", MOOD_IDLE, "bc_unknown"
+        elif not any(is_site_problem(item) for item in blocking) and not any(
+            str(service.get("level") or "") in ("fail", "warn")
+            for service in report.get("services") or ()
+            if not service.get("control")
+        ):
+            # Сайты открываются, а замечания — про DNS-серверы, IPv6, компьютер: не красная тревога.
+            level, title, mood, fun = "warn", f"Сайты открываются, есть замечания: {len(blocking)}", MOOD_SAD, "bc_problems"
         else:
             level = "fail" if any(item.get("level") == "fail" for item in blocking) else "warn"
             title = f"Найдены проблемы: {len(blocking)}"
@@ -1241,13 +1248,6 @@ class BlockcheckSummaryPanel(_HeightKeeper, QWidget):
                     rows.append(group)
         else:
             rows = list(self._groups)
-        working = list(report.get("working") or ())
-        if working and problems:
-            bare = _ProblemRow(
-                {"level": "ok", "text": f"Открываются: {', '.join(working)}"}, None, self._problems_host, bare=True
-            )
-            self._bare_rows = [bare]
-            rows.append(bare)
         for row in rows:
             self._problems_layout.addWidget(row)
         self._problems_host.setVisible(bool(rows))
