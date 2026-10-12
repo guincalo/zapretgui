@@ -362,6 +362,33 @@ class CollectTests(unittest.TestCase):
             facts = bc.collect("discord.com", result, submit=pool.submit, cancel=SocketCancel(), **patches)
         return facts, calls
 
+    def test_hellos_to_one_address_leave_one_after_another(self) -> None:
+        """Шесть приветствий к одному адресу разом — сами повод для фильтра придержать их все."""
+        import time
+        from itertools import pairwise
+        from unittest.mock import patch
+
+        started: list[float] = []
+        lock = threading.Lock()
+
+        def hello(_ip, _name, **_kwargs):
+            with lock:
+                started.append(time.monotonic())
+            return ANSWER
+
+        with (
+            ThreadPoolExecutor(8) as pool,
+            patch.object(bc, "tls_hello", hello),
+            patch.object(bc, "http_probe", lambda *_args, **_kwargs: bc.HttpFacts(status=200)),
+            patch.object(bc, "STAGGER_S", 0.05),
+        ):
+            bc.collect("discord.com", _broken(), submit=pool.submit, cancel=SocketCancel())
+
+        started.sort()
+        gaps = [later - earlier for earlier, later in pairwise(started)]
+        self.assertEqual(len(started), 2 + len(bc.ALLOWED_NAMES) + 1)
+        self.assertTrue(all(gap >= 0.03 for gap in gaps), gaps)
+
     def test_failed_encryption_is_retried_with_other_name_and_without_name(self) -> None:
         facts, calls = self._collect(_broken())
 

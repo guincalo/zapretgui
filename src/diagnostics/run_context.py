@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import os
 import threading
 import time
 from collections import deque
@@ -18,7 +19,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 
 from diagnostics import block_cause, block_kind, protocol_probe, quic_probe, volume_probe
-from diagnostics.limits import REFERENCE_AT_ONCE, RUN_DEADLINE
+from diagnostics.limits import NET_AT_ONCE, NET_AT_ONCE_WEAK, REFERENCE_AT_ONCE, RUN_DEADLINE
 from diagnostics.services import Target
 from diagnostics.tls_probe import KIND_CONNECT, ProbeResult
 from diagnostics.verdict import DnsJudgement, ReachState
@@ -307,6 +308,9 @@ class Run:
         self._staged: dict[str, list[tuple[Future, Callable, tuple, dict]]] = {}
         # Вопросы к эталонным DNS-серверам: каждый — отдельное шифрованное соединение.
         self.reference_lane = self.lane(REFERENCE_AT_ONCE)
+        # Мелкие пробы сайтов — общий предел на прогон. Сюда идут только «листья»:
+        # задача из этой очереди не ждёт другую задачу из неё же, иначе взаимная блокировка.
+        self.net_lane = self.lane(NET_AT_ONCE_WEAK if (os.cpu_count() or 1) <= 2 else NET_AT_ONCE)
         # «Стоп» и срок закрывают сокеты сразу, чем бы ни был занят главный поток:
         # раньше их замечал только тот, кто сам спросил, — скорость, реестр и звонки
         # досиживали свои секунды.

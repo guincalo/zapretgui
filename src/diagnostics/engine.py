@@ -325,7 +325,7 @@ def _start_protocols(run: _Run, probe: _Probe) -> Future | None:
     result = probe.reach
     if result is None or not result.ip or run.dns_cancelled():
         return None
-    return run.submit(protocol_probe.collect, probe.host, result.ip, submit=run.submit, cancel=run.probe_cancel)
+    return run.submit(protocol_probe.collect, probe.host, result.ip, submit=run.net_lane.submit, cancel=run.probe_cancel)
 
 
 def _start_quic(run: _Run, probe: _Probe) -> Future | None:
@@ -333,7 +333,7 @@ def _start_quic(run: _Run, probe: _Probe) -> Future | None:
     result = probe.reach
     if result is None or not result.ip or run.dns_cancelled():
         return None
-    return run.submit(quic_probe.collect, probe.host, result.ip, submit=run.submit, cancel=run.probe_cancel)
+    return run.submit(quic_probe.collect, probe.host, result.ip, submit=run.net_lane.submit, cancel=run.probe_cancel)
 
 
 def _refine_cause(run: _Run, probe: _Probe) -> None:
@@ -341,7 +341,9 @@ def _refine_cause(run: _Run, probe: _Probe) -> None:
     result = probe.reach
     if not block_cause.needs_refining(result) or run.dns_cancelled():
         return
-    facts = block_cause.collect(probe.host, result, submit=run.submit, cancel=run.probe_cancel, ping=net_access.ping_ok)
+    facts = block_cause.collect(
+        probe.host, result, submit=run.net_lane.submit, cancel=run.probe_cancel, ping=net_access.ping_ok
+    )
     # Проверку могли снять, пока шли пробы: по обрывкам вывод не делаем.
     if not run.dns_cancelled():
         probe.cause = block_cause.judge(facts)

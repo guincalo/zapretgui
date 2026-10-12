@@ -65,10 +65,6 @@ class LaneTests(unittest.TestCase):
         running.result(timeout=5)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class StagesTests(unittest.TestCase):
     def test_stages_run_one_after_another_and_report_start_and_end(self) -> None:
         from diagnostics.run_context import Steps
@@ -139,3 +135,52 @@ class LiveReportTests(unittest.TestCase):
             raise RuntimeError("экран закрыли")
 
         self.assertEqual(Live(broken).put(done=True), {"done": True})
+
+
+class NetLaneTests(unittest.TestCase):
+    def test_weak_computer_gets_a_smaller_limit(self) -> None:
+        from unittest.mock import patch
+
+        from diagnostics import limits
+
+        for cores, limit in ((1, limits.NET_AT_ONCE_WEAK), (2, limits.NET_AT_ONCE_WEAK), (8, limits.NET_AT_ONCE)):
+            with self.subTest(cores=cores), patch("diagnostics.run_context.os.cpu_count", return_value=cores):
+                run = Run(None, workers=4)
+                self.addCleanup(run.close)
+                self.assertEqual(run.net_lane._limit, limit)
+
+    def test_site_probes_go_through_the_common_limit(self) -> None:
+        from types import SimpleNamespace
+        from unittest.mock import patch
+
+        from diagnostics import block_cause, engine, protocol_probe, quic_probe
+        from diagnostics.tls_probe import KIND_RESET, STAGE_TLS, ProbeResult
+
+        run = Run(None, workers=8)
+        self.addCleanup(run.close)
+        probe = SimpleNamespace(host="discord.com", reach=ProbeResult(ip="203.0.113.5", kind=KIND_RESET, stage=STAGE_TLS))
+        seen = {}
+
+        def remember(name):
+            def fake(*_args, submit, **_kwargs):
+                seen[name] = submit
+
+            return fake
+
+        with (
+            patch.object(quic_probe, "collect", remember("quic")),
+            patch.object(protocol_probe, "collect", remember("protocols")),
+            patch.object(block_cause, "collect", remember("cause")),
+            patch.object(block_cause, "judge", return_value=None),
+        ):
+            engine._start_quic(run, probe).result()
+            engine._start_protocols(run, probe).result()
+            engine._refine_cause(run, probe)
+
+        self.assertEqual(
+            seen, {"quic": run.net_lane.submit, "protocols": run.net_lane.submit, "cause": run.net_lane.submit}
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()

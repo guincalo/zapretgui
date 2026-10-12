@@ -73,6 +73,9 @@ ALLOWED_NAME = "vk.com"
 # Имена, которые пропускают и в режиме «белых списков»: у разных операторов список
 # свой, поэтому пробуется несколько — хватит одного ответившего.
 ALLOWED_NAMES = ("max.ru", "ya.ru", ALLOWED_NAME)
+# Шаг между стартами приветствий к одному адресу: пачка одновременных соединений
+# к одному сайту сама бывает поводом для фильтра придержать их все.
+STAGGER_S = 0.25
 
 HELLO_OK = "ok"  # шифрование установилось
 HELLO_ALERT = "alert"  # сервер отказал сам — но ответил
@@ -345,6 +348,12 @@ def needs_refining(result: ProbeResult | None) -> bool:
     return result.kind in (KIND_RESET, KIND_TIMEOUT, KIND_TLS) and result.stage == STAGE_TLS
 
 
+def later(delay: float, token: SocketCancel, call: Callable, *args, **kwargs):
+    """Вызов через ``delay`` секунд; «Стоп» ждать не заставляет."""
+    token.sleep(delay)
+    return call(*args, **kwargs)
+
+
 def collect(
     host: str,
     result: ProbeResult,
@@ -365,11 +374,14 @@ def collect(
             ping_ok=ping_future.result() if ping_future is not None else None,
         )
     neutral = submit(tls_hello, ip, NEUTRAL_NAME, cancel=cancel)
-    nameless = submit(tls_hello, ip, None, cancel=cancel)
-    allowed = [(name, submit(tls_hello, ip, name, cancel=cancel)) for name in ALLOWED_NAMES]
+    nameless = submit(later, STAGGER_S, cancel, tls_hello, ip, None, cancel=cancel)
+    allowed = [
+        (name, submit(later, (2 + index) * STAGGER_S, cancel, tls_hello, ip, name, cancel=cancel))
+        for index, name in enumerate(ALLOWED_NAMES)
+    ]
     # Настоящее имя ещё раз: один сбой — не сравнение. Вывод «по имени» уверенный,
     # только если оно оборвалось и теперь, пока постороннее имя проходит.
-    real_again = submit(tls_hello, ip, host, cancel=cancel)
+    real_again = submit(later, (2 + len(ALLOWED_NAMES)) * STAGGER_S, cancel, tls_hello, ip, host, cancel=cancel)
     answers = [(name, future.result()) for name, future in allowed]
     allowed_name, allowed_result = next((item for item in answers if item[1].answered), answers[-1])
     return CauseFacts(
