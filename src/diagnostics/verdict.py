@@ -120,6 +120,15 @@ def judge_dns(
                 DnsState.SPOOFED,
                 "DNS отвечает, что такого сайта нет, хотя он существует — сайт заблокирован через DNS",
             )
+        # Адреса не пришло ни разу, и первый ответ — молчание или ошибка сервера, но в
+        # одной из попыток прозвучало «такого сайта нет». То же правило, что выше:
+        # исправный сервер про существующий сайт так не скажет даже один раз.
+        if nxdomain_count and reference_ips:
+            return DnsJudgement(
+                DnsState.SPOOFED,
+                f"DNS не дал адрес, а в {nxdomain_count} из {attempts} попыток ответил «такого сайта нет», "
+                "хотя сайт существует — сайт заблокирован через DNS",
+            )
         return DnsJudgement(DnsState.UNKNOWN, "DNS-сервер не дал адрес, сравнить не с чем")
 
     fake_ips = [ip for ip in system_ips if address_kind(ip) == AddressKind.FAKE_IP]

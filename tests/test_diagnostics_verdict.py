@@ -1186,6 +1186,31 @@ class EngineScenarioTests(unittest.TestCase):
         self.assertTrue(result["summary"]["dns_poisoning_detected"])
         self.assertIn("то правильно, то «такого сайта нет»", "\n".join(lines))
 
+    def test_one_nxdomain_among_answers_without_any_address_is_still_spoofing(self) -> None:
+        # Серии [молчит, «нет сайта», молчит] и [пусто, «нет сайта», пусто]: адреса не было
+        # ни разу, а первый ответ не NXDOMAIN. Правило «хоть один NXDOMAIN» смягчать нельзя.
+        from diagnostics.verdict import judge_dns
+
+        # 1460 — истекло время ожидания, 9002 — отказ сервера (SERVFAIL).
+        for first in (1460, 9002):
+            with self.subTest(first_status=first):
+                judgement = judge_dns(
+                    system_ips=(),
+                    system_status=first,
+                    reference_ips=DISCORD_REAL,
+                    hosts_ips=(),
+                    nxdomain_count=1,
+                    attempts=3,
+                )
+                self.assertEqual(judgement.state, DnsState.SPOOFED)
+                self.assertIn("1 из 3", judgement.reason)
+
+    def test_silence_without_any_nxdomain_stays_unknown(self) -> None:
+        from diagnostics.verdict import judge_dns
+
+        judgement = judge_dns(system_ips=(), system_status=1460, reference_ips=DISCORD_REAL, hosts_ips=(), attempts=3)
+        self.assertEqual(judgement.state, DnsState.UNKNOWN)
+
     def test_dns_tab_skips_https_when_address_matches_reference(self) -> None:
         net = _Net()
         net.run(engine.run_dns_check, emit=lambda _line: None)
