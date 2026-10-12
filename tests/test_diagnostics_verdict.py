@@ -1596,15 +1596,59 @@ class BlockcheckScopeTests(unittest.TestCase):
         # На win10 молчали только серверы Telegram — это про звонки Telegram, не «UDP вообще».
         report = summarize_voice((
             VoiceServer("Google STUN", "stun.l.google.com", True, "да"),
-            VoiceServer("Telegram STUN", "stun.telegram.org", False, "нет"),
+            VoiceServer("Telegram STUN", "stun.telegram.org", False, "нет", group="telegram"),
         ))
         self.assertEqual(report.level, Level.WARN)
         self.assertIn("Telegram", report.headline)
+        # Telegram узнаётся по группе из списка серверов, а не по слову в имени.
+        report = summarize_voice((
+            VoiceServer("Google STUN", "stun.l.google.com", True, "да"),
+            VoiceServer("Мой telegram-подобный", "stun.example", False, "нет"),
+        ))
+        self.assertEqual(report.level, Level.OK)
+        # «Нет дороги до адреса» — не «UDP закрыт»: такой сервер в вывод не идёт.
+        _answered, _text, decided = _describe(SimpleNamespace(status=SimpleNamespace(value="error"), error_code="UNREACHABLE", detail=""))
+        self.assertFalse(decided)
         report = summarize_voice((
             VoiceServer("Google STUN", "stun.l.google.com", True, "да"),
             VoiceServer("CF STUN", "stun.cloudflare.com", False, "нет"),
         ))
         self.assertEqual(report.level, Level.OK)
+
+    def test_stun_classifies_windows_codes(self) -> None:
+        import socket as _socket
+
+        from blockcheck import stun_tester
+
+        def unreachable(*_a, **_k):
+            error = OSError(None, "сообщение на языке системы")
+            error.winerror = 10065
+            raise error
+
+        class _Sock:
+            def __init__(self, *_a):
+                pass
+
+            def settimeout(self, _t):
+                pass
+
+            sendto = unreachable
+
+            def close(self):
+                pass
+
+        address = (_socket.AF_INET, _socket.SOCK_DGRAM, 0, ("192.0.2.1", 3478))
+        with patch.object(stun_tester, "_resolve_udp_addresses", return_value=[address]), patch.object(
+            stun_tester.socket, "socket", _Sock
+        ):
+            result = stun_tester.test_stun("stun.example", 3478, timeout=1, retries=1)
+        self.assertEqual(result.error_code, "UNREACHABLE")
+
+    def test_every_stun_server_names_its_group(self) -> None:
+        from blockcheck.data_lists import STUN_TARGETS
+
+        self.assertTrue(all(item.get("group") in ("general", "telegram") for item in STUN_TARGETS))
+        self.assertTrue(any(item["group"] == "telegram" for item in STUN_TARGETS))
 
     def test_freeze_classification(self) -> None:
         from diagnostics.freeze_check import FreezeState, classify_download

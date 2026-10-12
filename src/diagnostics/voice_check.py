@@ -19,6 +19,8 @@ from diagnostics.verdict import Level
 
 __all__ = ["VoiceReport", "VoiceServer", "check_voice", "summarize_voice"]
 
+GROUP_TELEGRAM = "telegram"
+
 # Коды ``SingleTestResult.error_code`` из ``blockcheck.stun_tester``.
 _ANSWERED_CODES = {"", "PARSE_ERR"}
 
@@ -32,6 +34,8 @@ class VoiceServer:
     # Проверка состоялась: сервер ответил или промолчал. False — до него не дошло
     # дело (не узнали адрес, ошибка самой проверки): это не говорит ничего о UDP.
     decided: bool = True
+    # Чьи это звонки (``STUN_TARGETS[...]["group"]``): "telegram" или "general".
+    group: str = "general"
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,6 +71,9 @@ def _describe(result) -> tuple[bool, str, bool]:
         return False, "не удалось узнать адрес сервера — проверить его не вышло", False
     if code == "RESET":
         return False, "сервер отклонил запрос (порт закрыт)", True
+    if code == "UNREACHABLE":
+        # Нет маршрута (часто — нет IPv6 или сети вовсе): о закрытом UDP это ничего не говорит.
+        return False, "до адреса сервера нет дороги — проверить его не вышло", False
     return False, str(getattr(result, "detail", "") or "ошибка проверки"), False
 
 
@@ -78,15 +85,15 @@ def check_voice(submit: Callable[..., Future], wait: Callable[[Future], object])
     planned = []
     for target in STUN_TARGETS:
         host, port = _parse_target(target["value"])
-        planned.append((target["name"], host, submit(test_stun, host, port)))
+        planned.append((target["name"], host, target.get("group", "general"), submit(test_stun, host, port)))
 
     servers: list[VoiceServer] = []
-    for name, host, future in planned:
+    for name, host, group, future in planned:
         try:
             answered, text, decided = _describe(wait(future))
         except Exception as exc:  # отдельный сервер не должен ронять отчёт
             answered, text, decided = False, f"ошибка проверки ({exc})", False
-        servers.append(VoiceServer(name=name, host=host, answered=answered, text=text, decided=decided))
+        servers.append(VoiceServer(name=name, host=host, answered=answered, text=text, decided=decided, group=group))
     return tuple(servers)
 
 
@@ -104,7 +111,7 @@ def summarize_voice(servers: tuple[VoiceServer, ...]) -> VoiceReport:
             servers,
             ("Повторите проверку. Если повторяется — проверьте DNS в разделе «Настройка DNS».",),
         )
-    telegram = [item for item in decided if "telegram" in f"{item.name} {item.host}".lower()]
+    telegram = [item for item in decided if item.group == GROUP_TELEGRAM]
     general = [item for item in decided if item not in telegram]
     general_ok = any(item.answered for item in general) if general else True
     telegram_ok = any(item.answered for item in telegram) if telegram else True

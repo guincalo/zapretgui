@@ -46,12 +46,14 @@ HTTPS_TARGETS: tuple[dict[str, str], ...] = (
 )
 
 
+# ``group`` — чьи это звонки: серверы Telegram судятся отдельно (молчат только они —
+# режут звонки Telegram, а не весь UDP).
 STUN_TARGETS: tuple[dict[str, str], ...] = (
-    {"name": "Google STUN", "value": "STUN:stun.l.google.com:19302"},
-    {"name": "CF STUN", "value": "STUN:stun.cloudflare.com:3478"},
-    {"name": "Twilio STUN", "value": "STUN:global.stun.twilio.com:3478"},
-    {"name": "Telegram STUN", "value": "STUN:stun.telegram.org:3478"},
-    {"name": "Telegram VoIP STUN", "value": "STUN:stun.voip.telegram.org:3478"},
+    {"name": "Google STUN", "value": "STUN:stun.l.google.com:19302", "group": "general"},
+    {"name": "CF STUN", "value": "STUN:stun.cloudflare.com:3478", "group": "general"},
+    {"name": "Twilio STUN", "value": "STUN:global.stun.twilio.com:3478", "group": "general"},
+    {"name": "Telegram STUN", "value": "STUN:stun.telegram.org:3478", "group": "telegram"},
+    {"name": "Telegram VoIP STUN", "value": "STUN:stun.voip.telegram.org:3478", "group": "telegram"},
 )
 
 

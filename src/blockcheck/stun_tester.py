@@ -6,6 +6,7 @@ import struct
 import time
 
 from blockcheck.config import STUN_TIMEOUT
+from utils.net_failure import FAILURE_RESET, FAILURE_TIMEOUT, FAILURE_UNREACHABLE, classify
 from blockcheck.models import SingleTestResult, TestStatus, TestType
 from utils.net_resolve import DEFAULT_DNS_TIMEOUT, resolve_addrinfo
 
@@ -254,9 +255,23 @@ def test_stun(
                 stop_scan = True
                 break
             except OSError as e:
+                # Коды Windows, которые Python не перевёл в свои классы: вид — по общему словарю.
+                failure = classify(e)
+                if failure == FAILURE_TIMEOUT:
+                    last_error = f"UDP timeout ({family_label}, attempt {retry_idx}/{retry_rounds})"
+                    last_code = "TIMEOUT"
+                    last_status = TestStatus.TIMEOUT
+                    continue
                 last_error = f"{e} ({family_label})"
-                last_code = "ERROR"
                 last_status = TestStatus.ERROR
+                if failure == FAILURE_RESET:
+                    last_code, last_status = "RESET", TestStatus.FAIL
+                elif failure == FAILURE_UNREACHABLE:
+                    # Нет дороги до этого адреса — другой адрес (другого семейства) может ответить.
+                    last_code = "UNREACHABLE"
+                    continue
+                else:
+                    last_code = "ERROR"
                 stop_scan = True
                 break
             finally:
