@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import socket
 import unittest
 from unittest.mock import patch
 
@@ -94,6 +95,7 @@ class _Network:
         patches = [
             patch.object(engine, "query_server", _fake_query),
             patch.object(engine, "query_doh", _fake_query),
+            patch.object(engine, "query_tcp", _fake_query),
             patch.object(engine, "canary_answered", lambda _domain: False),
             patch.object(engine, "trace_route", lambda ip, **_k: self.route(ip)),
             patch.object(engine, "_inspect_quic", lambda domain, ip, max_ttl, cancel: self.quic(domain, ip)),
@@ -103,7 +105,7 @@ class _Network:
             patch.object(engine, "_tcp_connect", lambda ip, port=443: engine.TcpReport(ip, port, "ok", 5.0)),
             patch("utils.windows_icmp.ping_ipv4_host_winapi", lambda *a, **k: ping),
             patch("utils.windows_icmp.ping_ipv6_winapi", lambda *a, **k: ping),
-            patch("utils.net_resolve.resolve_ips", lambda host, **k: (["93.184.216.34"], [])),
+            patch("utils.net_resolve.resolve_addrinfo", lambda host, **k: [(socket.AF_INET, 0, 0, "", ("93.184.216.34", 0))]),
         ]
         for item in patches:
             item.start()
@@ -174,6 +176,152 @@ class AnswersTests(unittest.TestCase):
         self.assertEqual(engine.pick_primary_ip(answers[:2]), "1.1.1.1")
         self.assertEqual(engine.pick_primary_ip(answers[:1]), "195.82.146.214")
         self.assertEqual(engine.pick_primary_ip([]), "")
+
+
+    def test_primary_ip_goes_windows_then_system_then_encrypted_then_most_common(self) -> None:
+        # У крупного сайта «самый частый» адрес — далёкий зарубежный узел: компьютер на него не попадёт.
+        far = [engine.ResolverAnswer(engine.DnsServer(f"Дальний {n}", f"203.0.113.{n}"), STATUS_OK, ipv4=("5.5.5.5",)) for n in (1, 2, 3)]
+        system = engine.ResolverAnswer(engine.DnsServer("", "8.8.4.4", engine.SERVER_SYSTEM), STATUS_OK, ipv4=("3.3.3.3",))
+        secure = engine.ResolverAnswer(SECURE, STATUS_OK, ipv4=("4.4.4.4",))
+        windows = engine.ResolverAnswer(engine.DnsServer("Windows", "", engine.SERVER_WINDOWS), STATUS_NXDOMAIN)
+
+        self.assertEqual(engine.pick_primary_ip([*far, secure, system, windows]), "3.3.3.3")
+        self.assertEqual(engine.pick_primary_ip([*far, secure, windows]), "4.4.4.4")
+        self.assertEqual(engine.pick_primary_ip([*far, windows]), "5.5.5.5")
+
+    def test_primary_ip_takes_tcp_answer_of_system_server_with_forged_denial(self) -> None:
+        system = engine.ResolverAnswer(
+            engine.DnsServer("", "8.8.8.8", engine.SERVER_SYSTEM), STATUS_NXDOMAIN, tcp_ipv4=("3.3.3.3",)
+        )
+        far = engine.ResolverAnswer(GOOD, STATUS_OK, ipv4=("5.5.5.5",))
+
+        self.assertEqual(engine.pick_primary_ip([far, system]), "3.3.3.3")
+
+    def test_windows_without_address_is_a_finding_when_servers_know_the_site(self) -> None:
+        windows = engine.DnsServer("Windows", "", engine.SERVER_WINDOWS)
+        blind = engine.annotate_answers(
+            [engine.ResolverAnswer(windows, STATUS_NXDOMAIN), engine.ResolverAnswer(GOOD, STATUS_OK, ipv4=("1.1.1.1",))]
+        )
+        nobody = engine.annotate_answers([engine.ResolverAnswer(windows, STATUS_NXDOMAIN), engine.ResolverAnswer(GOOD, STATUS_NXDOMAIN)])
+
+        self.assertEqual(blind[0].level, engine.LEVEL_WARN)
+        self.assertEqual(blind[0].note, engine.NOTE_WINDOWS_BLIND)
+        self.assertTrue(engine.windows_blind(blind))
+        # Домена и правда нет: Windows не виновата.
+        self.assertEqual(nobody[0].level, engine.LEVEL_UNKNOWN)
+        self.assertFalse(engine.windows_blind(nobody))
+
+    def test_denial_is_forged_when_the_same_server_names_the_address_over_tcp(self) -> None:
+        plain = engine.DnsServer("Google", "8.8.8.8", engine.SERVER_SYSTEM)
+        answers = engine.annotate_answers([engine.ResolverAnswer(plain, STATUS_NXDOMAIN, tcp_ipv4=("64.233.165.93",))])
+
+        self.assertEqual(engine.forged_answers(answers), answers)
+        self.assertEqual(answers[0].level, engine.LEVEL_WARN)
+        self.assertIn("по TCP тот же сервер адрес называет (64.233.165.93)", answers[0].note)
+
+    def test_denial_is_forged_when_the_same_server_names_the_address_encrypted(self) -> None:
+        plain = engine.DnsServer("OpenDNS", "208.67.222.222")
+        secure = engine.DnsServer("OpenDNS (шифрованный)", "208.67.222.222", engine.SERVER_DOH)
+        other = engine.DnsServer("Чужой", "203.0.113.5")
+        answers = engine.annotate_answers(
+            [
+                engine.ResolverAnswer(secure, STATUS_OK, ipv4=("142.251.142.238",)),
+                engine.ResolverAnswer(plain, STATUS_NXDOMAIN),
+                engine.ResolverAnswer(other, STATUS_NXDOMAIN),
+            ]
+        )
+
+        self.assertEqual([item.server.label for item in engine.forged_answers(answers)], ["OpenDNS"])
+        self.assertEqual(answers[1].note, engine.NOTE_FORGED)
+        # У сервера без шифрованной пары доказательства нет: он просто отвечает не как остальные.
+        self.assertEqual(answers[2].note, "у других серверов адрес есть")
+
+    def test_forged_mark_counts_only_next_to_honest_answers(self) -> None:
+        marked = engine.ResolverAnswer(GOOD, STATUS_NXDOMAIN, forged=True)
+        honest = engine.ResolverAnswer(DEAD, STATUS_OK, ipv4=("1.1.1.1",))
+
+        self.assertEqual(engine.forged_answers([marked]), ())
+        self.assertEqual(engine.forged_answers([marked, honest]), (marked,))
+        self.assertEqual(engine.annotate_answers([marked, honest])[0].note, engine.NOTE_FORGED_MARK)
+
+
+class AskTests(unittest.TestCase):
+    def test_denial_over_udp_is_rechecked_over_tcp(self) -> None:
+        denial = DnsQueryResult(status=STATUS_NXDOMAIN, rcode=3, elapsed_ms=6.0, authoritative=True, authority_count=0)
+        with (
+            patch.object(engine, "query_server", lambda *a, **k: denial),
+            patch.object(engine, "query_tcp", lambda *a, **k: _answer(TYPE_A, "64.233.165.93")) as _tcp,
+        ):
+            answer = engine._ask_server(GOOD, "youtube.com")
+
+        self.assertEqual(answer.status, STATUS_NXDOMAIN)
+        self.assertTrue(answer.forged)
+        self.assertEqual(answer.tcp_ipv4, ("64.233.165.93",))
+
+    def test_honest_answer_is_not_rechecked(self) -> None:
+        with (
+            patch.object(engine, "query_server", _fake_query),
+            patch.object(engine, "query_tcp", side_effect=AssertionError("лишний запрос по TCP")),
+        ):
+            answer = engine._ask_server(GOOD, "example.com")
+
+        self.assertEqual(answer.ipv4, ("93.184.216.34",))
+        self.assertEqual(answer.tcp_ipv4, ())
+
+    def test_windows_says_why_there_is_no_address(self) -> None:
+        from utils.net_resolve import DNSTimeoutError
+
+        cases = (
+            (socket.gaierror(socket.EAI_NONAME, "нет такого имени"), STATUS_NXDOMAIN),
+            # Так тот же отказ выглядит в Windows: «getaddrinfo failed» с кодом Winsock.
+            (socket.gaierror(11001, "getaddrinfo failed"), STATUS_NXDOMAIN),
+            (socket.gaierror(11004, "getaddrinfo failed"), STATUS_NXDOMAIN),
+            (DNSTimeoutError("молчит"), STATUS_TIMEOUT),
+            (socket.gaierror(socket.EAI_AGAIN, "сбой"), "error"),
+        )
+        for error, expected in cases:
+            with self.subTest(expected=expected), patch("utils.net_resolve.resolve_addrinfo", side_effect=error):
+                self.assertEqual(engine._ask_windows("youtube.com").status, expected)
+
+    def test_windows_answer_keeps_both_families(self) -> None:
+        infos = [
+            (socket.AF_INET, 0, 0, "", ("1.2.3.4", 0)),
+            (socket.AF_INET6, 0, 0, "", ("2001:db8::1", 0, 0, 0)),
+            (socket.AF_INET, 0, 0, "", ("1.2.3.4", 0)),
+        ]
+        with patch("utils.net_resolve.resolve_addrinfo", return_value=infos):
+            answer = engine._ask_windows("example.com")
+
+        self.assertEqual((answer.status, answer.ipv4, answer.ipv6), (STATUS_OK, ("1.2.3.4",), ("2001:db8::1",)))
+
+    def test_placeholder_certificate_is_not_a_neighbour(self) -> None:
+        # Google на запрос без имени сайта отдаёт сертификат на несуществующее имя invalid2.invalid.
+        with patch.object(engine, "fetch_cert_names", lambda ip, server_name=None: CertNames("ok", (), "invalid2.invalid")):
+            source = engine._lookup_cert("142.251.110.190", engine.SOURCE_CERT_DEFAULT, None)
+
+        self.assertEqual((source.status, source.names), (engine.SOURCE_SKIPPED, ()))
+        self.assertIn("сертификат-пустышку (invalid2.invalid)", source.detail)
+
+    def test_unreachable_service_is_explained_in_words(self) -> None:
+        import requests
+
+        cases = (
+            (requests.exceptions.ConnectTimeout(), "не ответил вовремя"),
+            (requests.exceptions.SSLError(), "защищённое соединение"),
+            (requests.exceptions.ConnectionError(), "не удалось соединиться"),
+            (RuntimeError("boom"), "сервис недоступен"),
+        )
+        for error, expected in cases:
+            with self.subTest(expected=expected):
+                detail = engine._unavailable(engine.SOURCE_SHODAN, error).detail
+                self.assertIn(expected, detail)
+                self.assertNotIn("Error", detail)
+
+    def test_extra_servers_have_no_resolver_that_refuses_everyone(self) -> None:
+        # Mullvad обычным запросом отвечает только про собственные имена; UltraDNS уже есть в списке программы.
+        labels = [label for label, _address in engine.EXTRA_SERVERS]
+        self.assertNotIn("Mullvad", labels)
+        self.assertNotIn("UltraDNS", labels)
 
 
 class ExternalAnswerTests(unittest.TestCase):
@@ -477,6 +625,96 @@ class PlansTests(unittest.TestCase):
         self.assertEqual(summary.tone, plans.TONE_ERROR)
         self.assertIn("4 из 5", summary.text)
 
+    def _youtube_report(self, site: dict | None = None) -> engine.DomainLookupReport:
+        """Случай 2026-10-13: фильтр отвечает «домена нет» вместо 8.8.8.8, Windows верит и адрес не получает."""
+        answers = engine.annotate_answers(
+            [
+                engine.ResolverAnswer(engine.DnsServer("Windows", "", engine.SERVER_WINDOWS), STATUS_NXDOMAIN, elapsed_ms=8.0),
+                engine.ResolverAnswer(
+                    engine.DnsServer("Google", "8.8.8.8", engine.SERVER_SYSTEM), STATUS_NXDOMAIN, forged=True, elapsed_ms=6.0
+                ),
+                engine.ResolverAnswer(engine.DnsServer("Google", "8.8.4.4", engine.SERVER_SYSTEM), STATUS_OK, ipv4=("64.233.165.93",)),
+                engine.ResolverAnswer(
+                    engine.DnsServer("Google (шифрованный)", "8.8.8.8", engine.SERVER_DOH), STATUS_OK, ipv4=("64.233.165.190",)
+                ),
+            ]
+        )
+        return engine.DomainLookupReport(
+            target="youtube.com",
+            kind=engine.KIND_DOMAIN,
+            answers=answers,
+            primary_ip=engine.pick_primary_ip(answers),
+            site=site,
+            finished=True,
+            elapsed_s=10.1,
+        )
+
+    def test_forged_denial_from_own_dns_is_named_with_the_cure(self) -> None:
+        report = self._youtube_report()
+
+        summary = plans.build_dns_summary(report)
+        rows = {(row.server, row.address): row for row in plans.build_answer_rows(report)}
+        windows, forged = rows[("Windows (как видят программы)", "—")], rows[("Системный DNS · Google", "8.8.8.8")]
+
+        self.assertEqual(report.primary_ip, "64.233.165.93")
+        self.assertEqual(summary.tone, plans.TONE_WARNING)
+        self.assertIn("подставной «такого домена нет»", summary.text)
+        self.assertIn("Системный DNS · Google", summary.text)
+        self.assertIn("DNS этого компьютера", summary.text)
+        self.assertIn("«Настройка DNS»", summary.text)
+        self.assertIn(engine.NOTE_FORGED, forged.result)
+        self.assertEqual(windows.level, engine.LEVEL_WARN)
+        self.assertIn("браузер и программы сайт не найдут", windows.result)
+
+    def test_status_and_history_name_the_dns_trouble_instead_of_all_is_well(self) -> None:
+        site = {"level": "warn", "headline": "youtube.com открывается"}
+        report = self._youtube_report(site)
+
+        status = plans.build_status(report)
+        entry = plans.build_history_entry(report)
+
+        self.assertEqual(status.tone, plans.TONE_WARNING)
+        self.assertIn("Windows адрес сайта не получает", status.text)
+        self.assertEqual(entry["level"], "warn")
+        self.assertIn("Windows адрес сайта не получает", entry["headline"])
+
+    def test_closed_site_leads_the_status_and_the_history(self) -> None:
+        site = {"level": "fail", "headline": "youtube.com не открывается: блокировка по имени"}
+        report = self._youtube_report(site)
+
+        status = plans.build_status(report)
+        entry = plans.build_history_entry(report)
+
+        self.assertEqual(status.tone, plans.TONE_ERROR)
+        self.assertIn("не открывается: блокировка по имени", status.text)
+        self.assertEqual(entry["headline"], site["headline"])
+        self.assertIn("Windows адрес сайта не получает", entry["problems"][1])
+
+    def test_forged_denial_at_foreign_server_is_not_blamed_on_this_computer(self) -> None:
+        answers = engine.annotate_answers(
+            [
+                engine.ResolverAnswer(engine.DnsServer("Windows", "", engine.SERVER_WINDOWS), STATUS_OK, ipv4=("1.2.3.4",)),
+                engine.ResolverAnswer(engine.DnsServer("OpenDNS", "208.67.222.222"), STATUS_NXDOMAIN, tcp_ipv4=("1.2.3.4",)),
+            ]
+        )
+        report = engine.DomainLookupReport(
+            target="example.com", kind=engine.KIND_DOMAIN, answers=answers, primary_ip="1.2.3.4", finished=True
+        )
+
+        self.assertIn("DNS этого компьютера среди них нет", plans.build_dns_summary(report).text)
+        self.assertEqual(plans.own_dns_trouble(report), "")
+        self.assertEqual(plans.build_status(report).tone, plans.TONE_SUCCESS)
+
+    def test_system_server_is_not_shown_with_its_address_twice(self) -> None:
+        named = engine.ResolverAnswer(engine.DnsServer("Google", "8.8.8.8", engine.SERVER_SYSTEM), STATUS_OK, ipv4=("1.1.1.1",))
+        unnamed = engine.ResolverAnswer(engine.DnsServer("", "10.0.0.1", engine.SERVER_SYSTEM), STATUS_OK, ipv4=("1.1.1.1",))
+        legacy = engine.ResolverAnswer(engine.DnsServer("10.0.0.2", "10.0.0.2", engine.SERVER_SYSTEM), STATUS_OK, ipv4=("1.1.1.1",))
+        report = engine.DomainLookupReport(target="example.com", kind=engine.KIND_DOMAIN, answers=(named, unnamed, legacy))
+
+        self.assertEqual(
+            [row.server for row in plans.build_answer_rows(report)], ["Системный DNS · Google", "Системный DNS", "Системный DNS"]
+        )
+
     def test_ping_lines_show_loss_and_times(self) -> None:
         lines = plans.build_ping_lines(self._report())
 
@@ -541,6 +779,10 @@ class WiringTests(unittest.TestCase):
         self.assertGreaterEqual(sum(1 for server in servers if server.kind == engine.SERVER_DOH), 3)
         self.assertIn(("Мой", "10.9.8.7", engine.SERVER_CUSTOM), [(s.label, s.address, s.kind) for s in servers])
         self.assertEqual(len(engine._unique_servers(servers)), len(unique))
+        # Сервер системы подписан именем владельца, а не своим же адресом.
+        with patch("utils.windows_dns_query.system_dns_servers", return_value=("8.8.8.8", "10.11.12.13")):
+            system = [s for s in dns_commands.build_domain_lookup_servers() if s.kind == engine.SERVER_SYSTEM]
+        self.assertEqual([(s.label, s.address) for s in system], [("Google DNS", "8.8.8.8"), ("", "10.11.12.13")])
         # Серверы списка спрашиваются обычным DNS, а Wikimedia и DNS-AI его не принимают.
         labels = {server.label for server in servers}
         self.assertIn("Quad9", labels)

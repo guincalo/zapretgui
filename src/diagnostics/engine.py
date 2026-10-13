@@ -568,6 +568,12 @@ def _service_verdict(service: Service, probes: list[_Probe], *, zapret_running: 
             hosts_stale=probe.hosts_stale,
             unstable=bool(probe.unstable),
             fingerprint=any(line.code == protocol_probe.CODE_FINGERPRINT for line in probe.protocols),
+            dns_blind=bool(
+                probe.judgement
+                and probe.judgement.state == DnsState.SPOOFED
+                and not probe.dns.ips
+                and not probe.hosts_ips
+            ),
         )
         for probe in probes
     ]
@@ -873,7 +879,7 @@ def check_site(host: str, *, should_stop: ShouldStop | None = None, emit: Emit |
     """
     service = site_service(host)
     services = {service.key: service}
-    run = _Run(should_stop, workers=_WORKERS_PER_TARGET + 12, deadline=SITE_CHECK_DEADLINE)
+    run = _Run(should_stop, workers=len(service.targets) * _WORKERS_PER_TARGET + 12, deadline=SITE_CHECK_DEADLINE)
     try:
         zapret_running, _line = sections.zapret_status()
         registry_wait = sections.start_registry()

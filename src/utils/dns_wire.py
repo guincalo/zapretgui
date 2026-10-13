@@ -83,6 +83,7 @@ _DOH_CONTENT_TYPE = "application/dns-message"
 _EDNS_UDP_SIZE = 1232
 _MAX_POINTER_HOPS = 32
 _FLAG_QR = 0x8000
+_FLAG_AA = 0x0400
 _FLAG_TC = 0x0200
 
 
@@ -123,6 +124,10 @@ class DnsMessage:
     rcode: int
     question: str
     answers: tuple[DnsRecord, ...]
+    # Флаг AA: отвечающий называет себя первоисточником записей этого домена.
+    authoritative: bool = False
+    # Сколько записей в разделе «полномочия»: настоящий отказ несёт там запись SOA.
+    authority_count: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -139,6 +144,23 @@ class DnsQueryResult:
     failure: str = ""
     # Ответ не поместился в пакет UDP (флаг TC).
     truncated: bool = False
+    # Флаг AA и число записей раздела «полномочия» — по ним узнаётся подставной ответ.
+    authoritative: bool = False
+    authority_count: int = 0
+
+    @property
+    def forged_denial(self) -> bool:
+        """«Такого домена нет» с подписью подставного ответа.
+
+        Обычный DNS-сервер (резолвер) сам записей не хранит: он не ставит флаг
+        «я первоисточник» и к отказу прикладывает запись SOA настоящего
+        владельца зоны. Отказ с этим флагом и без SOA присылает не он, а
+        фильтр по дороге — так ТСПУ отвечает на имена YouTube (замеры из
+        российских сетей, 2026-10-13). Так же отвечают и домашние фильтры
+        рекламы, поэтому вывод делается только рядом с честными ответами
+        других серверов.
+        """
+        return self.rcode == RCODE_NXDOMAIN and self.authoritative and self.authority_count == 0
 
     @property
     def answered(self) -> bool:
@@ -244,7 +266,7 @@ def parse_response(packet: bytes) -> DnsMessage:
     """Разбирает ответ: код результата и записи раздела «ответы»."""
     if len(packet) < 12:
         raise DnsWireError("слишком короткий пакет")
-    query_id, flags, questions, answers, _authority, _additional = struct.unpack("!HHHHHH", packet[:12])
+    query_id, flags, questions, answers, authority, _additional = struct.unpack("!HHHHHH", packet[:12])
     offset = 12
     question = ""
     for index in range(questions):
@@ -284,6 +306,8 @@ def parse_response(packet: bytes) -> DnsMessage:
         rcode=flags & 0x000F,
         question=question,
         answers=tuple(records),
+        authoritative=bool(flags & _FLAG_AA),
+        authority_count=int(authority),
     )
 
 
@@ -325,6 +349,8 @@ def _answered(transport: str, message: DnsMessage, started: float) -> DnsQueryRe
         detail=f"rcode {message.rcode}" if message.rcode not in (RCODE_OK, RCODE_NXDOMAIN) else "",
         transport=transport,
         truncated=message.truncated,
+        authoritative=message.authoritative,
+        authority_count=message.authority_count,
     )
 
 

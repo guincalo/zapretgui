@@ -161,6 +161,18 @@ class ServiceSummaryTests(unittest.TestCase):
         self.assertIn("www.youtube.com", verdict.dns_note)
         self.assertTrue(any("DoH" in item for item in verdict.advice))
 
+    def test_site_whose_address_the_computer_dns_denies_is_not_called_open(self) -> None:
+        # Случай 2026-10-13: фильтр отвечает «такого сайта нет» вместо DNS, проверка идёт по адресу из
+        # шифрованного DNS и сайт открывает, а браузер спрашивает Windows и остаётся ни с чем.
+        blind = TargetOutcome("youtube.com", "сайт", ReachState.OK, DnsState.SPOOFED, main=True, dns_blind=True)
+
+        verdict = summarize_service("youtube.com", [blind], zapret_running=True)
+
+        self.assertEqual(verdict.level, Level.WARN)
+        self.assertIn("сам сайт доступен, но DNS компьютера отвечает, что такого сайта нет", verdict.headline)
+        self.assertNotIn("открывается", verdict.headline)
+        self.assertTrue(any("DoH" in item for item in verdict.advice))
+
     def test_everything_open_is_ok(self) -> None:
         verdict = summarize_service("Discord", self._outcomes(ReachState.OK, ReachState.OK), zapret_running=True)
 
@@ -845,6 +857,39 @@ class SiteWordsComeFromTheReportTests(unittest.TestCase):
         self.assertTrue(site["roads"])
         self.assertIn({"key": "registry", "text": "в реестре РКН", "state": "info"}, site["tags"])
 
+    def test_single_site_check_says_when_the_computer_dns_denies_the_site(self) -> None:
+        net = _Net(system=(), status=DNS_STATUS_NAME_ERROR, reference=("142.251.157.4",))
+        site = net.run(engine.check_site, "example.org")
+
+        self.assertEqual(site["level"], "warn")
+        self.assertIn("DNS компьютера отвечает, что такого сайта нет", site["headline"])
+
+    def test_single_site_check_covers_the_other_addresses_of_a_known_service(self) -> None:
+        # «youtube.com открывается» мало что значит, когда не отвечают видеосерверы.
+        from diagnostics.services import related_targets, site_service
+
+        self.assertEqual(
+            [(target.host, target.purpose, target.main) for target in site_service("youtube.com").targets],
+            [
+                ("youtube.com", "сайт", True),
+                ("www.youtube.com", "основной адрес", False),
+                ("i.ytimg.com", "превью видео", False),
+                (engine.GOOGLEVIDEO_FALLBACK_HOST, "видео", False),
+            ],
+        )
+        self.assertTrue(site_service("m.youtube.com").targets[-1].discover_googlevideo)
+        self.assertEqual([target.host for target in related_targets("gateway.discord.gg")], ["discord.com", "cdn.discordapp.com"])
+        self.assertEqual([target.host for target in related_targets("www.youtube.com")], ["i.ytimg.com", engine.GOOGLEVIDEO_FALLBACK_HOST])
+        # Чужой сайт и сайт из одного адреса остаются сами по себе.
+        self.assertEqual(related_targets("example.org"), ())
+        self.assertEqual(related_targets("notyoutube.com"), ())
+        self.assertEqual(related_targets("x.com"), ())
+
+        net = _Net()
+        site = net.run(engine.check_site, "youtube.com")
+        self.assertEqual([target["host"] for target in site["targets"]][:3], ["youtube.com", "www.youtube.com", "i.ytimg.com"])
+        self.assertEqual(len(site["targets"]), 4)
+
     def test_control_and_registry_tags(self) -> None:
         net = _Net()
         net.registry = engine.registry.Index(hosts=engine.registry.build_hosts(["discord.com"])[0], updated=1000.0)
@@ -1277,14 +1322,19 @@ class EngineScenarioTests(unittest.TestCase):
         self.assertIn("эталон недоступен", judgement.reason)
 
     def test_nxdomain_site_that_opens_by_real_address_is_reported_as_working(self) -> None:
-        """Случай из жалобы: DNS говорит «домена нет», браузер с DoH открывает сайт."""
+        """Случай из жалобы: DNS говорит «домена нет», браузер с DoH открывает сайт.
+
+        Итог не красный и не «заблокирован»: сайт доступен. Но и не голое «открывается» —
+        браузер без защищённого DNS его не найдёт (жалоба 2026-10-13 «проверка проходит, а сайт не открывается»).
+        """
         lines: list[str] = []
         net = _Net(system=(), status=DNS_STATUS_NAME_ERROR, reference=("142.251.157.4",))
         result = net.run(engine.run_blockcheck, "main", emit=lines.append)
         text = "\n".join(lines)
 
         youtube = next(item for item in result["services"] if item["key"] == "youtube")
-        self.assertEqual(youtube["headline"], "YouTube открывается")
+        self.assertIn("YouTube: сам сайт доступен, но DNS компьютера отвечает, что такого сайта нет", youtube["headline"])
+        self.assertIn("браузер без защищённого DNS", youtube["headline"])
         self.assertEqual(youtube["level"], "warn")
         self.assertIn("www.youtube.com", youtube["dns_note"])
         self.assertTrue(result["spoofed_hosts"])

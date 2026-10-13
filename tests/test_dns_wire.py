@@ -66,6 +66,23 @@ class ParseTests(unittest.TestCase):
             [(5, "www.example.com"), (1, "93.184.216.34"), (28, "2606:2800:220:1::1")],
         )
 
+    def test_forged_denial_is_recognised_by_its_flags(self) -> None:
+        # Так ТСПУ отвечает на youtube.com вместо 8.8.8.8 (замеры 2026-10-13): «домена нет», флаг AA, раздел полномочий пуст.
+        forged = dns_wire.parse_response(_response(7, rcode=3, flags=0x8580))
+        self.assertTrue(forged.authoritative)
+        self.assertEqual(forged.authority_count, 0)
+
+        def result(**fields) -> dns_wire.DnsQueryResult:
+            return dns_wire.DnsQueryResult(status=dns_wire.STATUS_NXDOMAIN, rcode=3, **fields)
+
+        self.assertTrue(result(authoritative=True, authority_count=0).forged_denial)
+        # Настоящий резолвер флаг AA не ставит и прикладывает запись SOA.
+        self.assertFalse(result(authoritative=False, authority_count=1).forged_denial)
+        self.assertFalse(result(authoritative=False, authority_count=0).forged_denial)
+        # Настоящий первоисточник зоны тоже ставит AA, но с записью SOA.
+        self.assertFalse(result(authoritative=True, authority_count=1).forged_denial)
+        self.assertFalse(dns_wire.DnsQueryResult(status=dns_wire.STATUS_OK, rcode=0, authoritative=True).forged_denial)
+
     def test_txt_and_ptr_records(self) -> None:
         packet = _response(
             1,

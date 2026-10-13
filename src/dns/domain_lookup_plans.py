@@ -36,6 +36,8 @@ from dns.domain_lookup import (
     NeighborSource,
     PingReport,
     ResolverAnswer,
+    forged_answers,
+    windows_blind,
 )
 from utils.dns_wire import STATUS_EMPTY, STATUS_NXDOMAIN, STATUS_OK, STATUS_REFUSED, STATUS_TIMEOUT
 
@@ -101,7 +103,9 @@ def _server_name(answer: ResolverAnswer) -> str:
     if kind == SERVER_WINDOWS:
         return "Windows (как видят программы)"
     if kind == SERVER_SYSTEM:
-        return f"Системный DNS · {answer.server.label}" if answer.server.label else "Системный DNS"
+        # Подпись — имя владельца сервера, если он известен; сам адрес показывается рядом.
+        label = answer.server.label if answer.server.label != answer.server.address else ""
+        return f"Системный DNS · {label}" if label else "Системный DNS"
     return answer.server.label
 
 
@@ -140,6 +144,8 @@ def build_answer_rows(report: DomainLookupReport) -> tuple[AnswerRow, ...]:
             tooltip_lines.append("Псевдонимы (CNAME): " + " → ".join(answer.cnames))
         if answer.ttl is not None:
             tooltip_lines.append(f"Ответ считается свежим ещё {answer.ttl} с (TTL)")
+        if answer.tcp_ipv4:
+            tooltip_lines.append("По TCP тот же сервер ответил: " + ", ".join(answer.tcp_ipv4))
         if answer.note:
             tooltip_lines.append(answer.note)
         rows.append(
@@ -153,6 +159,24 @@ def build_answer_rows(report: DomainLookupReport) -> tuple[AnswerRow, ...]:
             )
         )
     return tuple(rows)
+
+
+# Обычный DNS (UDP, порт 53) идёт открытым текстом, и ответ на него можно подделать по дороге;
+# шифрованный запрос фильтр прочитать и подменить не может.
+DNS_CURE = "Помогает DNS с шифрованием: страница «Настройка DNS»."
+
+
+def own_dns_trouble(report: DomainLookupReport) -> str:
+    """Главная беда с DNS на самом компьютере одной фразой. Пусто — её нет.
+
+    Именно она отвечает на вопрос «проверка сайт открывает, а браузер нет»:
+    проверка берёт адрес по шифрованному каналу, а браузер спрашивает Windows.
+    """
+    if windows_blind(report.answers):
+        return "Windows адрес сайта не получает — браузер и программы его не найдут"
+    if any(item.server.kind == SERVER_SYSTEM for item in forged_answers(report.answers)):
+        return "DNS этого компьютера получает подставной ответ «такого домена нет»"
+    return ""
 
 
 def build_dns_summary(report: DomainLookupReport) -> InfoLine:
@@ -171,6 +195,25 @@ def build_dns_summary(report: DomainLookupReport) -> InfoLine:
         return InfoLine(
             f"{text} Внимание: обычные DNS-запросы перехватываются по пути (ответил даже несуществующий сервер), "
             "поэтому «разные» серверы — на деле один. Верьте строкам «шифрованный».",
+            TONE_WARNING,
+        )
+    forged = forged_answers(answers)
+    if forged:
+        names = ", ".join(_server_name(item) for item in forged[:4])
+        if any(item.server.kind == SERVER_SYSTEM for item in forged):
+            tail = f" Среди них DNS этого компьютера, поэтому браузер и программы сайт не находят. {DNS_CURE}"
+        elif windows_blind(answers):
+            tail = f" Windows адрес тоже не получила: браузер и программы сайт не найдут. {DNS_CURE}"
+        else:
+            tail = " DNS этого компьютера среди них нет."
+        return InfoLine(
+            f"{text} Вместо настоящего ответа пришёл подставной «такого домена нет» — его присылает фильтр по дороге, "
+            f"а не сам сервер: {names}.{tail}",
+            TONE_WARNING,
+        )
+    if windows_blind(answers):
+        return InfoLine(
+            f"{text} Windows адрес не получила, хотя серверы его знают: браузер и программы сайт не найдут. {DNS_CURE}",
             TONE_WARNING,
         )
     if odd:
@@ -434,6 +477,13 @@ def build_status(report: DomainLookupReport) -> InfoLine:
         return InfoLine(f"Часть проверок не успела закончиться за отведённое время ({seconds}).", TONE_WARNING)
     if not report.primary_ip:
         return InfoLine(f"Готово за {seconds}: адрес узнать не удалось.", TONE_WARNING)
+    # Строка итога называет главное: «адрес и число доменов» при закрытом сайте читалось как «всё хорошо».
+    site = getattr(report, "site", None) or {}
+    if str(site.get("level") or "") == "fail" and site.get("headline"):
+        return InfoLine(f"Готово за {seconds}. {site['headline']}.", TONE_ERROR)
+    trouble = own_dns_trouble(report)
+    if trouble:
+        return InfoLine(f"Готово за {seconds}. {trouble} (карточка «Адреса с разных DNS-серверов»).", TONE_WARNING)
     return InfoLine(f"Готово за {seconds}: адрес {report.primary_ip}, доменов найдено: {count_neighbors(report)}.", TONE_SUCCESS)
 
 
@@ -453,6 +503,11 @@ def build_history_entry(report: DomainLookupReport) -> dict | None:
     hard = bool(problems) or site_level == "fail"
     if site_level in ("fail", "warn") and site.get("headline"):
         problems.insert(0, str(site["headline"]))
+    trouble = own_dns_trouble(report)
+    if trouble:
+        # Сайт сам доступен, а компьютер его не находит: в истории первой строкой нужна причина,
+        # а не «открывается». Закрытый сайт остаётся первым — это важнее.
+        problems.insert(1 if site_level == "fail" else 0, f"{report.target}: {trouble}")
     if hard:
         level = "fail"
     elif problems:
@@ -552,5 +607,6 @@ __all__ = [
     "build_status",
     "build_text_report",
     "count_neighbors",
+    "own_dns_trouble",
     "source_title",
 ]

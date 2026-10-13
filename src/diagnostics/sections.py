@@ -626,7 +626,9 @@ def _name_speed(run: Run, collected: dict[str, list[Probe]], services, emit: Emi
     for place in (0, 1):
         for key, probes in collected.items():
             opened = [probe for probe in probes if probe.reach_state == ReachState.OK and not services[key].control]
-            for probe in sorted(opened, key=lambda item: not item.target.main)[place : place + 1]:
+            # Вторым идёт именно видеосервер, а не просто следующий по списку адрес (у YouTube это превью).
+            order = sorted(opened, key=lambda item: (not item.target.main, not item.target.discover_googlevideo))
+            for probe in order[place : place + 1]:
                 labels.setdefault(probe.host, services[key].label)
     ip = net_access.known_address(run, name_speed.SERVER_HOST) if labels else ""
     if not ip or run.dns_cancelled():

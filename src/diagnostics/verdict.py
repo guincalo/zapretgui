@@ -293,6 +293,9 @@ class TargetOutcome:
     unstable: bool = False
     # Проверка сайт открыла, но приветствие с составом Chrome не проходит: в браузере он может висеть.
     fingerprint: bool = False
+    # DNS компьютера адреса не дал вовсе («такого сайта нет»), хотя сайт существует: проверка
+    # дошла до него по адресу из шифрованного DNS, а браузер и программы спросят Windows.
+    dns_blind: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -471,6 +474,14 @@ def summarize_service(
                 "в браузере он может не открываться"
             )
             own_kind = KIND_FINGERPRINT
+        elif not secondary_broken and main.dns_blind:
+            # «Открывается» было бы неправдой: по адресу из шифрованного DNS сайт доступен,
+            # а компьютеру его адрес не называют. Так выглядит «проверка проходит, а в браузере пусто».
+            level = Level.WARN
+            headline = (
+                f"{label}: сам сайт доступен, но DNS компьютера отвечает, что такого сайта нет — "
+                "браузер без защищённого DNS и программы его не откроют"
+            )
         elif not secondary_broken:
             level = Level.WARN if spoofed else Level.OK
             headline = f"{label} открывается"

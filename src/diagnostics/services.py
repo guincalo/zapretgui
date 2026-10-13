@@ -18,7 +18,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 __all__ = [
     "EXTRA_SERVICES",
@@ -37,6 +37,7 @@ __all__ = [
     "STEP_SYSTEM",
     "STEP_VOICE",
     "progress_steps",
+    "related_targets",
     "SERVICES",
     "YOUTUBE_HOST",
     "Service",
@@ -82,9 +83,38 @@ def _site(key: str, label: str, host: str, *, control: bool = False, domestic: b
 
 
 def site_service(host: str) -> Service:
-    """Один сайт по его адресу — так же, как «свой домен» в BlockCheck."""
+    """Один сайт по его адресу — так же, как «свой домен» в BlockCheck.
+
+    Если адрес принадлежит известному сервису из нескольких адресов (YouTube,
+    Discord…), вместе с ним проверяются и остальные адреса сервиса: «youtube.com
+    открывается» мало что значит, когда не отвечают видеосерверы.
+    """
     host = str(host or "").strip().lower().rstrip(".")
-    return _site(f"user:{host}", host, host)
+    main = Target(host, "сайт", read_body=True, main=True)
+    return Service(f"user:{host}", host, (main, *related_targets(host)))
+
+
+def related_targets(host: str) -> tuple[Target, ...]:
+    """Остальные адреса сервиса, которому принадлежит ``host``. Пусто — адрес сам по себе.
+
+    Адрес принадлежит сервису, если он один из его адресов либо лежит в домене
+    его главного адреса (``m.youtube.com`` — в домене ``www.youtube.com``).
+    Главным в такой проверке остаётся введённый адрес, остальные — побочные.
+    """
+    host = str(host or "").strip().lower().rstrip(".")
+    for service in (*SERVICES.values(), *EXTRA_SERVICES, *FULL_SERVICES):
+        if len(service.targets) < 2:
+            continue
+        base = next((target.host for target in service.targets if target.main), service.targets[0].host)
+        base = base.removeprefix("www.")
+        if host != base and not host.endswith(f".{base}") and all(host != target.host for target in service.targets):
+            continue
+        return tuple(
+            replace(target, main=False, read_body=False, purpose="основной адрес" if target.main else target.purpose)
+            for target in service.targets
+            if target.host != host
+        )
+    return ()
 
 
 SCOPE_MAIN = "main"

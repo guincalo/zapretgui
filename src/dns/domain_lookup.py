@@ -48,6 +48,7 @@ from utils.dns_wire import (
     failure_text,
     query_doh,
     query_server,
+    query_tcp,
     reverse_name,
 )
 from utils.ip_owner import lookup_ip_owner
@@ -93,16 +94,16 @@ EXTERNAL_TIMEOUT_S = 8.0
 PATH_MAX_TTL = 20
 MAX_PARALLEL = 16
 # Независимые открытые DNS-серверы в дополнение к списку программы: чем больше
-# разных владельцев, тем виднее, кто отвечает не как все.
+# разных владельцев, тем виднее, кто отвечает не как все. Mullvad сюда не годится:
+# обычным запросом он называет только адреса собственных серверов, а на остальные
+# имена отвечает отказом (проверено 2026-10-13). UltraDNS уже есть в списке программы.
 EXTRA_SERVERS: tuple[tuple[str, str], ...] = (
     ("Яндекс DNS", "77.88.8.8"),
     ("Level3", "4.2.2.2"),
     ("Hurricane Electric", "74.82.42.42"),
     ("DNS.Watch", "84.200.69.80"),
-    ("Mullvad", "194.242.2.2"),
     ("Control D", "76.76.2.0"),
     ("Comodo", "8.26.56.26"),
-    ("UltraDNS", "156.154.70.1"),
 )
 # Запасные серверы для служебных запросов (обратное имя, владелец сети).
 _HELPER_SERVERS = ("1.1.1.1", "8.8.8.8", "9.9.9.9")
@@ -140,6 +141,11 @@ class ResolverAnswer:
     # Настоящий сервер отдаёт убывающий остаток, заглушки часто ставят ноль
     # или круглое число. None — в ответе адресов нет.
     ttl: int | None = None
+    # «Домена нет» с подписью подставного ответа (``DnsQueryResult.forged_denial``).
+    forged: bool = False
+    # Что тот же сервер ответил по TCP, когда на обычный запрос (UDP) пришло «домена нет».
+    # Фильтр подделывает только UDP, поэтому адреса здесь — прямое доказательство подмены.
+    tcp_ipv4: tuple[str, ...] = ()
 
     @property
     def addresses(self) -> tuple[str, ...]:
@@ -320,6 +326,15 @@ def _ask_server(server: DnsServer, domain: str) -> ResolverAnswer:
         first = query_server(server.address, domain, TYPE_A, timeout_s=DNS_TIMEOUT_S, attempts=2)
     if not first.answered:
         return ResolverAnswer(server=server, status=first.status, level=LEVEL_UNKNOWN, note=failure_text(first))
+    if server.kind != SERVER_DOH and first.status == STATUS_NXDOMAIN:
+        # «Домена нет» перепроверяется у того же сервера по TCP: подставной ответ приходит только по UDP.
+        return ResolverAnswer(
+            server=server,
+            status=STATUS_NXDOMAIN,
+            elapsed_ms=first.elapsed_ms,
+            forged=bool(getattr(first, "forged_denial", False)),
+            tcp_ipv4=query_tcp(server.address, domain, TYPE_A, timeout_s=DNS_TIMEOUT_S).values(TYPE_A),
+        )
     if server.kind == SERVER_DOH:
         second = query_doh(server.address, domain, TYPE_AAAA)
     else:
@@ -352,16 +367,34 @@ def _ask_server(server: DnsServer, domain: str) -> ResolverAnswer:
 
 
 def _ask_windows(domain: str) -> ResolverAnswer:
-    """Как имя видят обычные программы: с учётом файла hosts и шифрованного DNS Windows."""
-    from utils.net_resolve import resolve_ips
+    """Как имя видят обычные программы: с учётом файла hosts и шифрованного DNS Windows.
+
+    Важно не только «адреса нет», но и почему: «такого имени нет» — это ответ DNS, которому
+    Windows поверила, а молчание — DNS просто не ответил.
+    """
+    from utils.net_resolve import DNSTimeoutError, resolve_addrinfo
 
     server = DnsServer(label="Windows", address="", kind=SERVER_WINDOWS)
     started = time.perf_counter()
-    ipv4, ipv6 = resolve_ips(domain, timeout=DNS_TIMEOUT_S * 2)
+    status = STATUS_ERROR
+    infos: list[tuple] = []
+    try:
+        infos = resolve_addrinfo(domain, timeout=DNS_TIMEOUT_S * 2)
+    except DNSTimeoutError:
+        status = STATUS_TIMEOUT
+    except socket.gaierror as exc:
+        # Система получила от DNS прямой ответ «имени нет» или «адресов нет». В Windows это коды
+        # 11001 (WSAHOST_NOT_FOUND) и 11004 (WSANO_DATA); названия EAI_* там равны им не все.
+        missing = {socket.EAI_NONAME, getattr(socket, "EAI_NODATA", socket.EAI_NONAME), 11001, 11004}
+        status = STATUS_NXDOMAIN if exc.errno in missing else STATUS_ERROR
+    except Exception:
+        status = STATUS_ERROR
     elapsed = (time.perf_counter() - started) * 1000.0
+    ipv4 = tuple(dict.fromkeys(info[4][0] for info in infos if info[0] == socket.AF_INET and info[4]))
+    ipv6 = tuple(dict.fromkeys(info[4][0] for info in infos if info[0] == socket.AF_INET6 and info[4]))
     if not ipv4 and not ipv6:
-        return ResolverAnswer(server=server, status=STATUS_ERROR, level=LEVEL_UNKNOWN, elapsed_ms=elapsed)
-    return ResolverAnswer(server=server, status=STATUS_OK, ipv4=tuple(ipv4), ipv6=tuple(ipv6), elapsed_ms=elapsed)
+        return ResolverAnswer(server=server, status=status, level=LEVEL_UNKNOWN, elapsed_ms=elapsed)
+    return ResolverAnswer(server=server, status=STATUS_OK, ipv4=ipv4, ipv6=ipv6, elapsed_ms=elapsed)
 
 
 def _ping(ip: str, should_stop: Callable[[], bool]) -> PingReport:
@@ -450,7 +483,21 @@ def _lookup_cert(ip: str, key: str, server_name: str | None) -> NeighborSource:
     names = list(result.names)
     if result.common_name and result.common_name.lower() not in names:
         names.insert(0, result.common_name.lower())
+    placeholders = [name for name in names if _is_placeholder_name(name)]
+    names = [name for name in names if name not in placeholders]
+    if placeholders and not names:
+        # Google и подобные на запрос без имени сайта отдают сертификат на несуществующее имя.
+        return NeighborSource(
+            key=key,
+            status=SOURCE_SKIPPED,
+            detail=f"без имени сайта сервер отдаёт сертификат-пустышку ({placeholders[0]}), имён сайтов в нём нет",
+        )
     return NeighborSource(key=key, status=SOURCE_OK if names else SOURCE_EMPTY, names=tuple(names))
+
+
+def _is_placeholder_name(name: str) -> bool:
+    """Имя из зоны, которой в интернете нет по стандарту (RFC 6761): это не сайт, а заглушка в сертификате."""
+    return name.rstrip(".").lower().rsplit(".", 1)[-1] in ("invalid", "localhost")
 
 
 def _http(method: str, url: str, **kwargs):
@@ -473,7 +520,20 @@ def _http(method: str, url: str, **kwargs):
 
 
 def _unavailable(key: str, exc: BaseException) -> NeighborSource:
-    return NeighborSource(key=key, status=SOURCE_ERROR, detail=f"сервис недоступен ({type(exc).__name__})")
+    return NeighborSource(key=key, status=SOURCE_ERROR, detail=_unavailable_text(exc))
+
+
+def _unavailable_text(exc: BaseException) -> str:
+    """Почему внешний сервис не ответил — словами, а не названием ошибки."""
+    import requests
+
+    if isinstance(exc, requests.exceptions.Timeout):
+        return "сервис не ответил вовремя"
+    if isinstance(exc, requests.exceptions.SSLError):
+        return "защищённое соединение с сервисом не установилось"
+    if isinstance(exc, requests.exceptions.ConnectionError):
+        return "с сервисом не удалось соединиться — возможно, он закрыт для вашей сети"
+    return "сервис недоступен"
 
 
 def _clean_names(values: Iterable[object]) -> tuple[str, ...]:
@@ -655,11 +715,23 @@ def annotate_answers(answers: Iterable[ResolverAnswer]) -> tuple[ResolverAnswer,
     «домена нет» там, где у других он есть.
     """
     items = list(answers)
-    someone_resolved = any(item.status == STATUS_OK and item.addresses for item in items)
+    someone_resolved = any(
+        item.status == STATUS_OK and item.addresses for item in items if item.server.kind != SERVER_WINDOWS
+    )
+    forged = {id(item) for item in forged_answers(items)}
     result: list[ResolverAnswer] = []
     for item in items:
         level, note = LEVEL_OK, ""
-        if item.status == STATUS_OK:
+        if item.server.kind == SERVER_WINDOWS and item.status != STATUS_OK:
+            # Строка Windows — то, что получают браузер и программы. Если серверы адрес
+            # знают, а Windows нет, это главная находка, а не «не узнали».
+            if someone_resolved:
+                level, note = LEVEL_WARN, NOTE_WINDOWS_BLIND
+            else:
+                level = LEVEL_UNKNOWN
+        elif id(item) in forged:
+            level, note = LEVEL_WARN, _forged_note(item, items)
+        elif item.status == STATUS_OK:
             notes: list[str] = []
             for ip in item.addresses:
                 ip_level, ip_note = classify_ip(ip)
@@ -680,23 +752,97 @@ def annotate_answers(answers: Iterable[ResolverAnswer]) -> tuple[ResolverAnswer,
     return tuple(result)
 
 
+NOTE_WINDOWS_BLIND = "у DNS-серверов адрес есть, а Windows его не получила — браузер и программы сайт не найдут"
+NOTE_FORGED = "тот же сервер по шифрованному каналу адрес называет — обычный ответ подменён по дороге"
+NOTE_FORGED_MARK = (
+    "ответ подставной: настоящий сервер так не отвечает (в отказе нет обязательной служебной записи) — "
+    "его прислал фильтр по дороге"
+)
+
+
+NOTE_FORGED_TCP = "по TCP тот же сервер адрес называет ({ip}) — ответ на обычный запрос подменён по дороге"
+
+
+def _forged_note(item: ResolverAnswer, answers: Iterable[ResolverAnswer]) -> str:
+    """Чем доказана подмена — самым прямым из сработавших признаков."""
+    if item.tcp_ipv4:
+        return NOTE_FORGED_TCP.format(ip=item.tcp_ipv4[0])
+    if item.server.address in encrypted_known(answers):
+        return NOTE_FORGED
+    return NOTE_FORGED_MARK
+
+
+def encrypted_known(answers: Iterable[ResolverAnswer]) -> set[str]:
+    """Адреса серверов, которые по шифрованному каналу назвали адрес сайта."""
+    return {
+        item.server.address
+        for item in answers
+        if item.server.kind == SERVER_DOH and item.status == STATUS_OK and item.addresses
+    }
+
+
+def forged_answers(answers: Iterable[ResolverAnswer]) -> tuple[ResolverAnswer, ...]:
+    """Подставные ответы «домена нет» на обычный запрос. Три независимых признака.
+
+    Первый и второй — сравнение сервера с самим собой: по TCP или по шифрованному
+    каналу он адрес назвал, а на обычный запрос (UDP) «ответил», что домена нет.
+    Настоящий сервер так не может, значит обычный ответ прислал кто-то по дороге.
+
+    Третий — подпись самого ответа (``ResolverAnswer.forged``). Она встречается и
+    у домашних фильтров рекламы, поэтому учитывается только когда другие серверы
+    адрес назвали: тогда ясно, что сайт существует, а отказ придуман.
+    """
+    items = list(answers)
+    known = encrypted_known(items)
+    someone_resolved = any(
+        item.status == STATUS_OK and item.addresses for item in items if item.server.kind != SERVER_WINDOWS
+    )
+    return tuple(
+        item
+        for item in items
+        if item.server.kind not in (SERVER_DOH, SERVER_WINDOWS)
+        and (
+            (item.status in (STATUS_NXDOMAIN, STATUS_EMPTY) and (item.tcp_ipv4 or item.server.address in known))
+            or (item.status == STATUS_NXDOMAIN and item.forged and someone_resolved)
+        )
+    )
+
+
+def windows_blind(answers: Iterable[ResolverAnswer]) -> bool:
+    """Windows адрес не получила, хотя DNS-серверы его знают: программы на компьютере сайт не найдут."""
+    items = list(answers)
+    windows = [item for item in items if item.server.kind == SERVER_WINDOWS]
+    others = [item for item in items if item.server.kind != SERVER_WINDOWS]
+    return bool(
+        windows
+        and all(item.status != STATUS_OK for item in windows)
+        and any(item.status == STATUS_OK and item.addresses for item in others)
+    )
+
+
 def pick_primary_ip(answers: Iterable[ResolverAnswer]) -> str:
     """Адрес для пинга и поиска соседей.
 
     Сначала тот, которым реально пользуются программы на компьютере (строка
-    Windows), иначе самый частый среди серверов. Заглушки берём в последнюю
-    очередь: если других адресов нет, полезно увидеть, что отвечает именно она.
+    Windows), затем ответ DNS-серверов системы, затем шифрованный ответ (по нему
+    же проверяется, как открывается сайт) и только потом самый частый среди
+    остальных. Иначе у крупного сайта «самым частым» оказывается далёкий
+    зарубежный узел, на который этот компьютер никогда не попадёт. Заглушки
+    берём в последнюю очередь: если других адресов нет, полезно увидеть, что
+    отвечает именно она.
     """
     items = list(answers)
 
     def clean(addresses: Iterable[str]) -> list[str]:
         return [ip for ip in addresses if classify_ip(ip)[0] == LEVEL_OK]
 
-    for item in items:
-        if item.server.kind == SERVER_WINDOWS:
-            good = clean(item.ipv4)
-            if good:
-                return good[0]
+    for kind in (SERVER_WINDOWS, SERVER_SYSTEM, SERVER_DOH):
+        for item in items:
+            if item.server.kind == kind:
+                # У сервера с подставным «домена нет» настоящий ответ — тот, что он дал по TCP.
+                good = clean(item.ipv4) or clean(item.tcp_ipv4)
+                if good:
+                    return good[0]
     for family in ("ipv4", "ipv6"):
         counter: Counter[str] = Counter()
         for item in items:
@@ -980,8 +1126,14 @@ __all__ = [
     "PingReport",
     "ResolverAnswer",
     "TcpReport",
+    "NOTE_FORGED",
+    "NOTE_FORGED_MARK",
+    "NOTE_FORGED_TCP",
+    "NOTE_WINDOWS_BLIND",
     "annotate_answers",
     "classify_ip",
+    "encrypted_known",
+    "forged_answers",
     "is_public_ip",
     "normalize_target",
     "merge_network",
@@ -992,4 +1144,5 @@ __all__ = [
     "pick_ipv6",
     "pick_primary_ip",
     "run_domain_lookup",
+    "windows_blind",
 ]

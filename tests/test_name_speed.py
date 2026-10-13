@@ -124,8 +124,10 @@ class NameChoiceTests(unittest.TestCase):
 
         from diagnostics.verdict import ReachState
 
-        def probe(host: str, *, main: bool = False, state=ReachState.OK):
-            return SimpleNamespace(host=host, reach_state=state, target=SimpleNamespace(main=main))
+        def probe(host: str, *, main: bool = False, video: bool = False, state=ReachState.OK):
+            return SimpleNamespace(
+                host=host, reach_state=state, target=SimpleNamespace(main=main, discover_googlevideo=video)
+            )
 
         services = {
             "yt": SimpleNamespace(label="YouTube", control=False),
@@ -133,7 +135,8 @@ class NameChoiceTests(unittest.TestCase):
             "ya": SimpleNamespace(label="Яндекс", control=True),
         }
         collected = {
-            "yt": [probe("rr1.googlevideo.com"), probe("www.youtube.com", main=True)],
+            # Порядок адресов — как у сервиса на самом деле: сайт, превью, видеосервер.
+            "yt": [probe("www.youtube.com", main=True), probe("i.ytimg.com"), probe("rr1.googlevideo.com", video=True)],
             "dc": [probe("discord.com", main=True), probe("gateway.discord.gg", state=ReachState.DPI)],
             "ya": [probe("ya.ru", main=True)],
         }
