@@ -451,11 +451,21 @@ def _normalize_hosts_engine(data: object) -> dict[str, Any]:
                 kept[as_clean_str(profile_id)] = pairs
         if kept and as_clean_str(service_id):
             services[as_clean_str(service_id)] = kept
+    pool: dict[str, dict[str, list[str]]] = {}
+    for service_id, hosts in as_dict(raw.get("pool")).items():
+        found = {
+            as_clean_str(host): unique_str_list(addresses)
+            for host, addresses in as_dict(hosts).items()
+            if as_clean_str(host) and unique_str_list(addresses)
+        }
+        if found and as_clean_str(service_id):
+            pool[as_clean_str(service_id)] = found
     return {
         "catalog": as_clean_str(raw.get("catalog")),
         "checked_at": as_clean_str(raw.get("checked_at")),
         "suspects": unique_str_list(raw.get("suspects")),
         "services": services,
+        "pool": pool,
     }
 
 

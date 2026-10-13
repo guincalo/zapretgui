@@ -105,13 +105,13 @@ class EngineTests(unittest.TestCase):
 
         overlay, report, asked = _check(YOUTUBE, {"YouTube": HOSTS_PROFILE_ID}, verdicts)
 
-        # Первым стоит живой; мёртвый убран, пока есть чем заменить. У имени, где он единственный,
-        # он остаётся: без адреса имя не оставляют.
+        # Первым стоит самый быстрый живой; мёртвый убран, пока есть чем заменить. У имени, где он
+        # единственный, он остаётся: без адреса имя не оставляют.
         self.assertEqual(
             _rows(overlay),
             [
-                ("www.youtube.com", "1.1.1.2"),
                 ("www.youtube.com", "1.1.1.3"),
+                ("www.youtube.com", "1.1.1.2"),
                 ("www.youtube.com", "2001:db8::1"),
                 ("youtube.com", "1.1.1.1"),
             ],
@@ -147,32 +147,92 @@ class EngineTests(unittest.TestCase):
         self.assertIn(("youtube.com", "9.9.9.1"), rows)
         self.assertEqual(report.added, {"YouTube": ("9.9.9.1",)})
 
-    def test_encrypted_dns_is_not_asked_while_catalog_addresses_are_enough(self) -> None:
-        """Свежие адреса — запас. Пока своих живых хватает, hosts не меняется и лишних запросов нет."""
-        verdicts = {address: Probe(ALIVE, 10.0) for address in ("1.1.1.1", "1.1.1.2", "1.1.1.3")}
+    def test_new_addresses_are_looked_for_at_every_check_and_the_fastest_goes_first(self) -> None:
+        """Просьба владельца 2026-10-13: «соберём адреса и улучшим, чтобы новые искать», «самый быстрый по пингу?»."""
+        verdicts = {
+            "1.1.1.1": Probe(ALIVE, 400.0, connect_ms=60.0),
+            "1.1.1.2": Probe(ALIVE, 400.0, connect_ms=45.0),
+            "1.1.1.3": Probe(ALIVE, 400.0, connect_ms=80.0),
+            "9.9.9.1": Probe(ALIVE, 900.0, connect_ms=18.0),
+            "9.9.9.2": Probe(ALIVE, 100.0, connect_ms=70.0),
+            "9.9.9.3": Probe(DEAD),
+        }
+        fresh = {"www.youtube.com": ["9.9.9.1", "9.9.9.2", "9.9.9.3"]}
 
-        overlay, report, _asked = _check(
-            YOUTUBE_EVEN, {"YouTube": HOSTS_PROFILE_ID}, verdicts, fresh={"www.youtube.com": ["9.9.9.1"]}, ipv6=False
+        overlay, report, _asked = _check(YOUTUBE_EVEN, {"YouTube": HOSTS_PROFILE_ID}, verdicts, fresh=fresh, ipv6=False)
+
+        # Спрошены все имена, хотя адресов каталога хватало.
+        self.assertEqual(_check.resolved, ["www.youtube.com", "youtube.com"])
+        # Сравнение — по времени соединения («пинг»), а не по длительности всей пробы. Найденный
+        # адрес втрое быстрее — он первый; прежний первый остаётся запасным.
+        self.assertEqual(_rows(overlay)[:2], [("www.youtube.com", "9.9.9.1"), ("www.youtube.com", "1.1.1.1")])
+        # У второго имени свежих нет, а адреса каталога отличаются на 15 мс — порядок каталога.
+        self.assertEqual(_rows(overlay)[2:], [("youtube.com", "1.1.1.1"), ("youtube.com", "1.1.1.2")])
+        self.assertEqual(report.added, {"YouTube": ("9.9.9.1",)})
+        # Копилка: живые находки от быстрой к медленной; отказавший адрес в неё не попадает.
+        self.assertEqual(overlay["pool"], {"hosts.youtube": {"www.youtube.com": ["9.9.9.1", "9.9.9.2"]}})
+
+    def test_collected_addresses_are_tried_again_even_when_dns_is_silent(self) -> None:
+        first, _report, _asked = _check(
+            YOUTUBE_EVEN,
+            {"YouTube": HOSTS_PROFILE_ID},
+            {"1.1.1.1": Probe(ALIVE, 1.0, connect_ms=50.0), "9.9.9.2": Probe(ALIVE, 1.0, connect_ms=55.0)},
+            fresh={"www.youtube.com": ["9.9.9.2"]},
+            ipv6=False,
+        )
+        self.assertEqual(first["pool"], {"hosts.youtube": {"www.youtube.com": ["9.9.9.2"]}})
+
+        # Адреса каталога умерли, шифрованный DNS не ответил — выручает копилка.
+        dead = {address: Probe(DEAD) for address in ("1.1.1.1", "1.1.1.2", "1.1.1.3")}
+        second, report, asked = _check(
+            YOUTUBE_EVEN, {"YouTube": HOSTS_PROFILE_ID}, {**dead, "9.9.9.2": Probe(ALIVE, 1.0, connect_ms=55.0)}, previous=first, ipv6=False
         )
 
-        self.assertEqual(_check.resolved, [])
-        self.assertEqual(report.added, {})
-        self.assertEqual(_rows(overlay)[:2], [("www.youtube.com", "1.1.1.1"), ("www.youtube.com", "1.1.1.2")])
+        self.assertIn("9.9.9.2", [address for address, _host, _front in asked])
+        self.assertEqual(_rows(second)[0], ("www.youtube.com", "9.9.9.2"))
+        self.assertEqual(second["pool"], first["pool"])
 
-    def test_single_catalog_address_that_answers_needs_no_fresh_ones(self) -> None:
-        """На стенде 2026-10-13 у github.com один адрес в каталоге, и он отвечал — а движок всё равно
-        ходил за свежими и переписывал hosts."""
+        # Адрес из копилки, который сам перестал отвечать, из неё уходит.
+        third, _report, _asked = _check(
+            YOUTUBE_EVEN, {"YouTube": HOSTS_PROFILE_ID}, {"1.1.1.1": Probe(ALIVE, 1.0, connect_ms=50.0), "9.9.9.2": Probe(DEAD)}, previous=second, ipv6=False
+        )
+        self.assertEqual(third["pool"], {})
+
+    def test_ipv6_addresses_are_looked_for_only_where_ipv6_works(self) -> None:
+        """«И IPv6 искать тоже»: свежий IPv6 берётся в пробу, когда IPv6 на компьютере есть."""
+        verdicts = {"1.1.1.1": Probe(ALIVE, 1.0, connect_ms=40.0), "2001:db8::77": Probe(ALIVE, 1.0, connect_ms=20.0)}
+        fresh = {"www.youtube.com": ["2001:db8::77"]}
+
+        with_v6, _report, asked = _check(YOUTUBE_EVEN, {"YouTube": HOSTS_PROFILE_ID}, verdicts, fresh=fresh, ipv6=True)
+        self.assertIn(("www.youtube.com", "2001:db8::77"), _rows(with_v6))
+        self.assertEqual(with_v6["pool"], {"hosts.youtube": {"www.youtube.com": ["2001:db8::77"]}})
+
+        without, _report, asked = _check(YOUTUBE_EVEN, {"YouTube": HOSTS_PROFILE_ID}, verdicts, fresh=fresh, ipv6=False)
+        self.assertNotIn("2001:db8::77", [address for address, _host, _front in asked])
+        self.assertNotIn(("www.youtube.com", "2001:db8::77"), _rows(without))
+        # Найденный раньше IPv6 при этом из копилки не теряется: IPv6 мог пропасть на время.
+        kept, _report, _asked = _check(YOUTUBE_EVEN, {"YouTube": HOSTS_PROFILE_ID}, verdicts, previous=with_v6, ipv6=False)
+        self.assertEqual(kept["pool"], with_v6["pool"])
+
+    def test_wrong_catalog_address_is_replaced_by_a_found_one(self) -> None:
+        """На стенде 2026-10-13 у camo.githubassets.com в каталоге стоял адрес с чужим сертификатом."""
         catalog = _catalog(hosts_github=("GitHub", HOSTS_PROFILE_ID, [("github.com", "2.2.2.1"), ("camo.example", "2.2.2.9")]))
-        verdicts = {"2.2.2.1": Probe(ALIVE, 10.0), "2.2.2.9": Probe(DEAD, reason="чужой сертификат"), "7.7.7.7": Probe(ALIVE, 5.0)}
+        verdicts = {
+            "2.2.2.1": Probe(ALIVE, 1.0, connect_ms=40.0),
+            "2.2.2.9": Probe(DEAD, reason="чужой сертификат"),
+            "7.7.7.7": Probe(ALIVE, 1.0, connect_ms=35.0),
+        }
 
         overlay, report, _asked = _check(
             catalog, {"GitHub": HOSTS_PROFILE_ID}, verdicts, fresh={"github.com": ["7.7.7.7"], "camo.example": ["7.7.7.7"]}, ipv6=False
         )
 
-        self.assertEqual(_check.resolved, ["camo.example"])
-        # Неверный адрес каталога заменён проверенным свежим; рабочий — не тронут.
-        self.assertEqual(_rows(overlay, "hosts.github"), [("github.com", "2.2.2.1"), ("camo.example", "7.7.7.7")])
-        self.assertEqual((report.dropped, report.added), ({"GitHub": ("2.2.2.9",)}, {"GitHub": ("7.7.7.7",)}))
+        # Неверный адрес заменён найденным; у рабочего имени найденный встал запасным, вторым.
+        self.assertEqual(
+            _rows(overlay, "hosts.github"),
+            [("github.com", "2.2.2.1"), ("github.com", "7.7.7.7"), ("camo.example", "7.7.7.7")],
+        )
+        self.assertEqual(report.dropped, {"GitHub": ("2.2.2.9",)})
 
     def test_service_without_a_passport_never_asks_dns(self) -> None:
         # У Discord в hosts обходной адрес: честный DNS вернул бы настоящий, который в России не открывается.
@@ -308,16 +368,6 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(sorted(host for _address, host, _front in asked), ["avatars0.githubusercontent.com", "github.githubassets.com"])
         self.assertEqual(overlay["services"], {})
 
-    def test_a_hiccup_with_other_addresses_alive_does_not_call_for_fresh_ones(self) -> None:
-        verdicts = {"1.1.1.1": Probe(ALIVE, 10.0), "1.1.1.2": Probe(UNKNOWN), "1.1.1.3": Probe(UNKNOWN)}
-
-        _overlay, report, _asked = _check(
-            YOUTUBE_EVEN, {"YouTube": HOSTS_PROFILE_ID}, verdicts, fresh={"www.youtube.com": ["9.9.9.1"]}, ipv6=False
-        )
-
-        self.assertEqual(_check.resolved, [])
-        self.assertEqual(report.added, {})
-
     def test_internet_is_checked_only_when_nobody_answered(self) -> None:
         """Отдельная проверка связи на стенде занимала три секунды на каждое нажатие тумблера."""
         calls: list[str] = []
@@ -362,12 +412,29 @@ class EngineTests(unittest.TestCase):
         first, _report, _asked = _check(YOUTUBE, {"YouTube": HOSTS_PROFILE_ID}, hiccup, ipv6=False)
         self.assertEqual(_rows(first)[0], ("www.youtube.com", "1.1.1.2"))
 
-        # Первый адрес каталога снова отвечает, и даже быстрее — но менять рабочий порядок незачем.
-        all_fine = {"1.1.1.1": Probe(ALIVE, 5.0), "1.1.1.2": Probe(ALIVE, 70.0), "1.1.1.3": Probe(ALIVE, 60.0)}
+        # Первый адрес каталога снова отвечает, и чуть быстрее — но менять рабочий порядок незачем.
+        all_fine = {"1.1.1.1": Probe(ALIVE, 55.0), "1.1.1.2": Probe(ALIVE, 70.0), "1.1.1.3": Probe(ALIVE, 60.0)}
         second, report, _asked = _check(YOUTUBE, {"YouTube": HOSTS_PROFILE_ID}, all_fine, ipv6=False, previous=first)
 
         self.assertEqual(_rows(second), _rows(first))
         self.assertFalse(report.changed)
+
+    def test_first_address_gives_way_only_to_a_clearly_faster_one(self) -> None:
+        first, _report, _asked = _check(
+            YOUTUBE_EVEN, {"YouTube": HOSTS_PROFILE_ID}, {"1.1.1.1": Probe(ALIVE, 80.0), "1.1.1.2": Probe(ALIVE, 90.0)}, ipv6=False
+        )
+        self.assertEqual(_rows(first)[:2], [("www.youtube.com", "1.1.1.1"), ("www.youtube.com", "1.1.1.2")])
+
+        # Быстрее на 25 мс — шум замера, порядок прежний.
+        noise = {"1.1.1.1": Probe(ALIVE, 80.0), "1.1.1.2": Probe(ALIVE, 55.0)}
+        same, report, _asked = _check(YOUTUBE_EVEN, {"YouTube": HOSTS_PROFILE_ID}, noise, ipv6=False, previous=first)
+        self.assertFalse(report.changed)
+
+        # Вчетверо быстрее — это уже другой сервер ближе; он и становится первым.
+        closer = {"1.1.1.1": Probe(ALIVE, 80.0), "1.1.1.2": Probe(ALIVE, 20.0)}
+        moved, report, _asked = _check(YOUTUBE_EVEN, {"YouTube": HOSTS_PROFILE_ID}, closer, ipv6=False, previous=first)
+        self.assertEqual(_rows(moved)[:2], [("www.youtube.com", "1.1.1.2"), ("www.youtube.com", "1.1.1.1")])
+        self.assertTrue(report.changed)
 
     def test_ipv6_rows_are_written_only_when_ipv6_really_answers(self) -> None:
         """Вопрос владельца «почему не IPv6»: у адаптера адрес есть, а связи по IPv6 нет."""

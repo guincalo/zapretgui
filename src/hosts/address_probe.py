@@ -43,9 +43,13 @@ RETRY_PAUSE_S = 0.5
 @dataclass(frozen=True, slots=True)
 class Probe:
     verdict: str
-    # За сколько адрес ответил; по этому живые адреса ставятся в порядок.
+    # За сколько адрес прошёл всю пробу.
     ms: float | None = None
     reason: str = ""
+    # За сколько установилось соединение — то же, что показывает «пинг»: по этому числу
+    # движок сравнивает живые адреса. Вся проба для сравнения не годится: у адреса с
+    # нейтральным именем в неё входит ещё и запрос страницы.
+    connect_ms: float | None = None
 
 
 _context_lock = threading.Lock()
@@ -114,13 +118,14 @@ def check_address(ip: str, host: str, *, front: str = "") -> Probe:
         sock, outcome = _connect(ip)
     if sock is None:
         return Probe(DEAD, reason="порт закрыт" if outcome == "refused" else "не отвечает")
+    connect_ms = (time.perf_counter() - started) * 1000.0
     hello_name = front or host
     try:
         sock.settimeout(HELLO_TIMEOUT_S)
         with _verified_context().wrap_socket(sock, server_hostname=hello_name) as tls:
             if not front:
                 # Сертификат проверен для самого имени сервиса: адрес его и отдаёт.
-                return Probe(ALIVE, (time.perf_counter() - started) * 1000.0)
+                return Probe(ALIVE, (time.perf_counter() - started) * 1000.0, connect_ms=connect_ms)
             tls.sendall(f"HEAD / HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n".encode("ascii", "ignore"))
             head = b""
             while b"\r\n\r\n" not in head and len(head) < 16384:
@@ -129,7 +134,7 @@ def check_address(ip: str, host: str, *, front: str = "") -> Probe:
                     break
                 head += chunk
             if _serves(host, head):
-                return Probe(ALIVE, (time.perf_counter() - started) * 1000.0)
+                return Probe(ALIVE, (time.perf_counter() - started) * 1000.0, connect_ms=connect_ms)
             return Probe(DEAD, reason="адрес занят другим сервисом")
     except ssl.SSLCertVerificationError:
         return Probe(DEAD, reason="чужой сертификат")

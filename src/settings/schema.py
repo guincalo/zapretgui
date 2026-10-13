@@ -171,7 +171,7 @@ def default_hosts() -> dict[str, Any]:
         "selection": {},
         # Адреса, которые программа сама проверила на этом компьютере (hosts.address_engine):
         # какие из адресов каталога и свежих адресов сейчас отвечают и в каком порядке их писать.
-        "engine": {"catalog": "", "checked_at": "", "suspects": [], "services": {}},
+        "engine": {"catalog": "", "checked_at": "", "suspects": [], "services": {}, "pool": {}},
     }
 
 

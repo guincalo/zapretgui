@@ -66,11 +66,28 @@ def clean_overlay(raw: object) -> dict:
         for item in (data.get("suspects") if isinstance(data.get("suspects"), list) else ())
         if _valid_ip(str(item).strip())
     ]
+    # Копилка: адреса, которые программа сама нашла и проверила, — запас сверх каталога.
+    pool: dict[str, dict[str, list[str]]] = {}
+    for service_id, hosts in (data.get("pool") if isinstance(data.get("pool"), dict) else {}).items():
+        found: dict[str, list[str]] = {}
+        for host, addresses in (hosts if isinstance(hosts, dict) else {}).items():
+            clean = list(
+                dict.fromkeys(
+                    str(item).strip().lower()
+                    for item in (addresses if isinstance(addresses, list) else ())
+                    if _valid_ip(str(item).strip())
+                )
+            )
+            if clean and str(host).strip():
+                found[str(host).strip().lower()] = clean
+        if found:
+            pool[str(service_id)] = found
     return {
         "catalog": str(data.get("catalog") or ""),
         "checked_at": str(data.get("checked_at") or ""),
         "suspects": sorted(set(suspects)),
         "services": services,
+        "pool": pool,
     }
 
 
