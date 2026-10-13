@@ -298,15 +298,20 @@ class RecheckLanesTests(unittest.TestCase):
             probe.reach_state = ReachState.DPI
             done_probes.append((key, target, probe, None))
 
-        lock = threading.Lock()
+        lock = threading.Condition()
         now = {"light": 0, "full": 0}
         peak = {"light": 0, "full": 0}
+        # Задача держит место, пока очередь не заполнится до своего предела (или секунду):
+        # пик тогда задаёт очередь, а не то, как быстро машина успела запустить потоки.
+        fill = {"light": engine.RECHECK_LIGHT_AT_ONCE, "full": engine.RECHECK_AT_ONCE}
 
         def busy(kind: str) -> None:
             with lock:
                 now[kind] += 1
                 peak[kind] = max(peak[kind], now[kind])
-            time.sleep(0.05)
+                lock.notify_all()
+                lock.wait_for(lambda: peak[kind] >= fill[kind], timeout=1.0)
+            time.sleep(0.01)
             with lock:
                 now[kind] -= 1
 
