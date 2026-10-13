@@ -101,6 +101,8 @@ class _Network:
             patch.object(engine, "_inspect_quic", lambda domain, ip, max_ttl, cancel: self.quic(domain, ip)),
             patch.object(engine, "_http", http_spy),
             patch.object(engine, "_check_site", site_spy),
+            # Подсказка через hosts читает каталог и файл hosts и пробует адреса по сети.
+            patch.object(engine, "_hosts_help", lambda domain, cancel: engine.HostsHelp()),
             patch.object(engine, "fetch_cert_names", lambda ip, server_name=None: CertNames("ok", ("cert.example",), "cn.example")),
             patch.object(engine, "_tcp_connect", lambda ip, port=443: engine.TcpReport(ip, port, "ok", 5.0)),
             patch("utils.windows_icmp.ping_ipv4_host_winapi", lambda *a, **k: ping),
@@ -776,24 +778,28 @@ V4 = "93.184.216.34"
 class ProgramRoadTests(unittest.TestCase):
     """Жалоба владельца 2026-10-14: «нифига не открывается», а проверка «пишет что всё ок».
 
-    Windows отдавала программам адрес IPv6, пинг по нему терял всё, а сайт проверялся по IPv4.
+    В его hosts стояли две чужие строки IPv6 для www.youtube.com. Без тумблера YouTube Windows отдавала
+    программам только их; с тумблером — ставила их впереди адресов IPv4. Сайт проверялся по IPv4.
     """
 
-    def _run(self, *, first=V6, v6_tcp="timeout", road=None, site_level="ok", v4_tcp="ok", hint=("YouTube", ())):
+    def _run(self, *, first=V6, only_v6=False, v6_tcp="timeout", road=None, site_level="ok", v4_tcp="ok", help=None):
         net = _Network(self)
         net.site = {"level": site_level, "headline": "www.youtube.com открывается"}
         infos = [(socket.AF_INET6, 0, 0, "", (V6, 0, 0, 0)), (socket.AF_INET, 0, 0, "", (V4, 0))]
         if first == V4:
             infos.reverse()
+        if only_v6:
+            infos = infos[:1]
 
         def tcp(ip, port=443):
             status = v6_tcp if ":" in ip else v4_tcp
             return engine.TcpReport(ip, port, status, 5.0 if status == "ok" else None)
 
+        found = help if help is not None else engine.HostsHelp(service="YouTube")
         patches = [
             patch("utils.net_resolve.resolve_addrinfo", lambda host, **k: infos),
             patch.object(engine, "_tcp_connect", tcp),
-            patch.object(engine, "_hosts_hint", lambda domain: hint),
+            patch.object(engine, "_hosts_help", lambda domain, cancel: found),
         ]
         if road is not None:
             patches.append(patch.object(engine, "_program_road", lambda domain, ip, cancel: road))
@@ -811,42 +817,59 @@ class ProgramRoadTests(unittest.TestCase):
         with patch("utils.net_resolve.resolve_addrinfo", return_value=list(reversed(infos))):
             self.assertEqual(engine.program_ipv6([engine._ask_windows("www.youtube.com")]), "")
 
-    def test_dead_ipv6_that_windows_prefers_is_the_headline_not_all_is_well(self) -> None:
-        report = self._run()
+    def test_only_ipv6_from_windows_and_it_is_dead_is_the_red_headline(self) -> None:
+        report = self._run(only_v6=True)
 
         # Проверен именно тот адрес, на который идут программы, а не только адрес IPv4.
-        self.assertEqual(report.primary_ip, V4)
         self.assertEqual((report.road.ip, report.road.tcp.status), (V6, "timeout"))
         self.assertEqual(report.ping6.ip, V6)
         self.assertEqual(engine.road_trouble(report), engine.ROAD_DEAD)
+        self.assertTrue(plans.road_is_fatal(report))
 
         status = plans.build_status(report)
         self.assertEqual(status.tone, plans.TONE_ERROR)
-        self.assertIn("Windows ведёт программы на адрес IPv6, а связи по IPv6 с сервером нет", status.text)
+        self.assertIn("Windows отдаёт программам только адреса IPv6, а соединение по IPv6 не устанавливается", status.text)
         first = plans.build_ping_lines(report)[0]
         self.assertEqual(first.tone, plans.TONE_ERROR)
+        self.assertIn("Программам некуда идти", first.text)
         self.assertIn(V6, first.text)
+        # Вывод сделан по соединению, а не по пингу, — и это сказано.
+        self.assertIn("пинг в этом выводе не участвует", first.text)
         # И сказано, что делать: у YouTube есть тумблер, который пишет адреса IPv4.
         self.assertIn("Включите тумблер «YouTube» на странице «Редактор hosts»", first.text)
         entry = plans.build_history_entry(report)
         self.assertEqual(entry["level"], "fail")
-        self.assertIn("Windows ведёт программы на адрес IPv6", entry["headline"])
-        self.assertIn("Программы идут не туда", plans.build_text_report(report))
+        self.assertIn("Windows отдаёт программам только адреса IPv6", entry["headline"])
+        self.assertIn("Программам некуда идти", plans.build_text_report(report))
 
-    def test_cards_stop_saying_the_site_opens(self) -> None:
+    def test_dead_ipv6_next_to_a_working_ipv4_is_a_warning_not_a_broken_site(self) -> None:
+        """Владелец: «хотя он открывается» — браузер сам переходит на IPv4, а проверка писала «не открывается»."""
         from dns.ui import domain_lookup_cards as lookup_cards
 
         site = {
             "id": "site:user:www.youtube.com", "name": "www.youtube.com", "level": "ok", "headline": "www.youtube.com открывается",
             "targets": [], "problems": [],
         }
-        report = self._run()
-        cards = {card.key: card for card in lookup_cards.build_lookup_cards(engine.replace(report, site=site))}
+        report = engine.replace(self._run(), site=site)
+
+        self.assertEqual(engine.road_trouble(report), engine.ROAD_DEAD)
+        self.assertFalse(plans.road_is_fatal(report))
+        self.assertEqual(plans.build_status(report).tone, plans.TONE_WARNING)
+        first = plans.build_ping_lines(report)[0]
+        self.assertEqual(first.tone, plans.TONE_WARNING)
+        self.assertIn("Браузер обычно сам переходит на IPv4", first.text)
+        self.assertEqual(plans.build_history_entry(report)["level"], "warn")
+
+        cards = {card.key: card for card in lookup_cards.build_lookup_cards(report)}
         ping = cards[lookup_cards.KEY_PING]
-        self.assertEqual((ping.level, ping.status), ("fail", "Программы идут по IPv6 — он не работает"))
+        self.assertEqual((ping.level, ping.status), ("warn", "IPv6 не работает, а Windows ставит его первым"))
+        # Карточка сайта остаётся про то, что измерено: её уровень не трогается, иначе дорога
+        # «Вы → DNS → Сервер → Сайт» показывала «адрес закрыт» у открытого сайта.
+        plain = lookup_cards.build_lookup_cards(engine.replace(report, road=None))[0]
         site_card = next(card for card in cards.values() if card.site)
-        self.assertEqual((site_card.level, site_card.status), ("fail", "В программах не открывается"))
-        self.assertIn("Windows ведёт программы на адрес IPv6", site_card.lines[0].name)
+        self.assertEqual((site_card.level, site_card.status, site_card.kind), (plain.level, plain.status, plain.kind))
+        self.assertEqual(site_card.lines[0].state, "warn")
+        self.assertIn("Windows первым отдаёт программам адрес IPv6", site_card.lines[0].name)
 
     def test_name_cut_on_the_ipv6_road_is_found_when_ipv4_opens(self) -> None:
         tcp = engine.TcpReport(V6, 443, "ok", 20.0)
@@ -874,15 +897,64 @@ class ProgramRoadTests(unittest.TestCase):
                 report = self._run(**kwargs)
                 self.assertEqual(engine.road_trouble(report), "")
                 self.assertEqual(plans.road_problem(report), "")
-                self.assertNotEqual(plans.build_ping_lines(report)[0].tone, plans.TONE_ERROR)
+                self.assertNotIn("идут не туда", plans.build_ping_lines(report)[0].text)
 
-    def test_advice_depends_on_what_hosts_already_holds(self) -> None:
-        written = self._run(hint=("YouTube", (V6,)))
-        self.assertIn("Этот адрес записан в файле hosts. Выключите и снова включите тумблер «YouTube»", plans.road_cure(written))
-        foreign = self._run(hint=("", (V6,)))
-        self.assertIn("уберите строку", plans.road_cure(foreign))
-        unknown = self._run(hint=("", ()))
+    def test_advice_depends_on_who_wrote_the_row(self) -> None:
+        by_program = self._run(help=engine.HostsHelp("YouTube", rows=(V6,), managed=(V6,)))
+        self.assertIn("Этот адрес записала программа. Выключите и снова включите тумблер «YouTube»", plans.road_cure(by_program))
+        # Чужая строка при включённом сервисе: программа уберёт её сама при следующей записи.
+        fights = self._run(help=engine.HostsHelp("YouTube", rows=(V4, V6), managed=(V4,)))
+        self.assertIn("мешает сервису «YouTube»", plans.road_cure(fights))
+        self.assertIn("программа уберёт эту строку сама", plans.road_cure(fights))
+        # Чужая строка, а тумблер выключен: включить — и строка уйдёт.
+        alone = self._run(help=engine.HostsHelp("YouTube", rows=(V6,)))
+        self.assertIn("Включите тумблер «YouTube»", plans.road_cure(alone))
+        self.assertIn("уберёт эту строку сама", plans.road_cure(alone))
+        # Сервиса для имени нет — убирать строку придётся самому.
+        foreign = self._run(help=engine.HostsHelp("", rows=(V6,)))
+        self.assertIn("Удалите её сами", plans.road_cure(foreign))
+        unknown = self._run(help=engine.HostsHelp())
         self.assertIn("отключить IPv6", plans.road_cure(unknown))
+
+    def test_closed_site_that_opens_by_the_hosts_address_gets_the_advice_to_turn_the_tile_on(self) -> None:
+        """Владелец 2026-10-14: «только после hosts открывается, а программа это не проверяет и не
+        советует включить обход». По адресу от DNS имя резали, по адресу из «Редактора hosts» — нет."""
+        opens = engine.ProgramRoad("64.233.162.198", engine.TcpReport("64.233.162.198", 443, "ok", 20.0), opens=True)
+        report = self._run(first=V4, site_level="fail", help=engine.HostsHelp("YouTube", road=opens))
+
+        advice = plans.hosts_advice(report)
+        self.assertIn("По адресу из «Редактора hosts» (64.233.162.198) этот сайт открывается", advice)
+        self.assertIn("тумблер «YouTube»", advice)
+        self.assertIn(advice, plans.build_status(report).text)
+        self.assertIn(advice, plans.build_history_entry(report)["problems"])
+        self.assertIn(f"Что поможет: {advice}", plans.build_text_report(report))
+        # Совет даётся только по доказанному: сайт закрыт, а по адресу из hosts открылся.
+        for kwargs in (
+            {"site_level": "ok", "help": engine.HostsHelp("YouTube", road=opens)},
+            {"site_level": "fail", "help": engine.HostsHelp("YouTube", road=engine.replace(opens, opens=False))},
+            {"site_level": "fail", "help": engine.HostsHelp("YouTube")},
+        ):
+            self.assertEqual(plans.hosts_advice(self._run(first=V4, **kwargs)), "")
+
+    def test_hosts_addresses_are_tried_only_while_the_tile_is_off(self) -> None:
+        tried: list[str] = []
+
+        def road(domain, ip, cancel):
+            tried.append(ip)
+            return engine.ProgramRoad(ip, engine.TcpReport(ip, 443, "ok", 5.0), opens=ip == "2.2.2.2")
+
+        offered = ("1.1.1.1", "2.2.2.2", "3.3.3.3")
+        with patch.object(engine, "_program_road", road):
+            with patch.object(engine, "_hosts_facts", lambda domain: ("YouTube", offered, (V6,), ())):
+                found = engine._hosts_help("www.youtube.com", engine.SocketCancel())
+            # Пробуются по очереди, до первого адреса, по которому сайт открылся.
+            self.assertEqual(tried, ["1.1.1.1", "2.2.2.2"])
+            self.assertEqual((found.service, found.road.ip, found.road.opens), ("YouTube", "2.2.2.2", True))
+            tried.clear()
+            # Адрес сервиса уже в файле — тумблер включён, пробовать нечего: сайт и так проверяется по нему.
+            with patch.object(engine, "_hosts_facts", lambda domain: ("YouTube", offered, ("1.1.1.1",), ("1.1.1.1",))):
+                self.assertIsNone(engine._hosts_help("www.youtube.com", engine.SocketCancel()).road)
+            self.assertEqual(tried, [])
 
     def test_road_probe_uses_the_real_site_name_and_judges_only_cut_greetings(self) -> None:
         from diagnostics import protocol_probe

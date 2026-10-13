@@ -238,10 +238,13 @@ class DomainLookupReport:
     tcp: TcpReport | None = None
     # Адрес IPv6, который Windows отдаёт программам первым, и что по нему получается.
     road: ProgramRoad | None = None
-    # Сервис «Редактора hosts», тумблер которого даёт этому имени адрес IPv4 (пусто — такого нет),
-    # и адреса имени, которые уже записаны в файле hosts.
+    # Сервис «Редактора hosts», тумблер которого даёт этому имени адрес IPv4 (пусто — такого нет).
     hosts_service: str = ""
+    # Адреса имени в файле hosts: все и те из них, что записала программа (в своём блоке).
     hosts_rows: tuple[str, ...] = ()
+    hosts_managed: tuple[str, ...] = ()
+    # Что получается по адресу из «Редактора hosts», пока его тумблер выключен. None — не пробовали.
+    hosts_road: ProgramRoad | None = None
     network: NetworkInfo | None = None
     sources: tuple[NeighborSource, ...] = ()
     # Путь до адреса по узлам. None — ещё не готов.
@@ -477,6 +480,10 @@ def program_ipv6(answers: Iterable[ResolverAnswer]) -> str:
 def _program_road(domain: str | None, ip: str, cancel: SocketCancel) -> ProgramRoad:
     """Что получается по адресу, на который Windows ведёт программы: соединение и пробы с именем сайта."""
     tcp = _tcp_connect(ip)
+    if tcp.status != "ok":
+        # Вывод «связи нет» делается по соединению, а не по пингу (на пинг многие узлы не отвечают),
+        # и только после второй попытки: одна несостоявшаяся — ещё не доказательство.
+        tcp = _tcp_connect(ip)
     if tcp.status != "ok" or not domain:
         return ProgramRoad(ip=ip, tcp=tcp)
     from diagnostics import protocol_probe
@@ -495,16 +502,61 @@ def _program_road(domain: str | None, ip: str, cancel: SocketCancel) -> ProgramR
     return ProgramRoad(ip=ip, tcp=tcp, lines=lines, opens=opens)
 
 
-def _hosts_hint(domain: str) -> tuple[str, tuple[str, ...]]:
-    """Чем помочь через hosts: сервис с адресом IPv4 для имени и адреса имени, уже записанные в файл."""
-    from hosts.proxy_domains import direct_service_with_ipv4
+# Сколько адресов из «Редактора hosts» пробовать, пока один не откроет сайт.
+HOSTS_ROAD_TRIES = 2
+
+
+@dataclass(frozen=True, slots=True)
+class HostsHelp:
+    """Что о сайте знает «Редактор hosts» и что уже записано в файле."""
+
+    service: str = ""
+    rows: tuple[str, ...] = ()
+    managed: tuple[str, ...] = ()
+    road: ProgramRoad | None = None
+
+
+def _hosts_facts(domain: str) -> tuple[str, tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
+    """Сервис с адресом IPv4 для имени, его адреса IPv4, адреса имени в файле hosts и те из них, что в блоке программы."""
+    from hosts.catalog_repository import HOSTS_PROFILE_ID
+    from hosts.hosts import _iter_managed_hosts_block_rows, safe_read_hosts_file
+    from hosts.proxy_domains import direct_service_with_ipv4, get_service_domain_ip_rows
     from utils.windows_dns_query import hosts_file_addresses
 
+    wanted = domain.casefold()
+    service = direct_service_with_ipv4(domain)
+    offered = tuple(
+        dict.fromkeys(
+            str(address)
+            for host, address in (get_service_domain_ip_rows(service, HOSTS_PROFILE_ID) if service else ())
+            if str(host).casefold() == wanted and ":" not in str(address)
+        )
+    )
+    text = safe_read_hosts_file() or ""
+    managed = tuple(
+        dict.fromkeys(
+            str(address).strip().lower()
+            for host, address in _iter_managed_hosts_block_rows(str(text).splitlines(keepends=True))
+            if str(host).strip().casefold() == wanted
+        )
+    )
+    return service, offered, tuple(address.lower() for address in hosts_file_addresses(domain)), managed
+
+
+def _hosts_help(domain: str, cancel: SocketCancel) -> HostsHelp:
+    """Подсказка через hosts. Если тумблер сервиса выключен, его адреса пробуются настоящим именем сайта:
+    откроется по ним сайт — значит, тумблер поможет, и об этом можно сказать прямо."""
     try:
-        service = direct_service_with_ipv4(domain)
+        service, offered, rows, managed = _hosts_facts(domain)
     except Exception:
-        service = ""
-    return service, tuple(hosts_file_addresses(domain))
+        return HostsHelp()
+    road: ProgramRoad | None = None
+    if service and not any(address in rows for address in offered):
+        for address in offered[:HOSTS_ROAD_TRIES]:
+            road = _program_road(domain, address, cancel)
+            if road.opens:
+                break
+    return HostsHelp(service=service, rows=rows, managed=managed, road=road)
 
 
 ROAD_DEAD = "dead"
@@ -527,6 +579,18 @@ def road_trouble(report: "DomainLookupReport") -> str:
     if road.opens is False and str(site.get("level") or "") in ("ok", "warn"):
         return ROAD_BLOCKED
     return ""
+
+
+def road_is_the_only_way(report: "DomainLookupReport") -> bool:
+    """Windows отдаёт программам одни адреса IPv6: перейти на IPv4 им некуда.
+
+    Так бывает, когда в файле hosts у имени записаны только адреса IPv6: про IPv4 Windows тогда
+    у DNS уже не спрашивает (проверено на стенде 2026-10-14).
+    """
+    for item in getattr(report, "answers", ()):
+        if item.server.kind == SERVER_WINDOWS and item.status == STATUS_OK:
+            return bool(item.ipv6) and not item.ipv4
+    return False
 
 
 def _ask_helpers(name: str, rtype: int, servers: Iterable[str]):
@@ -1119,8 +1183,8 @@ def _address_stage(run: _Run, report: DomainLookupReport, servers, use_external:
         futures[run.pool.submit(_ping, ipv6, run.halted)] = "ping6"
     if road_ip:
         futures[run.pool.submit(_program_road, domain, road_ip, run.cancel)] = "road"
-        if domain:
-            futures[run.pool.submit(_hosts_hint, domain)] = "hosts_hint"
+    if domain and public:
+        futures[run.pool.submit(_hosts_help, domain, run.cancel)] = "hosts_help"
     if ":" not in ip:
         futures[run.pool.submit(trace_route, ip, should_stop=run.halted)] = "route"
         if domain and public:
@@ -1162,8 +1226,10 @@ def _address_stage(run: _Run, report: DomainLookupReport, servers, use_external:
             report = replace(report, tcp=result)
         elif key == "road" and isinstance(result, ProgramRoad):
             report = replace(report, road=result)
-        elif key == "hosts_hint" and isinstance(result, tuple):
-            report = replace(report, hosts_service=str(result[0]), hosts_rows=tuple(result[1]))
+        elif key == "hosts_help" and isinstance(result, HostsHelp):
+            report = replace(
+                report, hosts_service=result.service, hosts_rows=result.rows, hosts_managed=result.managed, hosts_road=result.road
+            )
         elif key == "route" and isinstance(result, RouteTrace):
             report = replace(report, route=result)
         elif key == "quic" and isinstance(result, tuple):
@@ -1208,8 +1274,10 @@ __all__ = [
     "SERVER_WINDOWS",
     "ROAD_BLOCKED",
     "ROAD_DEAD",
+    "HostsHelp",
     "ProgramRoad",
     "program_ipv6",
+    "road_is_the_only_way",
     "road_trouble",
     "SOURCE_CERT_DEFAULT",
     "SOURCE_CERT_NAMED",

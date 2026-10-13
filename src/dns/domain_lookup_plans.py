@@ -40,6 +40,7 @@ from dns.domain_lookup import (
     windows_blind,
     ROAD_BLOCKED,
     ROAD_DEAD,
+    road_is_the_only_way,
     road_trouble,
 )
 from utils.dns_wire import STATUS_EMPTY, STATUS_NXDOMAIN, STATUS_OK, STATUS_REFUSED, STATUS_TIMEOUT
@@ -186,34 +187,68 @@ def road_problem(report: DomainLookupReport) -> str:
     """Беда на дороге программ одной фразой. Пусто — её нет.
 
     Windows при живом IPv6 ставит первым адрес IPv6, и программы идут на него. Сайт при этом
-    проверяется по IPv4 — и «открывается», хотя в браузере не открывается.
+    проверяется по IPv4 — и «открывается», хотя программы до него не доходят.
     """
     kind = road_trouble(report)
-    if kind == ROAD_DEAD:
-        return "Windows ведёт программы на адрес IPv6, а связи по IPv6 с сервером нет"
-    if kind == ROAD_BLOCKED:
-        return "Windows ведёт программы на адрес IPv6, а по IPv6 сайт не открывается"
-    return ""
+    if not kind:
+        return ""
+    what = "соединение по IPv6 не устанавливается" if kind == ROAD_DEAD else "по IPv6 сайт не открывается"
+    if road_is_the_only_way(report):
+        return f"Windows отдаёт программам только адреса IPv6, а {what}"
+    return f"Windows первым отдаёт программам адрес IPv6, а {what}"
+
+
+def road_is_fatal(report: DomainLookupReport) -> bool:
+    """Программам некуда идти: Windows отдаёт одни адреса IPv6, и они не работают.
+
+    Когда рядом есть адрес IPv4, браузер переходит на него сам — это помеха, а не поломка.
+    """
+    return bool(road_trouble(report)) and road_is_the_only_way(report)
 
 
 def road_cure(report: DomainLookupReport) -> str:
     """Что сделать, когда дорога программ не работает."""
     road = report.road
     service = report.hosts_service
-    in_hosts = road is not None and road.ip in report.hosts_rows
-    if in_hosts and service:
+    ip = road.ip.lower() if road is not None else ""
+    if ip and ip in report.hosts_managed:
         return (
-            f"Этот адрес записан в файле hosts. Выключите и снова включите тумблер «{service}» на странице "
-            "«Редактор hosts»: программа перепроверит адреса и оставит те, по которым сайт открывается."
+            f"Этот адрес записала программа. Выключите и снова включите тумблер «{service}» на странице "
+            "«Редактор hosts»: адреса перепроверятся, и останутся те, по которым сайт открывается."
         )
-    if in_hosts:
-        return "Этот адрес записан в файле hosts: уберите строку с ним (страница «Редактор hosts», вкладка с файлом)."
+    if ip and ip in report.hosts_rows:
+        if service and report.hosts_managed:
+            return (
+                f"Строка с этим адресом записана в файле hosts не программой и мешает сервису «{service}». Выключите и "
+                "снова включите его тумблер на странице «Редактор hosts» — программа уберёт эту строку сама."
+            )
+        if service:
+            return (
+                f"Строка с этим адресом записана в файле hosts не программой. Включите тумблер «{service}» на странице "
+                "«Редактор hosts»: программа запишет рабочие адреса и уберёт эту строку сама."
+            )
+        return (
+            "Строка с этим адресом записана в файле hosts не программой. "
+            "Удалите её сами: страница «Редактор hosts», раздел «Файл hosts»."
+        )
     if service:
         return (
             f"Включите тумблер «{service}» на странице «Редактор hosts»: программа запишет сайту адреса IPv4, "
             "и программы пойдут по ним."
         )
     return "Помогает отключить IPv6 в свойствах сетевого адаптера Windows или починить его на роутере."
+
+
+def hosts_advice(report: DomainLookupReport) -> str:
+    """Совет включить тумблер «Редактора hosts», когда доказано, что по его адресам сайт открывается. Пусто — совета нет."""
+    road = getattr(report, "hosts_road", None)
+    site = getattr(report, "site", None) or {}
+    if road is None or road.opens is not True or str(site.get("level") or "") != "fail":
+        return ""
+    return (
+        f"По адресу из «Редактора hosts» ({road.ip}) этот сайт открывается: включите там тумблер "
+        f"«{report.hosts_service}»."
+    )
 
 
 def build_road_lines(report: DomainLookupReport) -> tuple[InfoLine, ...]:
@@ -223,24 +258,25 @@ def build_road_lines(report: DomainLookupReport) -> tuple[InfoLine, ...]:
         return ()
     kind = road_trouble(report)
     lines: list[InfoLine] = []
-    if kind == ROAD_DEAD:
-        lines.append(
-            InfoLine(
-                f"Программы идут не туда: Windows первым отдаёт им адрес IPv6 {road.ip}, а связи с ним нет. "
-                "По IPv4 сервер отвечает, поэтому проверка сайт открывает, а браузер и программы — долго ждут "
-                f"или не открывают вовсе. {road_cure(report)}",
-                TONE_ERROR,
+    if kind:
+        if kind == ROAD_DEAD:
+            what = "соединение с ним не устанавливается (порт 443, две попытки; пинг в этом выводе не участвует)"
+        else:
+            what = "по нему сайт не открывается: соединение есть, но приветствие с именем сайта до сервера не доходит"
+        if road_is_the_only_way(report):
+            text = (
+                f"Программам некуда идти: Windows отдаёт им только адреса IPv6 (первый — {road.ip}), а {what}. "
+                "По IPv4 сервер отвечает, но Windows этот адрес программам не называет — сайт не откроется ни в "
+                f"браузере, ни в программах. {road_cure(report)}"
             )
-        )
-    elif kind == ROAD_BLOCKED:
-        lines.append(
-            InfoLine(
-                f"Программы идут не туда: Windows первым отдаёт им адрес IPv6 {road.ip}, а по нему сайт не "
-                "открывается — соединение есть, но приветствие с именем сайта до сервера не доходит. По IPv4 сайт "
-                f"открывается. {road_cure(report)}",
-                TONE_ERROR,
+            lines.append(InfoLine(text, TONE_ERROR))
+        else:
+            text = (
+                f"Программы сначала идут не туда: Windows первым отдаёт им адрес IPv6 {road.ip}, а {what}. "
+                "Браузер обычно сам переходит на IPv4, а другие программы могут долго ждать или не открыть сайт. "
+                f"{road_cure(report)}"
             )
-        )
+            lines.append(InfoLine(text, TONE_WARNING))
     tcp = road.tcp
     if tcp.status == "ok":
         lines.append(InfoLine(f"Подключение по IPv6 к порту {tcp.port} ({road.ip}): успешно за {_ms(tcp.elapsed_ms)}.", TONE_SUCCESS))
@@ -411,8 +447,8 @@ def build_ping_lines(report: DomainLookupReport) -> tuple[InfoLine, ...]:
         lines.append(InfoLine("Сервер просто не отвечает на пинг, но сам работает — это обычное дело.", TONE_MUTED))
     road = build_road_lines(report)
     # Вывод о дороге программ — первой строкой: он объясняет, почему «всё отвечает», а сайт не открывается.
-    head = tuple(line for line in road if line.tone == TONE_ERROR)
-    return (*head, *lines, *(line for line in road if line.tone != TONE_ERROR))
+    head = road[:1] if road_trouble(report) else ()
+    return (*head, *lines, *road[len(head):])
 
 
 def build_network_lines(report: DomainLookupReport) -> tuple[InfoLine, ...]:
@@ -556,10 +592,12 @@ def build_status(report: DomainLookupReport) -> InfoLine:
     # Строка итога называет главное: «адрес и число доменов» при закрытом сайте читалось как «всё хорошо».
     site = getattr(report, "site", None) or {}
     if str(site.get("level") or "") == "fail" and site.get("headline"):
-        return InfoLine(f"Готово за {seconds}. {site['headline']}.", TONE_ERROR)
+        advice = hosts_advice(report)
+        return InfoLine(f"Готово за {seconds}. {site['headline']}." + (f" {advice}" if advice else ""), TONE_ERROR)
     road = road_problem(report)
     if road:
-        return InfoLine(f"Готово за {seconds}. {road} (карточка «Пинг и сеть»).", TONE_ERROR)
+        tone = TONE_ERROR if road_is_fatal(report) else TONE_WARNING
+        return InfoLine(f"Готово за {seconds}. {road} (карточка «Пинг и сеть»).", tone)
     trouble = own_dns_trouble(report)
     if trouble:
         return InfoLine(f"Готово за {seconds}. {trouble} (карточка «Адреса с разных DNS-серверов»).", TONE_WARNING)
@@ -591,7 +629,10 @@ def build_history_entry(report: DomainLookupReport) -> dict | None:
     if road:
         # Сайт сам доступен, а программы до него не доходят: в истории это беда, а не «открывается».
         problems.insert(1 if site_level == "fail" else 0, f"{report.target}: {road}. {road_cure(report)}")
-        hard = True
+        hard = hard or road_is_fatal(report)
+    advice = hosts_advice(report)
+    if advice:
+        problems.append(advice)
     if hard:
         level = "fail"
     elif problems:
@@ -626,6 +667,9 @@ def build_site_lines(report: DomainLookupReport) -> list[str]:
         lines.append(f"Поток по имени: {names.get('headline', '')}")
         lines.append(f"    контроль {names.get('server', '')} под своим именем: {names.get('control', '')}")
         lines += [f"    {item.get('host', '')}: {item.get('text', '')}" for item in names["items"]]
+    advice = hosts_advice(report)
+    if advice:
+        lines.append(f"Что поможет: {advice}")
     return [line for line in lines if line or line == ""]
 
 
@@ -697,7 +741,9 @@ __all__ = [
     "build_text_report",
     "count_neighbors",
     "own_dns_trouble",
+    "hosts_advice",
     "road_cure",
+    "road_is_fatal",
     "road_problem",
     "source_title",
 ]
