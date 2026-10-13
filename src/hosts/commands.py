@@ -79,7 +79,7 @@ def _check_addresses(selection: dict[str, str] | None, *, strict: bool, recheck)
     import time
 
     from hosts import address_engine, proxy_domains
-    from hosts.address_probe import ALIVE, check_address
+    from hosts.address_probe import ALIVE, check_address, sweep
     from hosts.ipv6_detection import is_ipv6_available
     from hosts.relay_check import internet_reachable
     from log.log import log
@@ -117,6 +117,7 @@ def _check_addresses(selection: dict[str, str] | None, *, strict: bool, recheck)
         ipv6=bool(is_ipv6_available()),
         strict=strict,
         recheck=recheck,
+        sweep=sweep,
     )
     if overlay is not None:
         if selection is None and report.changed:

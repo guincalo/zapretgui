@@ -28,7 +28,7 @@ import threading
 import time
 from dataclasses import dataclass
 
-__all__ = ["ALIVE", "DEAD", "UNKNOWN", "Probe", "check_address"]
+__all__ = ["ALIVE", "DEAD", "UNKNOWN", "Probe", "check_address", "sweep"]
 
 ALIVE = "alive"
 DEAD = "dead"
@@ -45,6 +45,9 @@ QUALITY_SAMPLES = 6
 SAMPLE_TIMEOUT_S = 0.8
 # Замеры идут не вплотную: пачку одинаковых запросов подряд сеть может проредить сама.
 SAMPLE_PAUSE_S = 0.05
+# Быстрый обход кандидатов: одно соединение на адрес, ждать недолго — пустых адресов большинство.
+SWEEP_TIMEOUT_S = 0.6
+SWEEP_WORKERS = 48
 
 
 @dataclass(frozen=True, slots=True)
@@ -139,6 +142,30 @@ def _serves(host: str, head: bytes) -> bool:
         return True
     target = location.split("//", 1)[1].split("/", 1)[0].split(":", 1)[0]
     return _base(target) == _base(host)
+
+
+def sweep(addresses: list[str]) -> dict[str, float]:
+    """Какие из адресов вообще принимают соединение: адрес → время соединения в мс.
+
+    Это отсев перед настоящей пробой: соединение ещё не значит, что адрес отдаёт нужный сайт.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    unique = list(dict.fromkeys(addresses))
+    if not unique:
+        return {}
+
+    def _one(ip: str) -> float | None:
+        started = time.perf_counter()
+        sock, _outcome = _connect(ip, SWEEP_TIMEOUT_S)
+        if sock is None:
+            return None
+        sock.close()
+        return (time.perf_counter() - started) * 1000.0
+
+    with ThreadPoolExecutor(max_workers=min(SWEEP_WORKERS, len(unique)), thread_name_prefix="hosts-sweep") as pool:
+        timings = list(pool.map(_one, unique))
+    return {ip: ms for ip, ms in zip(unique, timings) if ms is not None}
 
 
 def _alive(ip: str, total_ms: float, connect_ms: float) -> Probe:

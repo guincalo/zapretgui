@@ -70,7 +70,7 @@ YOUTUBE_EVEN = _catalog(
 )
 
 
-def _check(catalog, selection, verdicts, *, fresh=None, previous=None, ipv6=True, strict=True, network=True, recheck=None, relays=()):
+def _check(catalog, selection, verdicts, *, fresh=None, previous=None, ipv6=True, strict=True, network=True, recheck=None, relays=(), sweep=None):
     asked: list[tuple[str, str, str]] = []
     resolved: list[str] = []
 
@@ -89,6 +89,7 @@ def _check(catalog, selection, verdicts, *, fresh=None, previous=None, ipv6=True
         strict=strict,
         recheck=recheck,
         relays=relays,
+        sweep=sweep,
         now=lambda: datetime(2026, 10, 13, 14, 20),
     )
     _check.resolved = resolved
@@ -322,6 +323,86 @@ class EngineTests(unittest.TestCase):
         self.assertIsNone(overlay)
         self.assertFalse(report.network)
 
+    def test_neighbours_of_known_addresses_are_swept_and_the_proven_ones_are_taken(self) -> None:
+        """Просьба владельца 2026-10-13: «один не работает, но я хочу все из cidr проверять» — в сети
+        2a00:1450:4010::/48 отвечают тысячи адресов Google, а каталог и DNS знают единицы."""
+        catalog = _catalog(
+            hosts_youtube=(
+                "YouTube",
+                HOSTS_PROFILE_ID,
+                [("www.youtube.com", "64.233.162.198"), ("www.youtube.com", "2a00:1450:4010:c08::88"), ("www.youtube.com", "2a00:1450:4010:c08::be")],
+            )
+        )
+        swept: list[list[str]] = []
+
+        def sweep(addresses):
+            swept.append(list(addresses))
+            # Соединение приняли три соседа; остальных подсетей просто нет.
+            return {"2a00:1450:4010:c0a::88": 21.0, "2a00:1450:4010:c09::be": 19.0, "2a00:1450:4010:c1e::88": 25.0, "64.233.165.198": 30.0}
+
+        verdicts = {
+            "64.233.162.198": Probe(ALIVE, 1.0, connect_ms=30.0),
+            "2a00:1450:4010:c08::88": Probe(DEAD, reason="не отвечает"),
+            "2a00:1450:4010:c08::be": Probe(ALIVE, 1.0, connect_ms=20.0),
+            "2a00:1450:4010:c0a::88": Probe(ALIVE, 1.0, connect_ms=21.0),
+            # Соединение принял, но сайт не отдаёт: такой адрес в hosts не идёт.
+            "2a00:1450:4010:c09::be": Probe(DEAD, reason="адрес занят другим сервисом"),
+            "2a00:1450:4010:c1e::88": Probe(ALIVE, 1.0, connect_ms=25.0, lost=3, samples=6),
+            "64.233.165.198": Probe(ALIVE, 1.0, connect_ms=30.0),
+        }
+
+        overlay, report, asked = _check(catalog, {"YouTube": HOSTS_PROFILE_ID}, verdicts, sweep=sweep)
+
+        # Обход один на всю проверку; в нём те же «номера серверов» в соседних подсетях, без известных адресов.
+        self.assertEqual(len(swept), 1)
+        self.assertIn("2a00:1450:4010:c0a::88", swept[0])
+        self.assertIn("64.233.165.198", swept[0])
+        self.assertNotIn("2a00:1450:4010:c08::88", swept[0])
+        self.assertEqual(len(swept[0]), len(set(swept[0])))
+        # Полную пробу проходят только те, кто принял соединение.
+        self.assertLessEqual({address for address, _host, _front in asked} - set(verdicts), set())
+        # Мёртвый адрес каталога заменён найденным соседом; сосед с потерями — не запасной в hosts.
+        self.assertEqual(
+            _rows(overlay),
+            [
+                ("www.youtube.com", "64.233.162.198"),
+                ("www.youtube.com", "64.233.165.198"),
+                ("www.youtube.com", "2a00:1450:4010:c08::be"),
+                ("www.youtube.com", "2a00:1450:4010:c0a::88"),
+            ],
+        )
+        self.assertEqual(report.dropped, {"YouTube": ("2a00:1450:4010:c08::88",)})
+        # В копилке — всё, что прошло пробу, устойчивые раньше.
+        self.assertEqual(
+            overlay["pool"]["hosts.youtube"]["www.youtube.com"],
+            ["2a00:1450:4010:c0a::88", "64.233.165.198", "2a00:1450:4010:c1e::88"],
+        )
+
+    def test_without_ipv6_only_ipv4_neighbours_are_swept(self) -> None:
+        catalog = _catalog(
+            hosts_youtube=("YouTube", HOSTS_PROFILE_ID, [("www.youtube.com", "64.233.162.198"), ("www.youtube.com", "2a00:1450:4010:c08::88")])
+        )
+        swept: list[str] = []
+
+        _check(
+            catalog,
+            {"YouTube": HOSTS_PROFILE_ID},
+            {"64.233.162.198": Probe(ALIVE, 1.0, connect_ms=30.0)},
+            ipv6=False,
+            sweep=lambda addresses: swept.extend(addresses) or {},
+        )
+
+        self.assertTrue(swept)
+        self.assertFalse([address for address in swept if ":" in address])
+
+    def test_service_without_a_passport_is_never_swept(self) -> None:
+        catalog = _catalog(hosts_x=("x.com", HOSTS_PROFILE_ID, [("x.com", "3.3.3.1"), ("x.com", "3.3.3.2")]))
+        swept: list[str] = []
+
+        _check(catalog, {"x.com": HOSTS_PROFILE_ID}, {"3.3.3.1": Probe(ALIVE, 1.0)}, sweep=lambda addresses: swept.extend(addresses) or {})
+
+        self.assertEqual(swept, [])
+
     def test_address_that_loses_packets_gives_way_to_a_steady_one(self) -> None:
         """Жалоба владельца 2026-10-13: ping первого адреса YouTube — два ответа из четырёх,
         «не самое лучшее он нашёл». Одно удачное соединение потерь не показывает."""
@@ -541,6 +622,7 @@ class CommandTests(unittest.TestCase):
             (patch("hosts.relay_check.internet_reachable", lambda: True), None),
             (patch("hosts.ipv6_detection.is_ipv6_available", lambda: False), None),
             (patch("hosts.address_probe.check_address", self._probe), None),
+            (patch("hosts.address_probe.sweep", lambda addresses: {}), None),
             (patch.object(commands, "_fresh_addresses", lambda host, want_ipv6: []), None),
             (patch.object(commands, "load_user_selection", lambda: {"YouTube": HOSTS_PROFILE_ID}), None),
         ):
@@ -691,6 +773,42 @@ class PageTests(unittest.TestCase):
                 self.assertEqual(settings_store.get_hosts_selection(), {"hosts.youtube": HOSTS_PROFILE_ID})
             finally:
                 settings_store.close_settings_database()
+
+
+class NeighbourTests(unittest.TestCase):
+    def test_same_server_numbers_in_nearby_subnets_nearest_first(self) -> None:
+        from hosts.address_scan import V4_SPREAD, neighbours
+
+        found = neighbours(["64.233.162.198", "64.233.162.136"], limit=1000)
+
+        self.assertEqual(found[:4], ["64.233.163.198", "64.233.163.136", "64.233.161.198", "64.233.161.136"])
+        self.assertEqual(len(found), 2 * 2 * V4_SPREAD)
+        self.assertNotIn("64.233.162.198", found)
+        self.assertEqual({address.rsplit(".", 1)[1] for address in found}, {"198", "136"})
+
+    def test_ipv6_keeps_the_server_number_and_walks_the_subnets_of_the_same_network(self) -> None:
+        from hosts.address_scan import neighbours
+
+        found = neighbours(["2a00:1450:4010:c08::88", "2a00:1450:4010:c08::be", "2a00:1450:4001:c15::5d"], limit=1000)
+
+        self.assertEqual(found[0], "2a00:1450:4010:c09::88")
+        self.assertIn("2a00:1450:4010:c0a::be", found)
+        self.assertIn("2a00:1450:4010:c28::88", found)
+        self.assertNotIn("2a00:1450:4010:c29::88", found)
+        # Номер сервера из другой большой сети сюда не переносится: там своя нумерация.
+        self.assertNotIn("2a00:1450:4010:c08::5d", found)
+        self.assertIn("2a00:1450:4001:c16::5d", found)
+
+    def test_limit_is_shared_between_ipv4_and_ipv6_and_garbage_is_ignored(self) -> None:
+        from hosts.address_scan import neighbours
+
+        found = neighbours(["64.233.162.198", "2a00:1450:4010:c08::88", "не адрес", ""], limit=6)
+
+        self.assertEqual(len(found), 6)
+        self.assertEqual(len([address for address in found if ":" in address]), 3)
+        self.assertEqual(neighbours([], limit=10), [])
+        # У края сети подсети за её пределы не выходят.
+        self.assertTrue(all(address.startswith("10.0.") for address in neighbours(["10.0.0.5"], limit=100)))
 
 
 class OverlayTests(unittest.TestCase):

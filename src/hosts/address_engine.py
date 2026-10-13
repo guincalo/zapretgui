@@ -19,7 +19,10 @@
 мёртвый адрес убирается. И здесь программа сама ищет адреса: при каждой
 проверке спрашивает шифрованный DNS (IPv4, а где есть IPv6 — и IPv6), пробует
 найденное той же пробой и складывает живое в копилку — запас, который
-проверяется вместе с каталогом и в следующий раз. Каждый живой адрес меряется
+проверяется вместе с каталогом и в следующий раз. Кроме того, перебираются
+соседи известных адресов — такие же серверы в ближайших подсетях той же сети
+(``hosts.address_scan``): быстрым соединением отсеиваются пустые, самые
+быстрые из ответивших проходят полную пробу. Каждый живой адрес меряется
 несколько раз настоящим соединением: видны и скорость, и потери. Первый адрес уступает место другому, только если у того
 заметно меньше потерь или он заметно быстрее. IPv6 пишется, только если адрес по IPv6 на этом
 компьютере действительно отвечает, а не просто «у адаптера есть IPv6».
@@ -47,6 +50,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 from hosts.address_probe import ALIVE, DEAD, UNKNOWN, Probe
+from hosts.address_scan import neighbours
 from hosts.catalog_overlay import clean_overlay
 from hosts.catalog_repository import HOSTS_PROFILE_ID, HostsCatalog
 
@@ -61,6 +65,10 @@ MAX_PER_ADDRESS = 4
 KEEP_PER_FAMILY = 2
 # Сколько адресов каждого вида сверх каталога проверять у одного имени (копилка и свежие от DNS).
 SEEK_PER_FAMILY = 6
+# Сколько соседей известных адресов одного имени обойти быстрым соединением за проверку
+# и сколько самых быстрых из ответивших (каждого вида) отдать на полную пробу.
+SCAN_LIMIT = 400
+SCAN_VERIFY = 4
 # Сколько найденных адресов каждого вида хранить про запас у одного имени.
 POOL_PER_FAMILY = 4
 # Первый адрес уступает место другому живому, только если тот быстрее и на столько миллисекунд,
@@ -180,14 +188,16 @@ def check_selection(
     strict: bool,
     relays: Collection[str] = (),
     recheck: Collection[str] | None = None,
+    sweep: Callable[[list[str]], dict[str, float]] | None = None,
     now: Callable[[], datetime] = datetime.now,
 ) -> tuple[dict | None, EngineReport]:
     """Проверяет адреса выбранных сервисов. Возвращает (новый набор или None, отчёт).
 
     ``selection`` — «название сервиса → профиль», как его пишет страница.
     ``catalog`` — поставленный каталог без наложений. ``probe(адрес, имя,
-    нейтральное имя)`` и ``resolve(имя, нужен_ли_IPv6)`` — сеть. ``relays`` —
-    адреса посредников каталога. ``strict`` — человек ждёт результата: мёртвый
+    нейтральное имя)`` и ``resolve(имя, нужен_ли_IPv6)`` — сеть. ``sweep(адреса)`` —
+    быстрый обход: какие адреса принимают соединение и за сколько (None — соседей
+    известных адресов не искать). ``relays`` — адреса посредников каталога. ``strict`` — человек ждёт результата: мёртвый
     адрес убирается сразу, без второй проверки. ``recheck`` — названия сервисов,
     которые проверить сейчас (None — все): человек переключил один сервис и не
     должен ждать, пока перепроверятся остальные двадцать; у остальных остаются
@@ -252,20 +262,40 @@ def check_selection(
             answered = dict(zip(asked, pool.map(_answers, asked)))
     found: dict[tuple[int, str], list[str]] = {}
     found_units: dict[tuple[str, str, str, str], tuple[str, str, str]] = {}
+    nearby: dict[tuple[int, str], list[str]] = {}
     for index, plan in seekers:
         saved = pool_before.get(plan.service_id, {})
         for host, addresses in plan.hosts.items():
             taken = {False: 0, True: 0}
+            extra = found.setdefault((index, host), [])
             for address in [*saved.get(host, []), *answered.get(host, [])]:
                 family = _is_v6(address)
-                extra = found.setdefault((index, host), [])
                 if (family and not ipv6) or address in addresses or address in extra or taken[family] >= SEEK_PER_FAMILY:
                     continue
                 taken[family] += 1
                 extra.append(address)
-                key = plan.key(host, address)
-                if key not in verdicts:
-                    found_units.setdefault(key, (address, host, plan.front))
+            if sweep is not None:
+                # Соседи: те же «номера серверов» в ближайших подсетях той же сети (hosts.address_scan).
+                known = [address for address in [*addresses, *extra] if ipv6 or not _is_v6(address)]
+                nearby[(index, host)] = neighbours(known, limit=SCAN_LIMIT)
+    if nearby:
+        try:
+            accepted = sweep(list(dict.fromkeys(address for group in nearby.values() for address in group)))
+        except Exception:
+            accepted = {}
+        for (index, host), group in nearby.items():
+            for family in (False, True):
+                fastest = sorted(
+                    (address for address in group if address in accepted and _is_v6(address) == family),
+                    key=accepted.__getitem__,
+                )
+                found[(index, host)].extend(fastest[:SCAN_VERIFY])
+    for (index, host), extra in found.items():
+        plan = plans[index]
+        for address in extra:
+            key = plan.key(host, address)
+            if key not in verdicts:
+                found_units.setdefault(key, (address, host, plan.front))
     verdicts.update(_probe_all(found_units, probe))
 
     remembered = {
