@@ -458,21 +458,46 @@ class DnsPageTests(unittest.TestCase):
         tile = {tile.key: tile for tile in self._provider_tiles(page)}["Wikimedia DNS"]
         self.assertIn("Принимает только шифрованные запросы: Windows 11 спрашивает его по DoH", tile.tooltip)
 
-    def test_encrypted_only_server_is_refused_where_windows_cannot_encrypt(self) -> None:
-        """Обычный DNS такой сервер не принимает: на Windows 10 с ним пропал бы весь интернет."""
+    def test_tile_with_encrypted_address_goes_through_the_engine_where_windows_cannot_encrypt(self) -> None:
+        """Плитка одна, путь выбирает сама: в Windows 10 — через встроенный шифрованный DNS."""
         page = self._page(state=replace(STATE, doh_supported=False))
+        tiles = {tile.key: tile for tile in self._provider_tiles(page)}
 
+        # Сервер только с шифрованием раньше в Windows 10 не ставился вовсе.
         page.grid.activated.emit("DNS-AI")
+        self.assertEqual(page._apply_lane.request.call_args.args[0]["proxy_mode"], "doh")
+        self.info_bar.warning.assert_not_called()
+        self.assertNotIn("здесь сервер работать не будет", tiles["DNS-AI"].tooltip)
 
-        page._apply_lane.request.assert_not_called()
-        self.assertIsNone(page._pending_choice)
-        self.assertEqual(self.info_bar.warning.call_args.kwargs["title"], "DNS-AI работает только в Windows 11")
-        tile = {tile.key: tile for tile in self._provider_tiles(page)}["DNS-AI"]
-        self.assertIn("здесь сервер работать не будет", tile.tooltip)
+        for name in ("Zapret DNS", "Quad9"):
+            with self.subTest(name=name):
+                page.grid.activated.emit(name)
+                self.assertEqual(page._apply_lane.request.call_args.args[0]["proxy_mode"], "doh")
+                # Метка шифрования на плитке честная: запросы и правда пойдут шифрованными.
+                self.assertTrue(tiles[name].has_doh)
+                self.assertIn("через встроенный шифрованный DNS", tiles[name].tooltip)
 
-        # Обычный сервер на той же Windows применяется как всегда.
-        page.grid.activated.emit("Quad9")
-        self.assertEqual(page._apply_lane.request.call_args.args[0]["name"], "Quad9")
+        # Плитка-режим остаётся собой, а в Windows 11 обычные плитки шифрует сама система.
+        page.grid.activated.emit("DNSCrypt")
+        self.assertEqual(page._apply_lane.request.call_args.args[0]["proxy_mode"], "dnscrypt")
+        modern = self._page(state=replace(STATE, doh_supported=True))
+        modern.grid.activated.emit("Zapret DNS")
+        self.assertEqual(modern._apply_lane.request.call_args.args[0]["proxy_mode"], "")
+        modern_tile = {tile.key: tile for tile in self._provider_tiles(modern)}["Zapret DNS"]
+        self.assertTrue(modern_tile.has_doh)
+        self.assertNotIn("через встроенный шифрованный DNS", modern_tile.tooltip)
+
+    def test_ordinary_tile_is_selected_while_the_engine_serves_its_server(self) -> None:
+        local = replace(ETHERNET, static_ipv4=("127.0.0.1",), static_ipv6=("::1",))
+        state = replace(
+            STATE, adapters=(local, WIFI_ADAPTER, SPARE_ADAPTER), doh_supported=False,
+            local_proxy_mode="doh", local_proxy_server="Zapret DNS",
+        )
+
+        page = self._page(state=state)
+        page.now_panel._chips[WIFI].setChecked(False)
+
+        self.assertEqual([tile.key for tile in self._provider_tiles(page) if tile.selected], ["Zapret DNS"])
 
     def test_encrypted_dns_tile_is_selected_by_the_running_mode(self) -> None:
         local = replace(ETHERNET, static_ipv4=("127.0.0.1",), static_ipv6=("::1",))

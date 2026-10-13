@@ -76,6 +76,28 @@ class DnsProvidersCatalogTests(unittest.TestCase):
         self.assertIn("DNSCrypt: у режима шифрованного DNS адреса должны быть 127.0.0.1 и ::1", problems)
         self.assertIn("Cloudflare: неверный или повторный режим", problems)
 
+    def test_tile_picks_its_own_way_to_encrypt(self) -> None:
+        """Плитка одна: в Windows 11 шифрует сама система, в Windows 10 — встроенный шифрованный DNS."""
+        from dns.dns_providers import proxy_mode_for, proxy_upstreams
+
+        zapret = DNS_PROVIDERS["Для ИИ"]["Zapret DNS"]
+        dnscrypt = DNS_PROVIDERS[dns_providers.LOCAL_PROXY_GROUP]["DNSCrypt"]
+
+        self.assertEqual(proxy_mode_for(zapret, doh_supported=True), "")
+        self.assertEqual(proxy_mode_for(zapret, doh_supported=False), "doh")
+        self.assertEqual([item.name for item in proxy_upstreams(zapret)], ["doh-1"])
+        # Плитка-режим всегда идёт через движок, своим режимом.
+        self.assertEqual(proxy_mode_for(dnscrypt, doh_supported=True), "dnscrypt")
+        self.assertEqual(proxy_mode_for(dnscrypt, doh_supported=False), "dnscrypt")
+        # Без шифрованного адреса или без IPv4 через движок не поставить: остаётся обычный путь.
+        self.assertEqual(proxy_mode_for({"ipv4": ["9.9.9.9"]}, doh_supported=False), "")
+        self.assertEqual(proxy_mode_for({"ipv6": ["2620:fe::fe"], "doh": "https://dns.quad9.net/dns-query"}, doh_supported=False), "")
+        # Каждый сервер списка с шифрованным адресом в Windows 10 идёт через движок.
+        for group, name, data in iter_providers():
+            if data.get("doh"):
+                with self.subTest(name=name):
+                    self.assertEqual(proxy_mode_for(data, doh_supported=False), "doh")
+
     def test_blocked_and_at_risk_marks(self) -> None:
         marks = {name: data.get("status", "") for _group, name, data in iter_providers()}
 

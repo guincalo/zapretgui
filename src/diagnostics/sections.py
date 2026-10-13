@@ -95,11 +95,14 @@ def _dns_provider(ip: str) -> tuple[str, str, str]:
     if ip in ("127.0.0.1", "::1"):
         # Адрес этого компьютера: отвечает встроенный шифрованный DNS, если он запущен.
         try:
-            from dns.local_proxy import active_mode
+            from dns.local_proxy import active_mode, active_server
 
-            mode = active_mode()
+            mode, server = active_mode(), active_server()
         except Exception:
-            mode = ""
+            mode, server = "", ""
+        if server:
+            # Обычная плитка, поставленная через встроенный шифрованный DNS (Windows сама шифровать не умеет).
+            return f"шифрованный DNS программы, сервер {server} по DoH", "", ""
         return (f"шифрованный DNS программы, режим {mode}" if mode else "локальный DNS на этом компьютере"), "", ""
     found = find_provider_by_address(ip)
     if found is None:

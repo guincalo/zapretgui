@@ -202,10 +202,11 @@ class DnsApplyWorker(QThread):
         name: str = "",
         data=None,
         ipv6_available: bool = False,
+        proxy_mode: str = "",
         apply_dns: Callable[..., Any],
         reset_to_auto: Callable[[list], Any],
         load_state: Callable[[], Any],
-        start_local_proxy: Callable[[str], Any],
+        start_local_proxy: Callable[..., Any],
         stop_local_proxy_if_unused: Callable[[], Any],
         parent=None,
     ):
@@ -218,6 +219,8 @@ class DnsApplyWorker(QThread):
         self._name = str(name or "")
         self._data = dict(data or {})
         self._ipv6_available = bool(ipv6_available)
+        # Режим встроенного шифрованного DNS, через который ставится плитка (dns_providers.proxy_mode_for).
+        self._proxy_mode = str(proxy_mode or self._data.get("local_proxy") or "")
         self._apply_dns = apply_dns
         self._reset_to_auto = reset_to_auto
         self._load_state = load_state
@@ -233,9 +236,12 @@ class DnsApplyWorker(QThread):
 
     def _run_apply(self) -> dict[str, object]:
         from dns import page_plans as dns_page_plans
+        from dns.dns_providers import is_encrypted_only, proxy_upstreams
 
         if not self._adapters:
             return {"plan": None, "state": None}
+        # Поставлен ли DNS через встроенный шифрованный DNS: тогда его службу убирать нельзя.
+        used_proxy = False
 
         if self._action == "auto":
             command_result = self._reset_to_auto(self._adapters)
@@ -252,32 +258,49 @@ class DnsApplyWorker(QThread):
             )
             if not provider_plan.valid:
                 return {"plan": provider_plan, "state": None}
-            ipv6 = provider_plan.ipv6
-            local_mode = str(self._data.get("local_proxy") or "")
-            if local_mode:
+            ipv4, ipv6 = provider_plan.ipv4, provider_plan.ipv6
+            # Плитка-режим («DNSCrypt») живёт только в движке. Обычная плитка идёт через
+            # движок, когда Windows сама шифровать DNS не умеет, — и у неё есть запасной путь.
+            own_mode = bool(self._data.get("local_proxy"))
+            unencrypted = False
+            if self._proxy_mode:
                 # Шифрованный DNS: сначала движок должен ответить на запрос, и только
                 # потом адаптеры получают 127.0.0.1 — иначе пропал бы весь интернет.
-                started = self._start_local_proxy(local_mode)
-                if not started.success:
+                if own_mode:
+                    started = self._start_local_proxy(self._proxy_mode)
+                else:
+                    started = self._start_local_proxy(
+                        self._proxy_mode, upstreams=proxy_upstreams(self._data), server_name=self._name
+                    )
+                if started.success:
+                    used_proxy = True
+                    if not own_mode:
+                        ipv4, ipv6 = ["127.0.0.1"], ["::1"]
+                    if not started.listen_ipv6:
+                        ipv6 = []
+                elif own_mode or is_encrypted_only(self._data):
+                    # Обычным запросом такой сервер не спросить: DNS остаётся прежним.
                     failed = dns_page_plans.NetworkProviderDnsPlan(
                         valid=False, ipv4=[], ipv6=[], log_level="WARNING", log_message=str(started.message or "")
                     )
                     return {"plan": failed, "state": self._load_state()}
-                if not started.listen_ipv6:
-                    ipv6 = []
-            command_result = self._apply_dns(self._adapters, provider_plan.ipv4, ipv6)
+                else:
+                    # Шифрованный путь не сложился: сервер ставится адресами, и об этом будет сказано.
+                    log(f"DnsApplyWorker: {self._name} ставится без шифрования: {started.message}", "WARNING")
+                    unencrypted = True
+            command_result = self._apply_dns(self._adapters, ipv4, ipv6)
             plan = dns_page_plans.build_provider_dns_apply_result_plan(
                 name=self._name,
                 adapter_count=len(self._adapters),
                 success_count=int(command_result.affected_count or 0),
                 ipv6=ipv6,
                 error=str(command_result.message or ""),
-                doh_closed=bool(getattr(command_result, "doh_closed", False)),
+                doh_closed=unencrypted or bool(getattr(command_result, "doh_closed", False)),
             )
         else:
             raise ValueError(f"Неизвестное DNS действие: {self._action}")
 
-        if not (self._action == "provider" and self._data.get("local_proxy")):
+        if not used_proxy:
             # Выбран обычный DNS: движок шифрованного DNS больше никому не нужен — убрать.
             try:
                 self._stop_local_proxy_if_unused()

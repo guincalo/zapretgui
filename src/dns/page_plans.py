@@ -166,15 +166,20 @@ class CurrentDnsPlan:
 LOCAL_PROXY_ADDRESSES = frozenset({"127.0.0.1", "::1"})
 
 
-def find_provider_for_dns(providers: dict, ipv4, ipv6, local_proxy_mode: str = "") -> str | None:
+def find_provider_for_dns(
+    providers: dict, ipv4, ipv6, local_proxy_mode: str = "", local_proxy_server: str = ""
+) -> str | None:
     """Имя сервера из списка, чей основной адрес стоит первым на адаптере.
 
     Адрес 127.0.0.1 — встроенный шифрованный DNS: у всех его режимов адрес
     один, поэтому плитку называет режим работающего движка (local_proxy_mode).
-    Движок не работает — это чей-то чужой локальный DNS, а не наш режим.
+    В режиме DoH движок работает на сервер обычной плитки — её называет
+    local_proxy_server. Движок не работает — это чей-то чужой локальный DNS.
     """
     first = (list(ipv4) or list(ipv6) or [""])[0]
     if first in LOCAL_PROXY_ADDRESSES:
+        if local_proxy_server:
+            return next((name for group in providers.values() for name in group if name == local_proxy_server), None)
         for group in providers.values():
             for name, data in group.items():
                 if local_proxy_mode and data.get("local_proxy") == local_proxy_mode:
@@ -193,10 +198,14 @@ def find_provider_for_dns(providers: dict, ipv4, ipv6, local_proxy_mode: str = "
     return None
 
 
-def describe_adapter_dns(adapter, providers: dict, local_proxy_mode: str = "") -> CurrentDnsPlan:
+def describe_adapter_dns(
+    adapter, providers: dict, local_proxy_mode: str = "", local_proxy_server: str = ""
+) -> CurrentDnsPlan:
     if adapter.is_automatic:
         return CurrentDnsPlan(kind="auto", ipv4=tuple(adapter.auto_ipv4), ipv6=tuple(adapter.auto_ipv6))
-    provider = find_provider_for_dns(providers, adapter.static_ipv4, adapter.static_ipv6, local_proxy_mode)
+    provider = find_provider_for_dns(
+        providers, adapter.static_ipv4, adapter.static_ipv6, local_proxy_mode, local_proxy_server
+    )
     return CurrentDnsPlan(
         kind="provider" if provider else "custom",
         provider=provider,
@@ -205,8 +214,10 @@ def describe_adapter_dns(adapter, providers: dict, local_proxy_mode: str = "") -
     )
 
 
-def build_current_dns_plan(*, adapters, providers: dict, local_proxy_mode: str = "") -> CurrentDnsPlan:
-    plans = [describe_adapter_dns(adapter, providers, local_proxy_mode) for adapter in adapters]
+def build_current_dns_plan(
+    *, adapters, providers: dict, local_proxy_mode: str = "", local_proxy_server: str = ""
+) -> CurrentDnsPlan:
+    plans = [describe_adapter_dns(adapter, providers, local_proxy_mode, local_proxy_server) for adapter in adapters]
     if not plans:
         return CurrentDnsPlan(kind="none")
     first = plans[0]

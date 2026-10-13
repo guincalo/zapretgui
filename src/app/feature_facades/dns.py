@@ -86,6 +86,7 @@ def build_dns_feature() -> DnsFeature:
         name: str = "",
         data=None,
         ipv6_available: bool = False,
+        proxy_mode: str = "",
         parent=None,
     ):
         from dns.page_workers import DnsApplyWorker
@@ -97,6 +98,7 @@ def build_dns_feature() -> DnsFeature:
             name=name,
             data=data,
             ipv6_available=ipv6_available,
+            proxy_mode=proxy_mode,
             apply_dns=apply_dns,
             reset_to_auto=reset_to_auto,
             load_state=load_state,

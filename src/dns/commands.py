@@ -114,10 +114,10 @@ def apply_dns(adapters: list[str], ipv4: list[str], ipv6: list[str]) -> DnsComma
     return _apply_dns(adapters, ipv4, ipv6)
 
 
-def start_local_proxy(mode: str) -> DnsCommandResult:
+def start_local_proxy(mode: str, *, upstreams=(), server_name: str = "") -> DnsCommandResult:
     from dns.runtime import start_local_proxy as _start_local_proxy
 
-    return _start_local_proxy(mode)
+    return _start_local_proxy(mode, upstreams=upstreams, server_name=server_name)
 
 
 def stop_local_proxy_if_unused() -> bool:

@@ -10,7 +10,12 @@ Windows сама умеет только обычный DNS и DoH, поэтом
 - MODE_ANONYMIZED — анонимный DNSCrypt: зашифрованный запрос идёт через
   посредника (relay), и DNS-сервер не видит адрес пользователя;
 - MODE_ODOH — Oblivious DoH: то же самое, но поверх HTTPS. Посредников в
-  мире всего два, сами авторы считают поддержку пробной.
+  мире всего два, сами авторы считают поддержку пробной;
+- MODE_DOH — обычный DoH к одному серверу из списка программы. Отдельной
+  плитки у режима нет: его включает плитка самого сервера там, где Windows
+  шифровать DNS не умеет (Windows 10), — иначе запросы к серверу шли бы
+  открытым текстом и ответ можно было бы подменить по дороге. Серверы этого
+  режима не записаны здесь, а собираются из данных плитки (doh_upstreams).
 
 Каждый сервер записан своим «штампом» (sdns://…) из официальных списков
 DNSCrypt/dnscrypt-resolvers (v3: public-resolvers, relays, odoh-servers,
@@ -32,7 +37,8 @@ from dataclasses import dataclass
 MODE_DNSCRYPT = "dnscrypt"
 MODE_ANONYMIZED = "anonymized"
 MODE_ODOH = "odoh"
-MODES = (MODE_DNSCRYPT, MODE_ANONYMIZED, MODE_ODOH)
+MODE_DOH = "doh"
+MODES = (MODE_DNSCRYPT, MODE_ANONYMIZED, MODE_ODOH, MODE_DOH)
 
 # Обычный DNS для первого шага: узнать адреса ODoH-серверов, записанных именем.
 BOOTSTRAP_RESOLVERS = ("9.9.9.11:53", "77.88.8.8:53")
@@ -96,17 +102,72 @@ ODOH_RELAYS: tuple[Upstream, ...] = (
 )
 
 # Через посредников Quad9 не отвечает.
+# Свойства сервера в штампе (первый байт набора): проверяет подписи DNSSEC.
+_PROP_DNSSEC = 1
+_STAMP_DOH = 0x02
+
+
+def _lp(data: bytes) -> bytes:
+    """Строка штампа: байт длины и сама строка."""
+    if len(data) > 255:
+        raise ValueError("слишком длинная строка для штампа DNS")
+    return bytes([len(data)]) + data
+
+
+def doh_stamp(address: str, host: str, path: str = "/dns-query", *, port: int = 443, dnssec: bool = False) -> str:
+    """Штамп sdns:// сервера DoH: адрес, имя для сертификата и путь запроса.
+
+    Адрес записан в самом штампе, поэтому имя сервера узнавать обычным DNS не
+    нужно: движок сразу идёт на адрес, а имя называет только для сертификата.
+    """
+    import base64
+
+    target = address if int(port) == 443 else f"{address}:{int(port)}"
+    props = (_PROP_DNSSEC if dnssec else 0).to_bytes(8, "little")
+    # Отпечатков сертификата нет: один пустой элемент списка.
+    raw = bytes([_STAMP_DOH]) + props + _lp(target.encode("ascii")) + b"\x00" + _lp(host.encode("idna")) + _lp(path.encode("ascii"))
+    return "sdns://" + base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
+
+
+def doh_upstreams(doh_url: str, addresses, *, dnssec: bool = False) -> tuple[Upstream, ...]:
+    """Серверы режима MODE_DOH для одной плитки: по одному на каждый её адрес IPv4.
+
+    Пусто — у плитки нет шаблона DoH или адреса IPv4 (движок ходит по IPv4),
+    значит через посредника её не поставить.
+    """
+    from ipaddress import ip_address
+    from urllib.parse import urlsplit
+
+    parts = urlsplit(str(doh_url or "").strip())
+    if parts.scheme != "https" or not parts.hostname:
+        return ()
+    result: list[Upstream] = []
+    for address in addresses or ():
+        try:
+            if ip_address(str(address).strip()).version != 4:
+                continue
+        except ValueError:
+            continue
+        stamp = doh_stamp(str(address).strip(), parts.hostname, parts.path or "/dns-query", port=parts.port or 443, dnssec=dnssec)
+        result.append(Upstream(f"doh-{len(result) + 1}", parts.hostname, stamp))
+    return tuple(result)
+
+
 _NOT_ANONYMIZABLE = frozenset({"quad9"})
 
 
-def servers(mode: str) -> tuple[Upstream, ...]:
-    """Серверы режима."""
+def servers(mode: str, upstreams: tuple[Upstream, ...] = ()) -> tuple[Upstream, ...]:
+    """Серверы режима. У MODE_DOH своих нет: их передают (upstreams)."""
     if mode == MODE_DNSCRYPT:
         return DNSCRYPT_SERVERS
     if mode == MODE_ANONYMIZED:
         return tuple(item for item in DNSCRYPT_SERVERS if item.operator not in _NOT_ANONYMIZABLE)
     if mode == MODE_ODOH:
         return ODOH_SERVERS
+    if mode == MODE_DOH:
+        if not upstreams:
+            raise ValueError("Для режима DoH не задан сервер")
+        return tuple(upstreams)
     raise ValueError(f"Неизвестный режим шифрованного DNS: {mode}")
 
 
@@ -116,13 +177,15 @@ def relays(mode: str) -> tuple[Upstream, ...]:
         return DNSCRYPT_RELAYS
     if mode == MODE_ODOH:
         return ODOH_RELAYS
-    if mode == MODE_DNSCRYPT:
+    if mode in (MODE_DNSCRYPT, MODE_DOH):
         return ()
     raise ValueError(f"Неизвестный режим шифрованного DNS: {mode}")
 
 
 def routes(mode: str) -> tuple[tuple[str, tuple[str, ...]], ...]:
     """(сервер, его посредники): посредник всегда другого владельца."""
+    if mode == MODE_DOH:
+        return ()
     result = []
     for server in servers(mode):
         via = tuple(relay.name for relay in relays(mode) if relay.operator != server.operator)
@@ -138,10 +201,13 @@ __all__ = [
     "MODE_ANONYMIZED",
     "MODE_DNSCRYPT",
     "MODE_ODOH",
+    "MODE_DOH",
     "MODES",
     "ODOH_RELAYS",
     "ODOH_SERVERS",
     "Upstream",
+    "doh_stamp",
+    "doh_upstreams",
     "relays",
     "routes",
     "servers",

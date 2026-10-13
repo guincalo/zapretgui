@@ -44,6 +44,7 @@ def load_state() -> DnsState:
         ipv6_available=route.has_ipv6,
         doh_supported=winapi.is_doh_supported(),
         local_proxy_mode=_local_proxy_mode(),
+        local_proxy_server=_local_proxy_server(),
         custom_servers=tuple(load_custom_servers()),
     )
 
@@ -77,6 +78,16 @@ def _local_proxy_mode() -> str:
         return local_proxy.active_mode()
     except Exception as exc:
         log(f"DNS: не удалось узнать режим шифрованного DNS: {exc}", "DEBUG")
+        return ""
+
+
+def _local_proxy_server() -> str:
+    try:
+        from dns import local_proxy
+
+        return local_proxy.active_server()
+    except Exception as exc:
+        log(f"DNS: не удалось узнать сервер шифрованного DNS: {exc}", "DEBUG")
         return ""
 
 
@@ -178,11 +189,14 @@ def _static_addresses() -> list[str]:
     ]
 
 
-def start_local_proxy(mode: str) -> DnsCommandResult:
-    """Запускает шифрованный DNS; адаптеры не трогает — их пишет apply_dns после успеха."""
+def start_local_proxy(mode: str, *, upstreams=(), server_name: str = "") -> DnsCommandResult:
+    """Запускает шифрованный DNS; адаптеры не трогает — их пишет apply_dns после успеха.
+
+    upstreams и server_name — серверы и название плитки для режима DoH.
+    """
     from dns import local_proxy
 
-    result = local_proxy.start(mode)
+    result = local_proxy.start(mode, upstreams=tuple(upstreams), server_name=server_name)
     if not result.success:
         log(f"DNS: шифрованный DNS ({mode}) не запущен: {result.message}", "WARNING")
     return DnsCommandResult(success=result.success, message=result.message, listen_ipv6=result.listen_ipv6)

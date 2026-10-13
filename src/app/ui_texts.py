@@ -2097,6 +2097,10 @@ TEXTS: dict[str, dict[str, str]] = {
         "ru": "Программа запустит на компьютере службу dnscrypt-proxy и пропишет адаптеру адрес 127.0.0.1. Если шифрованные серверы не ответят, DNS не изменится.",
         "en": "The program starts the dnscrypt-proxy service on this computer and sets the adapter DNS to 127.0.0.1. If the encrypted servers do not answer, DNS is left unchanged.",
     },
+    "page.network.tile.via_proxy": {
+        "ru": "Эта Windows сама шифровать DNS не умеет, поэтому программа поставит сервер через встроенный шифрованный DNS: запустит службу dnscrypt-proxy и пропишет адаптеру адрес 127.0.0.1. Если шифрованный путь до сервера закрыт, сервер встанет обычным адресом — программа об этом скажет.",
+        "en": "This Windows cannot encrypt DNS itself, so the program sets the server through the built-in encrypted DNS: it starts the dnscrypt-proxy service and sets the adapter DNS to 127.0.0.1. If the encrypted path to the server is closed, the server is set by its plain address — the program will say so.",
+    },
     "page.network.group.ai.note": {
         "ru": "серверы сообщества — доверия к ним меньше",
         "en": "community servers — trust them less",
@@ -2154,7 +2158,7 @@ TEXTS: dict[str, dict[str, str]] = {
         "en": "DNS set without encryption",
     },
     "page.network.doh_closed.content": {
-        "ru": "Шифрованный путь (DoH) до этого сервера из вашей сети закрыт, поэтому Windows спрашивает его обычными запросами — провайдер их видит и может подменить. Нужно шифрование — выберите сервер из группы «Шифрованные».",
+        "ru": "Шифрованный путь (DoH) до этого сервера из вашей сети закрыт, поэтому компьютер спрашивает его обычными запросами — провайдер их видит и может подменить. Нужно шифрование — выберите сервер из группы «Шифрованные».",
         "en": "The encrypted path (DoH) to this server is closed on your network, so Windows asks it with plain queries — your provider sees them and can replace them. If you need encryption, pick a server from the “Encrypted” group.",
     },
     "page.network.tile.line_check": {

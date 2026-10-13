@@ -30,6 +30,8 @@ class DnsState:
     doh_supported: bool = False
     # Режим работающего шифрованного DNS (dns.local_proxy) или пустая строка.
     local_proxy_mode: str = ""
+    # Название плитки, чей сервер работает через шифрованный DNS в режиме DoH; иначе пусто.
+    local_proxy_server: str = ""
     # Свои DNS-серверы пользователя из настроек (записи dns.custom_servers).
     custom_servers: tuple[dict, ...] = ()
     # Прошлая проверка серверов на этой линии; None — её нет или она устарела.

@@ -33,7 +33,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from dns import local_proxy_catalog as catalog
-from dns.local_proxy_config import LISTEN_IPV4, LISTEN_IPV6, build_config, read_mode
+from dns.local_proxy_config import LISTEN_IPV4, LISTEN_IPV6, build_config, read_mode, read_server, read_upstreams
 from log.log import log
 
 SERVICE_NAME = "ZapretDnsCrypt"
@@ -107,6 +107,14 @@ def active_mode(system=None) -> str:
     return read_mode(_read(_config_path(system)))
 
 
+def active_server(system=None) -> str:
+    """Название плитки, чей сервер работает в режиме DoH; у остальных режимов и без службы — пусто."""
+    system = _system(system)
+    if not system.service_state(SERVICE_NAME):
+        return ""
+    return read_server(_read(_config_path(system)))
+
+
 def uses_local_proxy(addresses: Iterable[str]) -> bool:
     """Есть ли среди адресов DNS адаптеров адрес встроенного движка."""
     return any(str(item or "").strip() in LOCAL_ADDRESSES for item in addresses)
@@ -163,11 +171,22 @@ def _roll_back(system, exe: Path, config: Path, previous_config: str) -> None:
         system.start_service(SERVICE_NAME)
 
 
-def start(mode: str, *, system=None) -> LocalProxyResult:
-    """Запускает шифрованный DNS в режиме mode и ждёт, пока он ответит на запрос."""
+def start(
+    mode: str,
+    *,
+    upstreams: tuple[catalog.Upstream, ...] = (),
+    server_name: str = "",
+    system=None,
+) -> LocalProxyResult:
+    """Запускает шифрованный DNS в режиме mode и ждёт, пока он ответит на запрос.
+
+    Режиму DoH нужны серверы плитки (upstreams) и её название (server_name).
+    """
     system = _system(system)
     if mode not in catalog.MODES:
         return LocalProxyResult(False, f"Неизвестный режим шифрованного DNS: {mode}")
+    if mode == catalog.MODE_DOH and not upstreams:
+        return LocalProxyResult(False, "У сервера нет шифрованного адреса (DoH) или адреса IPv4: через посредника его не поставить.")
     shipped = system.shipped_exe()
     if not shipped.is_file():
         return LocalProxyResult(
@@ -195,7 +214,16 @@ def start(mode: str, *, system=None) -> LocalProxyResult:
         work.mkdir(parents=True, exist_ok=True)
         if not _same_file(shipped, exe):
             shutil.copy2(shipped, exe)
-        config.write_text(build_config(mode, log_path=str(work / LOG_NAME), listen_ipv6=listen_ipv6), encoding="utf-8")
+        config.write_text(
+            build_config(
+                mode,
+                log_path=str(work / LOG_NAME),
+                listen_ipv6=listen_ipv6,
+                upstreams=tuple(upstreams),
+                server_name=server_name,
+            ),
+            encoding="utf-8",
+        )
         system.grant_service_access(work)
     except OSError as exc:
         _roll_back(system, exe, config, previous_config)
@@ -259,7 +287,8 @@ def repair(adapter_addresses: Iterable[str], *, system=None) -> str:
     state = system.service_state(SERVICE_NAME)
     work = system.work_dir()
     exe, config = work / EXE_NAME, work / CONFIG_NAME
-    mode = read_mode(_read(config))
+    config_text = _read(config)
+    mode = read_mode(config_text)
     if not uses_local_proxy(adapter_addresses):
         if state:
             stop(system=system)
@@ -274,7 +303,8 @@ def repair(adapter_addresses: Iterable[str], *, system=None) -> str:
     ).casefold()
     if state == "running" and not outdated and not wrong_command:
         return ""
-    result = start(mode, system=system)
+    # Режим DoH поднимается с теми же серверами, что записаны в файле настроек.
+    result = start(mode, upstreams=read_upstreams(config_text), server_name=read_server(config_text), system=system)
     if result.success:
         return f"шифрованный DNS ({mode}) поднят заново"
     return f"шифрованный DNS ({mode}) не удалось поднять: {result.message}"
@@ -285,6 +315,7 @@ __all__ = [
     "LocalProxyResult",
     "SERVICE_NAME",
     "active_mode",
+    "active_server",
     "repair",
     "start",
     "stop",

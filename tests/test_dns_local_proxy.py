@@ -90,7 +90,8 @@ class FakeSystem:
 
 class LocalProxyConfigTests(unittest.TestCase):
     def test_config_names_its_mode_and_lists_every_server_by_stamp(self) -> None:
-        for mode in catalog.MODES:
+        # У режима DoH своих серверов нет: их даёт плитка, см. тесты ниже.
+        for mode in (item for item in catalog.MODES if item != catalog.MODE_DOH):
             with self.subTest(mode=mode):
                 text = build_config(mode, log_path=r"C:\Zapret\Dev\user\dnscrypt\dnscrypt-proxy.log", listen_ipv6=True)
 
@@ -102,6 +103,45 @@ class LocalProxyConfigTests(unittest.TestCase):
                     self.assertIn(f"stamp = '{item.stamp}'", text)
                 # Списки из сети движок не скачивает.
                 self.assertNotIn("[sources", text)
+
+    def test_doh_stamp_carries_address_name_and_path(self) -> None:
+        # Сверено с движком на Windows 2026-10-13: с этим штампом dnscrypt-proxy ответил «[doh-1] OK (DoH)».
+        self.assertEqual(
+            catalog.doh_stamp("83.217.211.149", "dns.zapret.moe", dnssec=True),
+            "sdns://AgEAAAAAAAAADjgzLjIxNy4yMTEuMTQ5AA5kbnMuemFwcmV0Lm1vZQovZG5zLXF1ZXJ5",
+        )
+        other_port = catalog.doh_stamp("193.233.112.67", "dns.geohide.ru", port=444)
+        self.assertNotEqual(other_port, catalog.doh_stamp("193.233.112.67", "dns.geohide.ru"))
+
+    def test_doh_servers_of_a_tile_are_built_from_its_template_and_ipv4_addresses(self) -> None:
+        servers = catalog.doh_upstreams(
+            "https://cloudflare-dns.com/dns-query", ["1.1.1.1", "1.0.0.1", "2606:4700:4700::1111", "мусор"], dnssec=True
+        )
+
+        # Движок ходит по IPv4: адрес IPv6 и мусор пропущены, на каждый адрес — свой сервер.
+        self.assertEqual([item.name for item in servers], ["doh-1", "doh-2"])
+        self.assertEqual(servers[0].stamp, catalog.doh_stamp("1.1.1.1", "cloudflare-dns.com", dnssec=True))
+        self.assertEqual(catalog.doh_upstreams("", ["1.1.1.1"]), ())
+        self.assertEqual(catalog.doh_upstreams("http://plain.example/dns-query", ["1.1.1.1"]), ())
+        self.assertEqual(catalog.doh_upstreams("https://only-v6.example/dns-query", ["2606:4700:4700::1111"]), ())
+
+    def test_doh_mode_names_the_tile_and_can_be_started_again_from_its_own_file(self) -> None:
+        from dns.local_proxy_config import read_server, read_upstreams
+
+        servers = catalog.doh_upstreams("https://dns.zapret.moe/dns-query", ["83.217.211.149"], dnssec=True)
+        text = build_config("doh", log_path="x", listen_ipv6=False, upstreams=servers, server_name="Zapret DNS")
+
+        self.assertEqual((read_mode(text), read_server(text)), ("doh", "Zapret DNS"))
+        self.assertIn("doh_servers = true", text)
+        self.assertIn("dnscrypt_servers = false", text)
+        self.assertNotIn("[anonymized_dns]", text)
+        self.assertEqual([(item.name, item.stamp) for item in read_upstreams(text)], [("doh-1", servers[0].stamp)])
+        # У остальных режимов обычный DoH выключен, названия плитки нет.
+        plain = build_config("dnscrypt", log_path="x", listen_ipv6=False)
+        self.assertIn("doh_servers = false", plain)
+        self.assertEqual(read_server(plain), "")
+        with self.assertRaises(ValueError):
+            build_config("doh", log_path="x", listen_ipv6=False)
 
     def test_only_odoh_mode_turns_odoh_servers_on(self) -> None:
         self.assertIn("odoh_servers = true", build_config("odoh", log_path="x", listen_ipv6=False))
@@ -247,6 +287,29 @@ class LocalProxyTests(unittest.TestCase):
         self.assertEqual(self.system.calls, ["stop", "check", "start"])
         self.assertEqual(local_proxy.active_mode(system=self.system), "anonymized")
 
+    def test_doh_mode_needs_the_servers_of_a_tile_and_remembers_its_name(self) -> None:
+        self.assertFalse(local_proxy.start("doh", system=self.system).success)
+        self.assertEqual(self.system.service_state(local_proxy.SERVICE_NAME), "")
+
+        servers = catalog.doh_upstreams("https://dns.zapret.moe/dns-query", ["83.217.211.149"])
+        result = local_proxy.start("doh", upstreams=servers, server_name="Zapret DNS", system=self.system)
+
+        self.assertTrue(result.success, result.message)
+        self.assertEqual(local_proxy.active_mode(self.system), "doh")
+        self.assertEqual(local_proxy.active_server(self.system), "Zapret DNS")
+
+    def test_repair_restarts_doh_mode_with_the_same_servers(self) -> None:
+        servers = catalog.doh_upstreams("https://dns.zapret.moe/dns-query", ["83.217.211.149"])
+        local_proxy.start("doh", upstreams=servers, server_name="Zapret DNS", system=self.system)
+        self.system.stop_service(local_proxy.SERVICE_NAME)
+
+        summary = local_proxy.repair(["127.0.0.1"], system=self.system)
+
+        self.assertIn("поднят заново", summary)
+        self.assertEqual(local_proxy.active_server(self.system), "Zapret DNS")
+        config = (self.system.work_dir() / local_proxy.CONFIG_NAME).read_text(encoding="utf-8")
+        self.assertIn(servers[0].stamp, config)
+
     def test_stop_if_unused_keeps_engine_while_an_adapter_points_at_it(self) -> None:
         local_proxy.start("dnscrypt", system=self.system)
 
@@ -339,6 +402,54 @@ class LocalProxyApplyWorkerTests(unittest.TestCase):
         self.assertEqual(self.log, [("start", "dnscrypt")])
         self.assertFalse(result["plan"].valid)
         self.assertEqual(result["plan"].log_message, "Порт 53 занят")
+
+    def _smart_worker(self, *, data, started):
+        """Обычная плитка на Windows, которая сама шифровать DNS не умеет: её ставит движок в режиме DoH."""
+        worker = self._worker(data=data, started=started)
+        worker._name = "Zapret DNS"
+        worker._proxy_mode = "doh"
+        calls = self.log
+
+        def start_local_proxy(mode, *, upstreams=(), server_name=""):
+            calls.append(("start", mode, server_name, len(upstreams)))
+            return started
+
+        worker._start_local_proxy = start_local_proxy
+        return worker
+
+    ZAPRET = {"ipv4": ["83.217.211.149"], "ipv6": ["2a03:afc0:9::235d"], "doh": "https://dns.zapret.moe/dns-query", "dnssec": True}
+
+    def test_ordinary_tile_goes_through_the_engine_where_windows_cannot_encrypt(self) -> None:
+        from dns.state import DnsCommandResult
+
+        result = self._smart_worker(data=self.ZAPRET, started=DnsCommandResult(success=True, listen_ipv6=True))._run_apply()
+
+        # Адаптер получает адрес движка, а не сервера; службу движка после этого не убирают.
+        self.assertEqual(self.log, [("start", "doh", "Zapret DNS", 1), ("apply", ["127.0.0.1"], ["::1"])])
+        self.assertFalse(result["plan"].doh_closed)
+
+    def test_ordinary_tile_falls_back_to_plain_addresses_and_says_so(self) -> None:
+        from dns.state import DnsCommandResult
+
+        result = self._smart_worker(
+            data=self.ZAPRET, started=DnsCommandResult(success=False, message="Шифрованный DNS не ответил")
+        )._run_apply()
+
+        self.assertEqual(
+            self.log,
+            [("start", "doh", "Zapret DNS", 1), ("apply", ["83.217.211.149"], ["2a03:afc0:9::235d"]), ("stop_if_unused",)],
+        )
+        # Тот же признак, по которому страница пишет «DNS поставлен без шифрования».
+        self.assertTrue(result["plan"].doh_closed)
+
+    def test_encrypted_only_tile_is_never_set_by_plain_address(self) -> None:
+        from dns.state import DnsCommandResult
+
+        data = {**self.ZAPRET, "encrypted_only": True}
+        result = self._smart_worker(data=data, started=DnsCommandResult(success=False, message="не ответил"))._run_apply()
+
+        self.assertEqual(self.log, [("start", "doh", "Zapret DNS", 1)])
+        self.assertFalse(result["plan"].valid)
 
     def test_ordinary_dns_and_automatic_dns_release_the_engine(self) -> None:
         self._worker(data={"ipv4": ["9.9.9.9"], "ipv6": []})._run_apply()

@@ -477,6 +477,32 @@ def is_encrypted_only(data: dict) -> bool:
     return bool(data.get("encrypted_only"))
 
 
+def proxy_mode_for(data: dict, *, doh_supported: bool) -> str:
+    """Режим встроенного шифрованного DNS, через который надо ставить эту плитку. Пусто — ставить адресами.
+
+    У плитки-режима ("local_proxy") он есть всегда. Обычный сервер с шифрованным
+    адресом ("doh") идёт через посредника только там, где Windows сама шифровать
+    DNS не умеет (Windows 10): в Windows 11 запросы к нему шифрует сама система,
+    а без посредника в Windows 10 они шли бы открытым текстом. Так плитка одна,
+    а путь она выбирает сама.
+    """
+    from dns.local_proxy_catalog import MODE_DOH
+
+    mode = str(data.get("local_proxy") or "")
+    if mode:
+        return mode
+    if doh_supported or not proxy_upstreams(data):
+        return ""
+    return MODE_DOH
+
+
+def proxy_upstreams(data: dict) -> tuple:
+    """Серверы плитки для режима DoH встроенного посредника; пусто — нет шаблона DoH или адреса IPv4."""
+    from dns.local_proxy_catalog import doh_upstreams
+
+    return doh_upstreams(str(data.get("doh") or ""), data.get("ipv4") or (), dnssec=bool(data.get("dnssec")))
+
+
 def find_provider_by_address(address: str) -> tuple[str, str, dict] | None:
     """(группа, название, данные) сервера, которому принадлежит адрес (IPv4 или IPv6)."""
     wanted = str(address or "").strip().lower()
