@@ -505,8 +505,18 @@ def _build_service_selection_rows(
     return selected_rows, requested_any_profile
 
 
-def _hosts_rows_key(rows) -> list[tuple[str, str]]:
-    return [(str(domain).strip().casefold(), str(ip).strip().casefold()) for domain, ip in rows]
+def _hosts_rows_key(rows) -> dict[str, list[str]]:
+    """Строки hosts для сравнения: у каждого имени — его адреса по порядку.
+
+    Важен порядок адресов одного имени (первый берёт браузер), а порядок самих имён в файле
+    ни на что не влияет. Он зависит от того, в каком порядке шли сервисы: страница пишет их
+    как нажимали, сверка при запуске — как сохранено. Сравнение списком из-за этого переписывало
+    hosts при первом же запуске, хотя ни один адрес не менялся (стенд 2026-10-13).
+    """
+    key: dict[str, list[str]] = {}
+    for domain, ip in rows:
+        key.setdefault(str(domain).strip().casefold(), []).append(str(ip).strip().casefold())
+    return key
 
 
 def decide_applied_selection_refresh(

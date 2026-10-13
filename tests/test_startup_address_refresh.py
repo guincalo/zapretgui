@@ -112,6 +112,21 @@ class HostsAppliedSelectionRefreshDecisionTests(unittest.TestCase):
     def test_up_to_date_block_is_not_rewritten(self) -> None:
         self.assertFalse(self._decide(build_desired_rows=lambda: [("ChatGPT.com", "95.182.120.241")]))
 
+    def test_same_addresses_in_another_order_of_names_are_not_rewritten(self) -> None:
+        # Страница пишет сервисы в порядке нажатий, сверка строит их в сохранённом порядке.
+        block = [("x.com", "1.1.1.1"), ("x.com", "1.1.1.2"), ("github.com", "2.2.2.2")]
+        self.assertFalse(
+            self._decide(
+                block_rows=block,
+                build_desired_rows=lambda: [("github.com", "2.2.2.2"), ("x.com", "1.1.1.1"), ("x.com", "1.1.1.2")],
+            )
+        )
+
+    def test_another_first_address_of_a_name_is_a_real_change(self) -> None:
+        # Браузер берёт первую строку имени: смена первого адреса — повод переписать.
+        block = [("x.com", "1.1.1.1"), ("x.com", "1.1.1.2")]
+        self.assertTrue(self._decide(block_rows=block, build_desired_rows=lambda: [("x.com", "1.1.1.2"), ("x.com", "1.1.1.1")]))
+
     def test_ipv6_rows_are_not_dropped_while_ipv6_is_down(self) -> None:
         self.assertFalse(
             self._decide(
