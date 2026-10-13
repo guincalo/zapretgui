@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import threading
+
 from hosts.state import HostsApplyResult, HostsCommandResult, HostsFileText
 
 
@@ -28,6 +30,120 @@ def create_hosts_manager(status_callback=None):
     return HostsManager(status_callback=status_callback)
 
 
+_OFF_PROFILES = ("", "off", "откл", "откл.", "0", "false")
+# Сколько секунд верить ответу живого адреса; «мёртв» и «не узнали» перепроверяются всегда.
+_ALIVE_CACHE_S = 600.0
+_PROBE_CACHE: dict[tuple[str, str, str], tuple[float, object]] = {}
+# Проверки не идут одновременно: фоновая, начатая со старым выбором, иначе затёрла бы
+# набор, который только что собрала проверка по нажатию тумблера.
+_CHECK_LOCK = threading.Lock()
+# Набор адресов до последней фоновой проверки. Страница узнаёт включённый сервис по тому,
+# что его адреса записаны в hosts; если новые адреса записать не удалось, набор возвращается
+# к прежнему — иначе включённые сервисы показались бы выключенными.
+_OVERLAY_BEFORE_REFRESH: dict | None = None
+
+
+def _fresh_addresses(host: str, want_ipv6: bool) -> list[str]:
+    """Адреса имени по шифрованному DNS: обычному ответу для таких имён в России верить нельзя."""
+    from utils.dns_reference import reference_ask
+    from utils.dns_wire import TYPE_A, TYPE_AAAA
+    from utils.socket_cancel import SocketCancel
+
+    ask = reference_ask(SocketCancel(), timeout_s=3.0)
+    found: list[str] = []
+    for rtype in (TYPE_A, TYPE_AAAA) if want_ipv6 else (TYPE_A,):
+        answer = ask(host, rtype)
+        if answer is not None:
+            found.extend(answer.values(rtype))
+    return found
+
+
+def check_addresses(selection: dict[str, str] | None = None, *, strict: bool = False, recheck=None):
+    """Умный движок: проверяет адреса включённых сервисов и запоминает рабочие (hosts.address_engine).
+
+    ``selection`` — выбор «сервис → профиль»; None — сохранённый выбор. ``strict`` — человек
+    только что переключил сервис и ждёт результата. ``recheck`` — названия сервисов, которые
+    проверить сейчас (None — все включённые). Сам файл hosts здесь не меняется: запись
+    делают apply_hosts_draft и refresh_applied_selection по уже проверенным адресам.
+    """
+    with _CHECK_LOCK:
+        return _check_addresses(selection, strict=strict, recheck=recheck)
+
+
+def _check_addresses(selection: dict[str, str] | None, *, strict: bool, recheck):
+    global _OVERLAY_BEFORE_REFRESH
+    import time
+
+    from hosts import address_engine, proxy_domains
+    from hosts.address_probe import ALIVE, check_address
+    from hosts.ipv6_detection import is_ipv6_available
+    from hosts.relay_check import internet_reachable
+    from log.log import log
+
+    chosen = load_user_selection() if selection is None else dict(selection or {})
+    active = {
+        name: profile.strip()
+        for name, profile in chosen.items()
+        if isinstance(name, str) and isinstance(profile, str) and profile.strip().lower() not in _OFF_PROFILES
+    }
+    def _probe(address: str, host: str, front: str):
+        # Адрес, который ответил несколько минут назад, заново не проверяется: иначе каждое
+        # переключение любого тумблера перепроверяло бы все включённые сервисы.
+        key = (address, host, front)
+        cached = _PROBE_CACHE.get(key)
+        if cached is not None and time.monotonic() - cached[0] < _ALIVE_CACHE_S:
+            return cached[1]
+        result = check_address(address, host, front=front)
+        if result.verdict == ALIVE:
+            _PROBE_CACHE[key] = (time.monotonic(), result)
+        else:
+            _PROBE_CACHE.pop(key, None)
+        return result
+
+    previous = proxy_domains.get_engine_overlay()
+    catalog = proxy_domains.load_shipped_catalog()
+    overlay, report = address_engine.check_selection(
+        active,
+        catalog=catalog,
+        previous=previous,
+        relays=proxy_domains.relay_addresses_of(catalog),
+        probe=_probe,
+        resolve=_fresh_addresses,
+        network_ok=internet_reachable,
+        ipv6=bool(is_ipv6_available()),
+        strict=strict,
+        recheck=recheck,
+    )
+    if overlay is not None:
+        if selection is None and report.changed:
+            _OVERLAY_BEFORE_REFRESH = previous
+        proxy_domains.set_engine_overlay(overlay)
+    text = describe_address_check(report)
+    log(f"Hosts, проверка адресов: проверено {report.checked}, изменилось: {report.changed}. {text}".strip(), "INFO")
+    return report
+
+
+def describe_address_check(report) -> str:
+    """Что нашла проверка адресов — одной-двумя фразами для человека. Пусто — сказать нечего."""
+    if report is None or not report.network:
+        return ""
+    parts: list[str] = []
+    if report.added:
+        parts.append("Взяты свежие адреса: " + ", ".join(_short(name) for name in report.added) + ".")
+    if report.dropped:
+        parts.append("Неработающие адреса убраны: " + ", ".join(_short(name) for name in report.dropped) + ".")
+    if report.silent:
+        parts.append(
+            "Ни один адрес не ответил: " + ", ".join(_short(name) for name in report.silent) + " — оставлены прежние адреса."
+        )
+    return " ".join(parts)
+
+
+def _short(service_name: str) -> str:
+    """Название сервиса без пояснения в скобках."""
+    return str(service_name).split(" (", 1)[0]
+
+
 def refresh_applied_selection(hosts_manager=None) -> HostsCommandResult:
     """При запуске переписывает уже применённый блок hosts, если каталог сменил адреса."""
     from hosts.proxy_domains import has_saved_user_hosts_selection
@@ -40,7 +156,21 @@ def refresh_applied_selection(hosts_manager=None) -> HostsCommandResult:
         load_user_selection(),
         has_saved_selection=has_saved_user_hosts_selection(),
     )
+    _settle_overlay_after_refresh(write_failed=bool(getattr(manager, "refresh_write_failed", False)))
     return HostsCommandResult(success=True, message=reason, changed=bool(changed))
+
+
+def _settle_overlay_after_refresh(*, write_failed: bool) -> None:
+    """После сверки hosts: если новые адреса записать не удалось, вернуть набор, который записан."""
+    global _OVERLAY_BEFORE_REFRESH
+    from hosts import proxy_domains
+    from log.log import log
+
+    with _CHECK_LOCK:
+        before, _OVERLAY_BEFORE_REFRESH = _OVERLAY_BEFORE_REFRESH, None
+        if write_failed and before is not None:
+            proxy_domains.set_engine_overlay(before)
+            log("Hosts: проверенные адреса записать не удалось — оставлены те, что уже в файле", "WARNING")
 
 
 def load_page_snapshot():
@@ -62,10 +192,30 @@ def apply_hosts_draft(selection: dict[str, str], adobe: bool | None = None) -> H
         status_callback=lambda message: log(f"Hosts: {message}", "DEBUG")
     )
     selection = dict(selection or {})
+    # Сначала проверка адресов: в hosts идут те, что сейчас отвечают, и рабочий — первым.
+    # Проверяется только то, что человек сейчас поменял; остальное проверено раньше.
+    note = ""
+    overlay_before = None
+    try:
+        from hosts import proxy_domains
+
+        overlay_before = proxy_domains.get_engine_overlay()
+        saved = load_user_selection()
+        touched = {name for name, profile in selection.items() if saved.get(name) != profile}
+        note = describe_address_check(check_addresses(selection, strict=True, recheck=touched))
+    except Exception as exc:
+        log(f"Hosts: проверка адресов не выполнена, пишутся адреса каталога: {exc}", "WARNING")
     success = bool(manager.apply_service_dns_selections(selection))
     message = str(manager.last_status or "")
     if success:
         save_user_selection(selection)
+    elif overlay_before is not None:
+        # В файле остались прежние адреса: набор должен говорить то же самое.
+        try:
+            proxy_domains.set_engine_overlay(overlay_before)
+        except Exception as exc:
+            log(f"Hosts: не удалось вернуть прежний набор адресов: {exc}", "WARNING")
+        note = ""
     if success and adobe is not None:
         success = bool(manager.add_adobe_domains() if adobe else manager.remove_adobe_domains())
         message = str(manager.last_status or message)
@@ -75,7 +225,7 @@ def apply_hosts_draft(selection: dict[str, str], adobe: bool | None = None) -> H
         snapshot = load_page_snapshot()
     except Exception as exc:
         log(f"Hosts: не удалось перечитать состояние после записи: {exc}", "WARNING")
-    return HostsApplyResult(success=success, message=message, snapshot=snapshot)
+    return HostsApplyResult(success=success, message=message, snapshot=snapshot, note=note)
 
 
 def load_hosts_text() -> HostsFileText:

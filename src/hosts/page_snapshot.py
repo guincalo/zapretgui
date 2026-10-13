@@ -49,6 +49,8 @@ class HostsPageSnapshot:
     readable: bool = True
     read_only: bool = False
     adobe_active: bool = False
+    # Когда программа последний раз проверила адреса включённых сервисов (ISO, пусто — ещё не проверяла).
+    addresses_checked_at: str = ""
 
     def block(self, kind: str) -> HostsBlock | None:
         for block in self.blocks:
@@ -195,6 +197,7 @@ def build_page_snapshot(
     ipv6_available: bool,
     saved_selection: dict[str, str] | None = None,
     catalog_key: object = None,
+    addresses_checked_at: str = "",
 ) -> HostsPageSnapshot:
     """Собирает снимок из уже прочитанного текста hosts и каталога.
 
@@ -268,6 +271,7 @@ def build_page_snapshot(
         readable=bool(readable),
         read_only=bool(read_only),
         adobe_active=_is_adobe_active(blocks),
+        addresses_checked_at=str(addresses_checked_at or ""),
     )
 
 
@@ -280,14 +284,16 @@ def load_page_snapshot() -> HostsPageSnapshot:
     global _SNAPSHOT
     from hosts.hosts import HOSTS_PATH, _get_hosts_sig, is_file_readonly, safe_read_hosts_file
     from hosts.ipv6_detection import is_ipv6_available
-    from hosts.proxy_domains import get_hosts_catalog_signature, load_user_hosts_selection
+    from hosts.proxy_domains import get_engine_overlay, get_hosts_catalog_signature, load_user_hosts_selection
 
+    overlay = get_engine_overlay()
+    checked_at = str(overlay.get("checked_at") or "") if overlay.get("services") else ""
     catalog_key = get_hosts_catalog_signature()
     ipv6_available = bool(is_ipv6_available())
     hosts_sig = _get_hosts_sig(HOSTS_PATH)
     saved_selection = dict(load_user_hosts_selection() or {})
     # Выбор входит в ключ: запись профиля с теми же адресами файл не меняет.
-    key = (hosts_sig, catalog_key, ipv6_available, tuple(sorted(saved_selection.items())))
+    key = (hosts_sig, catalog_key, ipv6_available, tuple(sorted(saved_selection.items())), checked_at)
     cached = _SNAPSHOT
     if cached is not None and cached[0] == key:
         return cached[1]
@@ -303,6 +309,7 @@ def load_page_snapshot() -> HostsPageSnapshot:
         ipv6_available=ipv6_available,
         saved_selection=saved_selection,
         catalog_key=catalog_key,
+        addresses_checked_at=checked_at,
     )
     with _LOCK:
         _SNAPSHOT = (key, snapshot)

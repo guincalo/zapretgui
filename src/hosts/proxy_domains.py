@@ -7,6 +7,7 @@ import time
 from pathlib import Path
 
 from config.runtime_layout import APPLICATION_PATHS, PACKAGED_RUNTIME
+from hosts.catalog_overlay import apply_overlay, clean_overlay
 from hosts.catalog_repository import (
     CATALOG_FILE_NAME,
     HOSTS_PROFILE_ID,
@@ -30,6 +31,9 @@ _RECENT_SIG_CHECKED_AT = 0.0
 _RECENT_SIG_TTL_SECONDS = 1.0
 _MISSING_CATALOG_LOGGED = False
 _LAST_LOAD_ERROR: tuple[Path, tuple[int, int] | None] | None = None
+# Номер набора проверенных адресов (hosts.catalog_overlay): растёт при каждой его смене,
+# чтобы кэш каталога и снимок страницы узнали, что адреса стали другими.
+_OVERLAY_REVISION = 0
 
 # Explicit test seam.  Production always receives the installation root.
 MAIN_DIRECTORY = str(APPLICATION_PATHS.root)
@@ -124,12 +128,53 @@ def _load_catalog() -> HostsCatalog:
             catalog = empty_catalog()
         else:
             _LAST_LOAD_ERROR = None
+            # Поверх снимка каталога — адреса, проверенные на этом компьютере.
+            catalog = apply_overlay(catalog, _read_engine_overlay())
 
         _CACHE = catalog
         _CACHE_PATH = path
         _CACHE_SIG = signature
         _CACHE_PROFILE_INDEX = None
         return catalog
+
+
+def _read_engine_overlay() -> dict:
+    try:
+        return clean_overlay(settings_store.get_hosts_engine())
+    except Exception as exc:
+        _log(f"Не удалось прочитать проверенные адреса hosts из настроек: {exc}", "WARNING")
+        return {}
+
+
+def get_engine_overlay() -> dict:
+    """Набор адресов, проверенных на этом компьютере (в строгом виде, см. hosts.catalog_overlay)."""
+    return _read_engine_overlay()
+
+
+def set_engine_overlay(overlay: dict) -> bool:
+    """Запоминает набор проверенных адресов. Если адреса стали другими — сбрасывает кэш каталога,
+    и дальше вся программа видит новые; одна лишь отметка времени проверки кэш не трогает."""
+    global _OVERLAY_REVISION
+    cleaned = clean_overlay(overlay)
+    changed = cleaned["services"] != _read_engine_overlay().get("services") or cleaned["catalog"] != _read_engine_overlay().get("catalog")
+    try:
+        settings_store.set_hosts_engine(cleaned)
+    except Exception as exc:
+        _log(f"Не удалось сохранить проверенные адреса hosts: {exc}", "WARNING")
+        return False
+    if changed:
+        with _CACHE_LOCK:
+            _OVERLAY_REVISION += 1
+        invalidate_hosts_catalog_cache()
+    return True
+
+
+def load_shipped_catalog() -> HostsCatalog:
+    """Каталог как он поставлен, без проверенных адресов: с ним движок сверяет и из него берёт запас."""
+    try:
+        return load_catalog(_get_hosts_catalog_path())
+    except Exception:
+        return empty_catalog()
 
 
 def invalidate_hosts_catalog_cache() -> None:
@@ -157,7 +202,8 @@ def get_hosts_catalog_signature() -> tuple[str, int, int] | None:
     if signature is None:
         return None
     revision, size = signature
-    return str(path), revision, size
+    # Набор проверенных адресов меняет строки сервисов так же, как новый файл каталога.
+    return str(path), revision + _OVERLAY_REVISION, size
 
 
 def get_dns_profiles() -> list[str]:
@@ -251,7 +297,11 @@ def get_relay_addresses() -> set[str]:
     одному сервису (в каталоге 2026.10.09.6 посредники ведут от 5 до 92
     сервисов, остальные адреса — не больше трёх).
     """
-    catalog = _load_catalog()
+    return relay_addresses_of(_load_catalog())
+
+
+def relay_addresses_of(catalog: HostsCatalog) -> set[str]:
+    """То же для любого каталога: умный движок считает посредников по поставленному каталогу."""
     services_by_address: dict[tuple[int, str], set[str]] = {}
     for service_name, entries in catalog.service_entries.items():
         if catalog.service_modes.get(_clean_str(service_name).casefold()) != _SERVICE_MODE_DNS:
@@ -436,6 +486,7 @@ __all__ = [
     "get_all_services",
     "get_dns_profile_display_name",
     "get_dns_profiles",
+    "get_engine_overlay",
     "get_hosts_catalog_path",
     "get_hosts_catalog_signature",
     "get_service_available_dns_profiles",
@@ -445,6 +496,9 @@ __all__ = [
     "get_services_profile_index",
     "invalidate_hosts_catalog_cache",
     "load_user_hosts_selection",
+    "load_shipped_catalog",
+    "relay_addresses_of",
     "save_user_hosts_selection",
+    "set_engine_overlay",
     "service_has_proxy_profiles",
 ]

@@ -418,6 +418,42 @@ class HostsPageTests(unittest.TestCase):
         self.assertFalse(page._draft.has_user_changes())
         self.assertTrue(page.tiles.tiles()[1].is_on)
 
+    def test_summary_says_when_addresses_were_checked_without_any_new_control(self) -> None:
+        """Просьба владельца 2026-10-13: «чтобы всегда работало и проверялось» — и без новых элементов."""
+        from datetime import datetime
+
+        today = datetime.now().replace(hour=14, minute=20, second=5, microsecond=0)
+        written = ("4.4.4.4 direct.example",)
+        page = self._page(_manual_snapshot(block_lines=written, direct="hosts", addresses_checked_at=today.isoformat()))
+        self.assertEqual(page.summary_detail.text(), "строк от ZapretGUI в файле: 1 · адреса проверены сегодня в 14:20")
+
+        page._set_snapshot(_manual_snapshot(block_lines=written, direct="hosts", addresses_checked_at="2026-01-02T03:04:05"))
+        self.assertEqual(page.summary_detail.text(), "строк от ZapretGUI в файле: 1 · адреса проверены 02.01 в 03:04")
+
+        # Пока проверки не было или в hosts ничего не записано, о ней не говорится.
+        page._set_snapshot(_manual_snapshot(block_lines=written, direct="hosts"))
+        self.assertEqual(page.summary_detail.text(), "строк от ZapretGUI в файле: 1")
+        page._set_snapshot(_manual_snapshot(addresses_checked_at=today.isoformat()))
+        self.assertEqual(page.summary_detail.text(), "")
+
+    def test_what_the_address_check_found_is_shown_after_the_write(self) -> None:
+        page = self._page(_manual_snapshot())
+        page._on_tile_activated("Direct")
+        written = _manual_snapshot(block_lines=("4.4.4.4 direct.example",), direct="hosts")
+
+        with patch("hosts.ui.page.InfoBar") as info_bar:
+            self.write_callbacks[-1]["on_loaded"](
+                len(self.write_callbacks),
+                SimpleNamespace(success=True, snapshot=written, message="", note="Неработающие адреса убраны: Direct."),
+            )
+        self.assertEqual(info_bar.info.call_args.kwargs["content"], "Неработающие адреса убраны: Direct.")
+
+        # Сказать нечего — никаких сообщений.
+        page._on_tile_activated("Direct")
+        with patch("hosts.ui.page.InfoBar") as info_bar:
+            self._finish_write(page, snapshot=_manual_snapshot())
+        info_bar.info.assert_not_called()
+
     def test_clicks_during_write_are_written_next_in_one_go(self) -> None:
         page = self._page(_manual_snapshot())
 

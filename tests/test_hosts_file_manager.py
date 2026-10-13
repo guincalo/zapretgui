@@ -5,6 +5,15 @@ import unittest
 from unittest.mock import patch
 
 
+def _report():
+    from hosts.address_engine import EngineReport
+
+    return EngineReport(checked=3, changed=True, dropped={"ChatGPT (OpenAI)": ("1.1.1.1",)})
+
+
+_REPORT = _report()
+
+
 class HostsFileManagerTests(unittest.TestCase):
     def test_hosts_manager_has_no_legacy_bootstrap(self) -> None:
         from hosts import hosts as hosts_module
@@ -40,12 +49,23 @@ class HostsFileManagerTests(unittest.TestCase):
             patch.object(hosts_commands, "create_hosts_manager", return_value=FakeHostsManager()),
             patch.object(hosts_commands, "save_user_selection", side_effect=lambda sel: calls.append(f"save:{sel}") or True),
             patch.object(hosts_commands, "load_page_snapshot", return_value=snapshot),
+            patch.object(hosts_commands, "load_user_selection", return_value={"Discord": "hosts"}),
+            patch.object(
+                hosts_commands,
+                "check_addresses",
+                side_effect=lambda sel, **kw: calls.append(f"check:{sorted(kw['recheck'])}:{kw['strict']}") or _REPORT,
+            ),
         ):
-            result = hosts_commands.apply_hosts_draft({"ChatGPT": "xbox_dns"}, adobe=True)
+            result = hosts_commands.apply_hosts_draft({"ChatGPT": "xbox_dns", "Discord": "hosts"}, adobe=True)
 
         self.assertTrue(result.success)
         self.assertIs(result.snapshot, snapshot)
-        self.assertEqual(calls, ["apply:xbox_dns", "save:{'ChatGPT': 'xbox_dns'}", "adobe:on"])
+        # Адреса проверяются до записи, и только у сервиса, который человек сейчас поменял.
+        self.assertEqual(
+            calls,
+            ["check:['ChatGPT']:True", "apply:xbox_dns", "save:{'ChatGPT': 'xbox_dns', 'Discord': 'hosts'}", "adobe:on"],
+        )
+        self.assertEqual(result.note, "Неработающие адреса убраны: ChatGPT.")
 
     def test_apply_draft_does_not_save_selection_when_write_fails(self) -> None:
         from hosts import commands as hosts_commands
@@ -63,12 +83,41 @@ class HostsFileManagerTests(unittest.TestCase):
             patch.object(hosts_commands, "create_hosts_manager", return_value=FakeHostsManager()),
             patch.object(hosts_commands, "save_user_selection") as save,
             patch.object(hosts_commands, "load_page_snapshot", return_value=None),
+            patch.object(hosts_commands, "load_user_selection", return_value={}),
+            patch.object(hosts_commands, "check_addresses", return_value=_REPORT),
+            patch("hosts.proxy_domains.get_engine_overlay", return_value={"catalog": "было"}),
+            patch("hosts.proxy_domains.set_engine_overlay") as restore,
         ):
             result = hosts_commands.apply_hosts_draft({"ChatGPT": "xbox_dns"}, adobe=True)
 
         self.assertFalse(result.success)
         self.assertEqual(result.message, "Файл hosts недоступен для изменения")
         save.assert_not_called()
+        # В файле остались прежние адреса — набор проверенных возвращается к прежнему, иначе
+        # страница показала бы включённые сервисы выключенными. И хвалиться проверкой нечего.
+        restore.assert_called_once_with({"catalog": "было"})
+        self.assertEqual(result.note, "")
+
+    def test_failed_address_check_does_not_block_the_write(self) -> None:
+        from hosts import commands as hosts_commands
+
+        class FakeHostsManager:
+            last_status = "Файл hosts обновлён"
+
+            def apply_service_dns_selections(self, service_dns) -> bool:
+                return True
+
+        with (
+            patch.object(hosts_commands, "create_hosts_manager", return_value=FakeHostsManager()),
+            patch.object(hosts_commands, "save_user_selection", return_value=True),
+            patch.object(hosts_commands, "load_page_snapshot", return_value=None),
+            patch.object(hosts_commands, "load_user_selection", return_value={}),
+            patch.object(hosts_commands, "check_addresses", side_effect=OSError("сеть упала")),
+        ):
+            result = hosts_commands.apply_hosts_draft({"ChatGPT": "xbox_dns"})
+
+        self.assertTrue(result.success)
+        self.assertEqual(result.note, "")
 
     def test_apply_domain_rows_skips_write_when_content_is_unchanged(self) -> None:
         from hosts import hosts as hosts_module

@@ -1556,6 +1556,17 @@ def set_hosts_selection(selection: dict[str, str]) -> bool:
     return True
 
 
+def get_hosts_engine() -> dict[str, Any]:
+    """Набор адресов hosts, проверенных на этом компьютере (см. hosts.catalog_overlay)."""
+    data = _read_path_value(("hosts", "engine"), {})
+    return copy.deepcopy(data) if isinstance(data, dict) else {}
+
+
+def set_hosts_engine(engine: dict[str, Any]) -> bool:
+    _update_settings(lambda data: _set_path_value(data, ("hosts", "engine"), copy.deepcopy(_as_dict(engine))))
+    return True
+
+
 def get_tg_proxy_enabled() -> bool:
     return _get_bool(("telegram_proxy", "enabled"), True)
 
@@ -2041,6 +2052,7 @@ __all__ = [
     "get_folders_settings",
     "get_garland_enabled",
     "get_gui_autostart_enabled",
+    "get_hosts_engine",
     "get_hosts_selection",
     "get_isp_dns_info_shown",
     "get_onboarding_tour_done",
@@ -2137,6 +2149,7 @@ __all__ = [
     "set_folders_settings",
     "set_garland_enabled",
     "set_gui_autostart_enabled",
+    "set_hosts_engine",
     "set_hosts_selection",
     "set_isp_dns_info_shown",
     "set_onboarding_tour_done",

@@ -538,6 +538,8 @@ class HostsManager:
     def __init__(self, status_callback=None):
         self.status_callback = status_callback
         self._last_status: str | None = None
+        # Сверка при запуске хотела переписать блок и не смогла (нет прав, файл занят).
+        self.refresh_write_failed = False
 
     def restore_permissions(self):
         """Восстанавливает права доступа к файлу hosts"""
@@ -692,6 +694,7 @@ class HostsManager:
             log(f"Hosts при запуске: обновление не нужно ({reason})", "DEBUG")
             return False, reason
         if not self.apply_service_dns_selections(service_dns):
+            self.refresh_write_failed = True
             reason = self.last_status or "не удалось переписать hosts"
             log(f"Hosts при запуске: не удалось обновить адреса: {reason}", "WARNING")
             return False, reason

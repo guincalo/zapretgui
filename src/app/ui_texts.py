@@ -1693,6 +1693,18 @@ TEXTS: dict[str, dict[str, str]] = {
         "ru": "строк от ZapretGUI в файле: {lines}",
         "en": "ZapretGUI lines in the file: {lines}",
     },
+    "page.hosts.summary.checked_today": {
+        "ru": "адреса проверены сегодня в {time}",
+        "en": "addresses checked today at {time}",
+    },
+    "page.hosts.summary.checked": {
+        "ru": "адреса проверены {date} в {time}",
+        "en": "addresses checked on {date} at {time}",
+    },
+    "page.hosts.addresses.checked.title": {
+        "ru": "Адреса проверены",
+        "en": "Addresses checked",
+    },
     "page.hosts.adobe.note": {
         "ru": "Закрывает серверы проверки лицензии Adobe",
         "en": "Blocks Adobe license check servers",

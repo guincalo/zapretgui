@@ -10,6 +10,8 @@ from ui.performance_metrics import log_ui_timing_since
 @dataclass(frozen=True, slots=True)
 class HostsFeature:
     refresh_applied_selection: Callable
+    # Умный движок: проверка адресов включённых сервисов (hosts.commands.check_addresses).
+    check_addresses: Callable
     warm_page_data_cache: Callable
     peek_page_snapshot: Callable
     get_hosts_path_str: Callable
@@ -99,6 +101,7 @@ def build_hosts_feature() -> HostsFeature:
 
     return HostsFeature(
         refresh_applied_selection=lambda *args, **kwargs: _public().refresh_applied_selection(*args, **kwargs),
+        check_addresses=lambda *args, **kwargs: _public().check_addresses(*args, **kwargs),
         warm_page_data_cache=_warm_page_data_cache,
         # Только память, без чтения файлов: безопасно звать из UI-потока.
         peek_page_snapshot=lambda: _peek_page_snapshot(),

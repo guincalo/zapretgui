@@ -39,6 +39,7 @@ from qfluentwidgets import (
 from app.ui_texts import tr as tr_catalog
 from hosts.draft import MIXED, HostsDraft
 from hosts.hosts_blocks import BLOCK_ZAPRETGUI
+from hosts.page_plans import describe_checked_at
 from hosts.page_snapshot import CATEGORY_AI, CATEGORY_DIRECT, CATEGORY_OTHER, HostsPageSnapshot
 from hosts.ui.profile_icons import profile_icon
 from hosts.ui.services_tiles import HostsChoice, HostsTile, HostsTilesGrid, split_service_title
@@ -455,6 +456,15 @@ class HostsPage(BasePage):
             self._fail_write(str(getattr(result, "message", "") or ""), snapshot)
             return
         self._just_written = True
+        note = str(getattr(result, "note", "") or "")
+        if note:
+            # Проверка перед записью что-то поменяла или не дозвалась ни до одного адреса.
+            InfoBar.info(
+                title=self._tr("page.hosts.addresses.checked.title", "Адреса проверены"),
+                content=note,
+                duration=8000,
+                parent=self.window(),
+            )
         if snapshot is not None:
             # Записанное уходит из черновика само; остаётся только то, что
             # пользователь поменял во время записи.
@@ -640,6 +650,15 @@ class HostsPage(BasePage):
         self.summary_count.setStyleSheet(f"color: {accent.name()}; background: transparent;")
         self.summary_label.setText(title)
         detail = self._tr("page.hosts.summary.lines", "строк от ZapretGUI в файле: {lines}", lines=lines) if lines else ""
+        # Адреса программа проверяет сама: при включении сервиса, при запуске и раз в несколько часов.
+        kind, day, clock = describe_checked_at(snapshot.addresses_checked_at) if snapshot is not None and lines else ("", "", "")
+        if kind == "today":
+            checked = self._tr("page.hosts.summary.checked_today", "адреса проверены сегодня в {time}", time=clock)
+        elif kind:
+            checked = self._tr("page.hosts.summary.checked", "адреса проверены {date} в {time}", date=day, time=clock)
+        else:
+            checked = ""
+        detail = " · ".join(part for part in (detail, checked) if part)
         self.summary_detail.setText(detail)
         self.summary_detail.setVisible(bool(detail))
         if self._applying:

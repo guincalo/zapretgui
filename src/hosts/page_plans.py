@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from datetime import datetime
 
 
 _DNS_PROFILE_IP_SUFFIX = re.compile(r"\s*\(\s*(?:\d{1,3}\.){3}\d{1,3}\s*\)\s*$")
@@ -246,6 +247,19 @@ def build_selection_sync_plan(
         )
 
     return HostsSelectionSyncPlan(entries=entries, new_selection=new_selection)
+
+
+def describe_checked_at(checked_at: str, *, now: datetime | None = None) -> tuple[str, str, str]:
+    """Когда проверялись адреса: («today» | «date» | «», день «13.10», время «14:20»).
+
+    Пусто — проверки ещё не было или запись о ней не читается.
+    """
+    try:
+        moment = datetime.fromisoformat(str(checked_at or ""))
+    except ValueError:
+        return "", "", ""
+    today = (now or datetime.now()).date()
+    return ("today" if moment.date() == today else "date"), moment.strftime("%d.%m"), moment.strftime("%H:%M")
 
 
 def format_dns_profile_label(profile_name: str) -> str:

@@ -81,7 +81,7 @@ class HostsCatalogSqliteTests(unittest.TestCase):
         self.assertFalse(
             (PROJECT_ROOT / "private_zapretgui" / "resources" / "json" / "hosts_catalog").exists()
         )
-        self.assertEqual(catalog.catalog_version, "2026.10.13.2")
+        self.assertEqual(catalog.catalog_version, "2026.10.13.3")
         # У каждого сервиса свой значок, а не запасной глобус.
         self.assertEqual(
             [name for name, (icon, _color) in catalog.service_icons.items() if icon == "fa5s.globe"],
@@ -435,6 +435,67 @@ class HostsCatalogSqliteTests(unittest.TestCase):
                 self.assertEqual(addresses, by_host["www.youtube.com"])
         # Этот адрес 2026-10-13 не отвечал ни со стенда, ни из шести российских сетей.
         self.assertNotIn("216.58.206.78", {ip for _hostname, ip in rows})
+
+    def test_youtube_tile_no_longer_warns_that_it_may_not_work(self) -> None:
+        # Оговорка «иногда может не работать» стояла в самом названии сервиса. С умным движком
+        # (hosts.address_engine) программа сама проверяет адреса и ставит рабочий первым.
+        from hosts.catalog_repository import load_catalog
+
+        catalog = load_catalog(PRIVATE_DATABASE)
+        self.assertEqual(catalog.service_name_by_id["hosts.youtube"], "YouTube")
+        self.assertNotIn("не работать", " ".join(catalog.service_order))
+
+    def test_every_service_with_a_passport_exists_and_writes_real_site_addresses(self) -> None:
+        # Паспорт разрешает брать свежие адреса у честного DNS. Это верно только там, где в hosts
+        # стоит настоящий адрес сайта; у сервисов через посредника честный DNS всё сломал бы.
+        from hosts.address_engine import PASSPORTS
+        from hosts.catalog_repository import HOSTS_PROFILE_ID, load_catalog
+
+        catalog = load_catalog(PRIVATE_DATABASE)
+        relays = {"hosts.supercell", "hosts.ntc_party_ipv4", "hosts.flowseal_discord_voice", "hosts.discord", "hosts.rutor", "hosts.x_twitter"}
+        self.assertFalse(relays & set(PASSPORTS))
+        column = catalog.dns_profiles.index(HOSTS_PROFILE_ID)
+        for service_id in PASSPORTS:
+            with self.subTest(service_id=service_id):
+                name = catalog.service_name_by_id[service_id]
+                self.assertTrue([host for host, values in catalog.service_entries[name] if values[column]])
+
+    def test_checked_addresses_replace_catalog_rows_everywhere_at_once(self) -> None:
+        """Набор проверенных адресов видят и страница, и запись hosts: источник строк один."""
+        from hosts.catalog_repository import HOSTS_PROFILE_ID, load_catalog
+
+        shipped = load_catalog(PRIVATE_DATABASE)
+        stored: dict = {}
+        with (
+            patch.object(self.proxy_domains.settings_store, "get_hosts_engine", lambda: dict(stored)),
+            patch.object(self.proxy_domains.settings_store, "set_hosts_engine", lambda value: stored.update(value) or True),
+        ):
+            self.proxy_domains.invalidate_hosts_catalog_cache()
+            before = self.proxy_domains.get_service_domain_ip_rows("YouTube", HOSTS_PROFILE_ID)
+            signature = self.proxy_domains.get_hosts_catalog_signature()
+            self.assertEqual(len(before), 36)
+
+            rows = [[host, "64.233.165.198"] for host in ("www.youtube.com", "youtube.com", "m.youtube.com")]
+            overlay = {"catalog": shipped.content_sha256, "checked_at": "2026-10-13T14:20:05", "services": {"hosts.youtube": {HOSTS_PROFILE_ID: rows}}}
+            self.assertTrue(self.proxy_domains.set_engine_overlay(overlay))
+
+            self.assertEqual(
+                self.proxy_domains.get_service_domain_ip_rows("YouTube", HOSTS_PROFILE_ID),
+                [(host, address) for host, address in rows],
+            )
+            # Снимок страницы пересобирается по этой подписи.
+            self.assertNotEqual(self.proxy_domains.get_hosts_catalog_signature(), signature)
+            # Соседний сервис не тронут, а поставленный каталог остаётся как был — из него берётся запас.
+            self.assertEqual(
+                self.proxy_domains.get_service_domain_ip_rows("GitHub", HOSTS_PROFILE_ID),
+                [(h, v[shipped.dns_profiles.index(HOSTS_PROFILE_ID)]) for h, v in shipped.service_entries["GitHub"] if v[shipped.dns_profiles.index(HOSTS_PROFILE_ID)]],
+            )
+            self.assertEqual(len(self.proxy_domains.load_shipped_catalog().service_entries["YouTube"]), 36)
+
+            # Набор от другой версии каталога не действует: вышел новый каталог — проверка начнётся с него.
+            stored["catalog"] = "старый каталог"
+            self.proxy_domains.invalidate_hosts_catalog_cache()
+            self.assertEqual(self.proxy_domains.get_service_domain_ip_rows("YouTube", HOSTS_PROFILE_ID), before)
 
     def test_direct_services_carry_ipv6_wherever_the_site_itself_has_it(self) -> None:
         # Решение владельца 2026-10-13: один тумблер с IPv4 и IPv6 сразу, а не отдельные «…IPv6».

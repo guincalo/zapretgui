@@ -431,6 +431,31 @@ def normalize_hosts(data: object) -> dict[str, Any]:
     return {
         "active_domains": unique_str_list(raw.get("active_domains")),
         "selection": selection,
+        "engine": _normalize_hosts_engine(raw.get("engine")),
+    }
+
+
+def _normalize_hosts_engine(data: object) -> dict[str, Any]:
+    """Набор проверенных адресов hosts: только строки и пары «имя, адрес». Смысл проверяет hosts.catalog_overlay."""
+    raw = as_dict(data)
+    services: dict[str, dict[str, list[list[str]]]] = {}
+    for service_id, profiles in as_dict(raw.get("services")).items():
+        kept: dict[str, list[list[str]]] = {}
+        for profile_id, rows in as_dict(profiles).items():
+            pairs = [
+                [as_clean_str(row[0]), as_clean_str(row[1])]
+                for row in (rows if isinstance(rows, list) else [])
+                if isinstance(row, (list, tuple)) and len(row) == 2 and as_clean_str(row[0]) and as_clean_str(row[1])
+            ]
+            if pairs and as_clean_str(profile_id):
+                kept[as_clean_str(profile_id)] = pairs
+        if kept and as_clean_str(service_id):
+            services[as_clean_str(service_id)] = kept
+    return {
+        "catalog": as_clean_str(raw.get("catalog")),
+        "checked_at": as_clean_str(raw.get("checked_at")),
+        "suspects": unique_str_list(raw.get("suspects")),
+        "services": services,
     }
 
 

@@ -219,16 +219,27 @@ class StartupAddressRefreshInstallTests(unittest.TestCase):
             patch.object(module, "enqueue_subsystem_task", side_effect=lambda q, n, t: queued.append((q, n, t))),
             patch.object(module, "bind_startup_gate", side_effect=lambda _signal, cb, is_ready: cb()),
             patch.object(module, "is_startup_host_alive", return_value=True),
+            # Повтор по расписанию ставится таймером Qt: в тесте его нет, запоминаем только срок.
+            patch.object(module, "schedule_after", side_effect=lambda delay, _cb: self.scheduled.append(delay), create=True),
         ):
             getattr(module, install_name)(_Host(), log_startup_metric=lambda *_args: None, **feature_kwargs)
-            for _queue, _name, target in queued:
-                target()
+            # Задача может поставить следующую: проверка адресов ставит запись в hosts.
+            index = 0
+            while index < len(queued):
+                queued[index][2]()
+                index += 1
         return [(queue, name) for queue, name, _target in queued]
 
-    def test_hosts_refresh_runs_in_hosts_queue(self) -> None:
+    def setUp(self) -> None:
+        self.scheduled: list[int] = []
+
+    def test_addresses_are_checked_in_a_waiting_queue_and_only_then_hosts_is_rewritten(self) -> None:
         calls: list[str] = []
 
         class FakeHostsFeature:
+            def check_addresses(self):
+                calls.append("check")
+
             def refresh_applied_selection(self):
                 calls.append("refresh")
 
@@ -237,7 +248,27 @@ class StartupAddressRefreshInstallTests(unittest.TestCase):
             "install_hosts_applied_selection_refresh",
             {"hosts_feature": FakeHostsFeature()},
         )
-        self.assertEqual(queued, [("hosts", "HostsAppliedSelectionRefresh")])
+        # Проверка ждёт сеть — в своей очереди; запись файла — на общей дорожке, после проверки.
+        self.assertEqual(queued, [("dns", "HostsAddressCheck"), ("hosts", "HostsAppliedSelectionRefresh")])
+        self.assertEqual(calls, ["check", "refresh"])
+        # И дальше раз в шесть часов, пока программа открыта.
+        self.assertEqual(self.scheduled, [6 * 3600 * 1000])
+
+    def test_failed_address_check_does_not_cancel_the_hosts_refresh(self) -> None:
+        calls: list[str] = []
+
+        class FakeHostsFeature:
+            def check_addresses(self):
+                raise OSError("нет сети")
+
+            def refresh_applied_selection(self):
+                calls.append("refresh")
+
+        self._run_install(
+            "main.post_startup_hosts_refresh",
+            "install_hosts_applied_selection_refresh",
+            {"hosts_feature": FakeHostsFeature()},
+        )
         self.assertEqual(calls, ["refresh"])
 
     def test_hosts_refresh_logs_why_nothing_changed(self) -> None:

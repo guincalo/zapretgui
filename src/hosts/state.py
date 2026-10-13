@@ -17,6 +17,9 @@ class HostsApplyResult:
     message: str = ""
     # Свежий HostsPageSnapshot после записи (None, если перечитать не удалось).
     snapshot: object | None = None
+    # Что нашла проверка адресов перед записью (пусто — сказать нечего): какие адреса
+    # заменены и у каких сервисов не ответил ни один.
+    note: str = ""
 
 
 @dataclass(frozen=True, slots=True)
