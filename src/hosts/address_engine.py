@@ -168,12 +168,20 @@ class _Plan:
         # сертификатом — проба одна на семейство. Проба на каждое имя била по одному адресу
         # двумя десятками соединений: на стенде 2026-10-13 сервер начал отвечать через раз,
         # и рабочий адрес выглядел мёртвым.
-        shared = self.profile_id != HOSTS_PROFILE_ID or (self.passport is not None and bool(self.passport.front))
+        shared = self.profile_id != HOSTS_PROFILE_ID or bool(self.front_for(address))
         return self.service_id, self.profile_id, "" if shared else _name_family(host), address
 
-    @property
-    def front(self) -> str:
-        return self.passport.front if self.passport is not None else ""
+    def front_for(self, address: str) -> str:
+        """Нейтральное имя для пробы адреса. Адрес IPv6 проверяется только настоящим именем сайта.
+
+        Нейтральное имя доказывает, что адрес жив; открывается ли по нему сам сайт — зависит от
+        обхода. Для IPv4 этого хватает: без строки в hosts программа пошла бы на такой же адрес.
+        Строка IPv6 меняет больше: Windows ставит IPv6 первым, и все программы уходят на него.
+        Поэтому IPv6 идёт в hosts, только когда по нему отвечает сам сайт, под своим именем.
+        """
+        if self.passport is None or _is_v6(address):
+            return ""
+        return self.passport.front
 
 
 def check_selection(
@@ -237,7 +245,7 @@ def check_selection(
                     rivals = [other for other in addresses if _is_v6(other) == _is_v6(address)]
                     if len(rivals) < 2 or (plan.profile_id != HOSTS_PROFILE_ID and address not in relay_set):
                         continue
-                units.setdefault(plan.key(host, address), (address, host, plan.front))
+                units.setdefault(plan.key(host, address), (address, host, plan.front_for(address)))
     verdicts = _probe_all(units, probe)
     # Есть ли интернет, спрашивается, только когда не ответил вообще никто: отдельная проверка
     # связи стоит секунды, а хоть один ответ (даже «соединился, но молчит») и так всё доказывает.
@@ -295,7 +303,7 @@ def check_selection(
         for address in extra:
             key = plan.key(host, address)
             if key not in verdicts:
-                found_units.setdefault(key, (address, host, plan.front))
+                found_units.setdefault(key, (address, host, plan.front_for(address)))
     verdicts.update(_probe_all(found_units, probe))
 
     remembered = {
@@ -321,6 +329,8 @@ def check_selection(
             ranked: list[tuple[str, int]] = []
             score: dict[str, tuple[int, float]] = {}
             doomed: list[str] = []
+            unwritten: list[str] = []
+            doubted: list[str] = []
             for address in addresses:
                 probed = verdicts.get(plan.key(host, address))
                 verdict = probed.verdict if probed is not None else None
@@ -334,7 +344,7 @@ def check_selection(
                         doomed.append(address)
                     elif full:
                         # Первая неудача в фоновой проверке: запомнить и перепроверить в следующий раз.
-                        suspects_after.add(address)
+                        doubted.append(address)
                 else:
                     # Проба ничего не доказала — или адрес не проверялся вовсе (IPv6 без IPv6, не посредник).
                     ranked.append((address, _RANK_UNSURE))
@@ -348,10 +358,32 @@ def check_selection(
                     proven.append(address)
                     score[address] = _score(probed)
             ranked.extend((address, _RANK_ALIVE) for address in sorted(proven, key=score.__getitem__))
+            if full:
+                # Адрес IPv4 считается мёртвым, только когда рядом отвечает другой IPv4. Не ответил ни
+                # один — значит, слепа проба (ей мешает обход, антивирус, сбой связи), а не умерли все
+                # адреса сразу. Иначе имя оставалось с одними IPv6: Windows тогда отдаёт программам
+                # только их и про IPv4 у DNS уже не спрашивает (отчёт владельца 2026-10-14).
+                if not any(rank == _RANK_ALIVE and not _is_v6(address) for address, rank in ranked):
+                    blind = [address for address, _rank in ranked if not _is_v6(address)]
+                    doomed = [address for address in doomed if address not in blind]
+                    doubted = [address for address in doubted if address not in blind]
+                if ipv6 and any(not _is_v6(address) for address, _rank in ranked):
+                    # IPv6 — добавка к IPv4, а не замена: в hosts идёт только адрес, по которому сайт
+                    # сейчас отвечает без потерь. Остальные просто не пишутся — и проверяются снова
+                    # в следующий раз.
+                    unwritten = [
+                        address
+                        for address, rank in ranked
+                        if _is_v6(address)
+                        and address not in doomed
+                        and not (rank == _RANK_ALIVE and score[address][0] < LOSS_SWITCH)
+                    ]
+            suspects_after.update(doubted)
             # Имя не остаётся без адреса, которым этот компьютер может пользоваться.
             usable = [address for address, _rank in ranked if address not in doomed and (ipv6 or not _is_v6(address))]
             if not usable:
                 doomed = []
+            ranked = [(address, rank) for address, rank in ranked if address not in unwritten]
             before_rows = [address for row_host, address in remembered.get((plan.service_id, plan.profile_id), ()) if row_host == host]
             ordered = _order(
                 [(address, rank) for address, rank in ranked if address not in doomed],

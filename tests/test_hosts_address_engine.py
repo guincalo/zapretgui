@@ -129,11 +129,12 @@ class EngineTests(unittest.TestCase):
 
         overlay, report, _asked = _check(YOUTUBE, {"YouTube": HOSTS_PROFILE_ID}, verdicts)
 
-        # Сервис не остаётся совсем без адреса: как мёртвый не убран ни один, и об этом сказано.
+        # Сервис не остаётся совсем без адреса: IPv4 как мёртвый не убран ни один, и об этом сказано.
         self.assertEqual(overlay["services"]["hosts.youtube"][HOSTS_PROFILE_ID][-1], ["youtube.com", "1.1.1.1"])
         self.assertIn(["www.youtube.com", "1.1.1.1"], overlay["services"]["hosts.youtube"][HOSTS_PROFILE_ID])
         self.assertEqual(report.silent, ("YouTube",))
-        self.assertEqual(report.dropped, {})
+        # IPv6 — добавка: без ответа он в hosts не идёт, даже когда молчат все.
+        self.assertEqual(report.dropped, {"YouTube": ("2001:db8::1",)})
 
     def test_fresh_addresses_from_encrypted_dns_are_taken_only_when_they_pass_the_probe(self) -> None:
         verdicts = {"1.1.1.1": Probe(DEAD), "1.1.1.2": Probe(DEAD), "1.1.1.3": Probe(DEAD), "9.9.9.1": Probe(ALIVE, 20.0), "9.9.9.2": Probe(UNKNOWN)}
@@ -550,6 +551,48 @@ class EngineTests(unittest.TestCase):
         moved, report, _asked = _check(YOUTUBE_EVEN, {"YouTube": HOSTS_PROFILE_ID}, closer, ipv6=False, previous=first)
         self.assertEqual(_rows(moved)[:2], [("www.youtube.com", "1.1.1.2"), ("www.youtube.com", "1.1.1.1")])
         self.assertTrue(report.changed)
+
+    def test_name_never_loses_every_ipv4_even_when_only_ipv6_answers(self) -> None:
+        """Отчёт владельца 2026-10-14: Windows отдавала программам для www.youtube.com два адреса IPv6
+        и ни одного IPv4 — в hosts остались одни IPv6. Если у имени в hosts только IPv6, про IPv4
+        Windows у DNS уже не спрашивает (проверено на стенде), и сайт не открывается вовсе."""
+        only_v6 = {"1.1.1.1": Probe(DEAD), "1.1.1.2": Probe(DEAD), "1.1.1.3": Probe(DEAD), "2001:db8::1": Probe(ALIVE, 20.0)}
+
+        overlay, report, _asked = _check(YOUTUBE, {"YouTube": HOSTS_PROFILE_ID}, only_v6, ipv6=True, strict=True)
+
+        rows = _rows(overlay)
+        # IPv4 стоят первыми и никуда не делись: не ответил ни один — значит, слепа проба.
+        self.assertEqual(rows[:2], [("www.youtube.com", "1.1.1.1"), ("www.youtube.com", "1.1.1.2")])
+        self.assertIn(("www.youtube.com", "2001:db8::1"), rows)
+        self.assertEqual(report.dropped, {})
+        # И при повторной неудаче в фоне — тоже: подозрение на них не копится.
+        again, report, _asked = _check(YOUTUBE, {"YouTube": HOSTS_PROFILE_ID}, only_v6, ipv6=True, strict=False, previous=overlay)
+        self.assertEqual(again["suspects"], [])
+        self.assertEqual(_rows(again)[:2], rows[:2])
+        self.assertEqual(report.dropped, {})
+
+    def test_ipv6_goes_to_hosts_only_when_the_site_itself_answers_over_it(self) -> None:
+        """Строка IPv6 уводит на себя все программы (Windows ставит IPv6 первым), поэтому доказательство
+        строже, чем у IPv4: проба идёт настоящим именем сайта, а не нейтральным, и без потерь."""
+        with patch.dict(engine.PASSPORTS, {"hosts.youtube": engine.Passport(front="www.google.com", fresh=True)}):
+            verdicts = {"1.1.1.1": Probe(ALIVE, 10.0), "2001:db8::1": Probe(ALIVE, 20.0)}
+            _overlay, _report, asked = _check(YOUTUBE, {"YouTube": HOSTS_PROFILE_ID}, verdicts, ipv6=True)
+            fronts = {address: front for address, _host, front in asked}
+            self.assertEqual(fronts["1.1.1.1"], "www.google.com")
+            self.assertEqual(fronts["2001:db8::1"], "")
+
+        # Неясный ответ, первая неудача в фоне, потери — во всех случаях IPv6 в hosts не пишется.
+        for verdict in (Probe(UNKNOWN), Probe(DEAD), Probe(ALIVE, 20.0, connect_ms=20.0, lost=2, samples=6)):
+            with self.subTest(verdict=verdict):
+                overlay, _report, _asked = _check(
+                    YOUTUBE, {"YouTube": HOSTS_PROFILE_ID}, {"1.1.1.1": Probe(ALIVE, 10.0), "2001:db8::1": verdict}, ipv6=True, strict=False
+                )
+                self.assertNotIn(("www.youtube.com", "2001:db8::1"), _rows(overlay))
+        # А ответивший без потерь — пишется, после IPv4.
+        overlay, _report, _asked = _check(
+            YOUTUBE, {"YouTube": HOSTS_PROFILE_ID}, {"1.1.1.1": Probe(ALIVE, 10.0), "2001:db8::1": Probe(ALIVE, 20.0)}, ipv6=True
+        )
+        self.assertEqual(_rows(overlay)[-2], ("www.youtube.com", "2001:db8::1"))
 
     def test_ipv6_rows_are_written_only_when_ipv6_really_answers(self) -> None:
         """Вопрос владельца «почему не IPv6»: у адаптера адрес есть, а связи по IPv6 нет."""
