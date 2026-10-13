@@ -84,8 +84,24 @@ STOP_OTHER = "other"
 # Шаги для панели хода подбора.
 STEP_NETWORK = "network"
 STEP_BASELINE = "baseline"
+STEP_NAMES = "names"
 STEP_CONTROL = "control"
 STEP_STRATEGIES = "strategies"
+
+
+def _remembered_variants(candidates: list[Candidate], confirmed: Sequence[str]) -> list[Candidate]:
+    """Подтверждённые варианты «стратегия · имя» из истории: в каталоге их нет, без этого их забыл бы порядок."""
+    from blockcheck.strategy_search.sni_discovery import base_of, with_allowed_name
+
+    by_id = {candidate.strategy_id: candidate for candidate in candidates}
+    result: list[Candidate] = []
+    for strategy_id in confirmed:
+        base, name = base_of(strategy_id)
+        if name and base in by_id:
+            variant = with_allowed_name(by_id[base], name)
+            if variant is not None and variant.strategy_id == strategy_id:
+                result.append(variant)
+    return result
 
 
 class ScanFatal(Exception):
@@ -148,6 +164,7 @@ class SearchEnvironment(Protocol):
     def control_alive(self) -> bool: ...
     def resolve(self, host: str, port: int, *, udp: bool) -> tuple[list[str], str]: ...
     def probe_https(self, host: str, addresses: Sequence[str]) -> list[ProbeOutcome]: ...
+    def probe_hello(self, address: str, name: str | None) -> bool | None: ...
     def probe_udp(self, specs: Sequence[UdpProbeSpec]) -> list[tuple[UdpProbeSpec, ProbeOutcome]]: ...
     def tcp_port_open(self, address: str, port: int) -> bool: ...
     def cancel_probes(self) -> None: ...
@@ -231,6 +248,7 @@ class StrategySearch:
         key = self._history_key()
         try:
             batch, total, ordered = self._select_batch(key)
+            from_catalog = 0
             report.total_available = total
             stop_after = stop_after_for_mode(self._request.mode)
             self._events.log(
@@ -259,24 +277,36 @@ class StrategySearch:
                 return self._finish(report, working, failed, started, cancelled=self.cancelled)
             if self._target.forced:
                 self._stage(STEP_BASELINE, "skipped", "Открывается и без обхода — проверяем для сведения")
+                self._stage(STEP_NAMES, "skipped", "Не нужно")
                 self._stage(STEP_CONTROL, "skipped", "Контрольный запуск не нужен")
             else:
                 self._stage(STEP_BASELINE, "done", "Без обхода закрыто — есть что подбирать")
+                extra = self._find_allowed_names(ordered, batch)
+                if extra:
+                    batch = [*extra, *batch]
+                    from_catalog -= len(extra)
                 if not self._pass_control(report):
                     return self._finish(report, working, failed, started, cancelled=self.cancelled)
 
             queue: deque[tuple[Candidate, bool]] = deque((candidate, False) for candidate in batch)
+            # Сколько стратегий из общего списка уже в пачке: варианты с именами не в счёт.
+            from_catalog += len(batch)
             index = 0
             while not self.cancelled:
                 if not queue:
                     # Пачка кончилась, а надёжной нет — берём следующую, пока есть куда.
-                    more = [] if working or self._target.forced else continuation(ordered, self._request.mode, len(batch))
+                    more = (
+                        []
+                        if working or self._target.forced
+                        else continuation(ordered, self._request.mode, from_catalog)
+                    )
                     if not more:
                         break
                     self._events.log(
                         f"Из {len(batch)} проверенных ни одна не подошла — проверяем следующие {len(more)}"
                     )
                     batch = [*batch, *more]
+                    from_catalog += len(more)
                     queue.extend((candidate, False) for candidate in more)
                 candidate, rechecked = queue.popleft()
                 self._events.strategy_started(candidate.name, index, len(batch), candidate.args)
@@ -363,6 +393,7 @@ class StrategySearch:
     def _select_batch(self, key: str) -> tuple[list[Candidate], int]:
         candidates = self._env.load_candidates(self._protocol)
         history = self._env.load_history(key)
+        candidates = [*candidates, *_remembered_variants(candidates, getattr(history, "confirmed", ()) or ())]
         # Привычки фильтра BlockCheck выясняет на TLS поверх TCP — к звонкам и играм они не относятся.
         habit = str(getattr(history, "habit", "") or "") if self._protocol == PROTOCOL_TCP_HTTPS else ""
         ordered = order_candidates(
@@ -490,6 +521,53 @@ class StrategySearch:
             self._events.log("Пользователь решил проверять всё равно: результаты — только для сведения")
             return True
         return False
+
+    def _find_allowed_names(self, ordered: list[Candidate], batch: list[Candidate]) -> list[Candidate]:
+        """Какие имена пропускает фильтр; в белом списке — варианты стратегий с этими именами в начало."""
+        from blockcheck.strategy_search import sni_discovery
+
+        if self._protocol != PROTOCOL_TCP_HTTPS or not self._target.addresses:
+            self._stage(STEP_NAMES, "skipped", "Только для сайтов")
+            return []
+        self._events.phase("Какие имена пропускает фильтр")
+        self._stage(STEP_NAMES, "running", "Пробуем чужие имена к тому же адресу")
+        address = self._target.addresses[0]
+        started = self._env.monotonic()
+        search = sni_discovery.discover(
+            lambda name: self._env.probe_hello(address, name),
+            self._target.host,
+            sleep=self._env.sleep,
+            cancelled=lambda: self.cancelled,
+        )
+        seconds = self._env.monotonic() - started
+        if search.kind == sni_discovery.FILTER_BLACK:
+            self._events.log(
+                f"  Имя цели рвётся, постороннее {sni_discovery.NEUTRAL_NAME} проходит — режут только это имя"
+            )
+            self._stage(STEP_NAMES, "done", "Режут только имя цели — подходят обычные стратегии")
+            return []
+        if search.kind != sni_discovery.FILTER_WHITE:
+            self._stage(STEP_NAMES, "skipped", "Сравнить не с чем")
+            return []
+        if search.frozen:
+            self._events.log("  Адрес перестал отвечать на частые запросы — поиск имён остановлен")
+        if search.unstable:
+            self._events.log("  Имя цели то рвётся, то проходит — найденные имена не в счёт")
+        if not search.names:
+            self._events.log(f"  Белый список имён: ни одно из {search.tried} проверенных не прошло ({seconds:.0f} с)")
+            self._stage(STEP_NAMES, "done", "Белый список: разрешённых имён не нашли")
+            return []
+        names = ", ".join(search.names)
+        self._events.log(
+            f"  Фильтр пропускает к {address} только разрешённые имена: {names} "
+            f"(проверено {search.tried}, {seconds:.0f} с)"
+        )
+        known = {candidate.strategy_id for candidate in batch}
+        extra = [item for item in sni_discovery.variants(ordered, search.names) if item.strategy_id not in known]
+        self._stage(STEP_NAMES, "done", f"Белый список: проходят {names}")
+        if extra:
+            self._events.log(f"  Сначала проверим {len(extra)} стратегий с этими именами в подставном пакете")
+        return extra
 
     def _pass_control(self, report: StrategyScanReport) -> bool:
         """Запуск winws2 без приёмов обхода: цель должна остаться закрытой."""

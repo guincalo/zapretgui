@@ -17,6 +17,9 @@ from blockcheck.strategy_search.engine import STOP_WINWS, ScanFatal
 from blockcheck.strategy_search.ordering import Candidate
 from blockcheck.strategy_search.winws_session import WinwsSession
 
+# Срок одного приветствия при поиске пропускаемых имён: короче обычного, их до трёх десятков.
+HELLO_DISCOVERY_TIMEOUT_S = 2.5
+
 logger = logging.getLogger(__name__)
 
 # Временный конфиг пробы лежит в корне программы, рядом с exe.
@@ -261,6 +264,15 @@ class RealEnvironment:
 
     def probe_https(self, host: str, addresses: Sequence[str]):
         return probes.probe_https_addresses(host, addresses, cancel=self._cancel)
+
+    def probe_hello(self, address: str, name: str | None) -> bool | None:
+        """Начало шифрования к адресу с именем ``name``: True — прошло, False — оборвали, None — нет соединения."""
+        from diagnostics.block_cause import HELLO_CANCELLED, HELLO_CONNECT, tls_hello
+
+        result = tls_hello(address, name, timeout=HELLO_DISCOVERY_TIMEOUT_S, cancel=self._cancel)
+        if result.kind in (HELLO_CONNECT, HELLO_CANCELLED):
+            return None
+        return bool(result.answered)
 
     def probe_udp(self, specs):
         return probes.probe_udp_pool(specs)

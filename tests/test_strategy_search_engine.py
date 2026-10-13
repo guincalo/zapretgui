@@ -75,6 +75,9 @@ class FakeEnv:
     control: list | None = None  # последовательность ответов control_alive
     port80_open: bool = False
     control_default: bool = True
+    # Приветствие с именем до запуска winws2: (адрес, имя) -> True / False / None.
+    # По умолчанию обычный фильтр: постороннее имя проходит, режут только цель.
+    hello: object = None
 
     def __post_init__(self):
         self.running = None
@@ -88,6 +91,7 @@ class FakeEnv:
         self.recovered = 0
         self.history_saved = None
         self.slept = 0.0
+        self.hellos: list = []
         self.clock = 0.0
         self.control = list(self.control or [])
 
@@ -143,6 +147,12 @@ class FakeEnv:
     def probe_https(self, host, addresses):
         outcome = self._answer()
         return [outcome for _address in addresses]
+
+    def probe_hello(self, address, name):
+        self.hellos.append((address, name))
+        if self.hello is not None:
+            return self.hello(address, name)
+        return name in (None, "example.com")
 
     def probe_udp(self, specs):
         return [(spec, self.network(self.running, spec)) for spec in specs]
@@ -417,13 +427,50 @@ class StrategyVerdictTests(unittest.TestCase):
         self.assertEqual(events.results[0].verdict, rules.VERDICT_FAILED)
 
 
+class AllowedNamesTests(unittest.TestCase):
+    """Белый список имён: подбор находит разрешённое имя и сначала пробует стратегии с ним."""
+
+    def test_whitelisted_name_goes_into_fake_packet_first(self) -> None:
+        plain = cand("a")
+        with_tls_mod = Candidate("b", "b", "--lua-desync=fake:id=b:tls_mod=rnd,dupsid")
+        env = FakeEnv(
+            # Работает только подставной пакет с разрешённым именем.
+            network=lambda running, _n: OK if running and "sni=ya.ru" in running else RESET,
+            candidates=[plain, with_tls_mod],
+            hello=lambda _address, name: name == "ya.ru",
+        )
+        report, events = run(env)
+
+        self.assertEqual([item.strategy_id for item in report.working_strategies], ["b@sni=ya.ru"])
+        self.assertIn("--lua-desync=fake:id=b:tls_mod=rnd,dupsid,sni=ya.ru", events.started_args[0])
+        self.assertTrue(any("только разрешённые имена: ya.ru" in line for line in events.logs))
+        self.assertIn("b@sni=ya.ru", env.history_saved[1])
+        # До запуска winws2: цель, постороннее имя и «без имени», потом перебор.
+        self.assertEqual([name for _address, name in env.hellos[:3]], ["discord.com", "example.com", None])
+
+    def test_ordinary_filter_needs_no_search(self) -> None:
+        env = FakeEnv(network=blocked_unless("good"), candidates=[cand("good")])
+        run(env)
+
+        self.assertEqual([name for _address, name in env.hellos], ["discord.com", "example.com"])
+
+    def test_remembered_variant_is_found_again_from_history(self) -> None:
+        from blockcheck.strategy_search.engine import _remembered_variants
+
+        base = Candidate("b", "b", "--lua-desync=fake:id=b:tls_mod=rnd,rndsni,dupsid")
+        found = _remembered_variants([base], ["b@sni=vk.com", "gone@sni=vk.com", "b"])
+
+        self.assertEqual([item.strategy_id for item in found], ["b@sni=vk.com"])
+        self.assertIn("tls_mod=rnd,sni=vk.com,dupsid", found[0].args)
+
+
 class StageEventTests(unittest.TestCase):
     def test_successful_scan_walks_all_steps(self) -> None:
         env = FakeEnv(network=blocked_unless("good"), candidates=[cand("good")])
         _report, events = run(env)
 
         done = [step for step, status in events.stages if status == "done"]
-        self.assertEqual(done, ["network", "baseline", "control", "strategies"])
+        self.assertEqual(done, ["network", "baseline", "names", "control", "strategies"])
         self.assertIn("--lua-desync=fake:id=good", events.started_args)
 
     def test_stop_marks_running_step_failed_and_reports_kind(self) -> None:

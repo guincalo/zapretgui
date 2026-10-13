@@ -321,6 +321,7 @@ class ChoiceRadios(_ChoiceModel):
 SCAN_STEPS = (
     ("network", "Проверяем, есть ли интернет"),
     ("baseline", "Пробуем открыть без обхода"),
+    ("names", "Какие имена пропускает фильтр"),
     ("control", "Контрольный запуск winws2"),
     ("strategies", "Перебираем стратегии"),
 )
