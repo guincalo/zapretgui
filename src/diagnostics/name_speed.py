@@ -32,7 +32,9 @@ from utils.socket_cancel import SocketCancel, close_quietly
 
 __all__ = [
     "MAX_NAMES",
+    "CUT",
     "PATH",
+    "RUN_CUT",
     "RUN_OK",
     "SERVER_HOST",
     "SLOW",
@@ -68,9 +70,13 @@ RUN_OK = "ok"
 RUN_CONNECT = "connect"  # не соединились или не прошло шифрование
 RUN_REFUSED = "refused"  # сервер с этим именем файл не отдал
 RUN_CANCELLED = "cancelled"
+# Поток пошёл и оборвался раньше времени: сброс соединения или закрытие, хотя файл намного больше.
+RUN_CUT = "cut"
 
 FINE = "ok"
 SLOW = "slow"
+# Поток с этим именем обрывают (дважды подряд), а с обычным именем тот же файл идёт.
+CUT = "cut"
 UNKNOWN = "unknown"
 
 
@@ -129,6 +135,8 @@ def download(
     wrapped: ssl.SSLSocket | None = None
     received = 0
     first_at = 0.0
+    # Поток оборвался сам: не мы остановили загрузку и не вышло время.
+    broken = False
     try:
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
         context.check_hostname = False
@@ -148,6 +156,8 @@ def download(
             wrapped.settimeout(CONNECT_TIMEOUT_S if not first_at else max(0.05, stop_at - time.monotonic()))
             chunk = wrapped.recv(65536)
             if not chunk:
+                # Файл намного больше нужного: закрытие до срока — это обрыв, а не конец файла.
+                broken = bool(first_at)
                 break
             if not first_at:
                 first_at = time.monotonic()
@@ -166,6 +176,8 @@ def download(
             return NameRun(name, RUN_CANCELLED)
         if not first_at:
             return NameRun(name, RUN_CONNECT)
+        # Сброс посреди потока. Раньше он читался как удачная быстрая загрузка: байты за короткое время.
+        broken = True
     finally:
         for item in (wrapped, sock):
             if item is not None:
@@ -173,7 +185,10 @@ def download(
                 close_quietly(item)
     if token.cancelled:
         return NameRun(name, RUN_CANCELLED)
-    return NameRun(name, RUN_OK, received, max(time.monotonic() - first_at, 0.001))
+    seconds_spent = max(time.monotonic() - first_at, 0.001)
+    if broken and received < enough:
+        return NameRun(name, RUN_CUT, received, seconds_spent)
+    return NameRun(name, RUN_OK, received, seconds_spent)
 
 
 def _slow(run: NameRun, control_kbps: float) -> bool:
@@ -206,8 +221,8 @@ def collect(
         if _stopped():
             break
         run = fetch(name)
-        if _slow(run, max(known)) and not _stopped():
-            # Одному медленному замеру не верим.
+        if (_slow(run, max(known)) or run.kind == RUN_CUT) and not _stopped():
+            # Одному медленному или оборванному замеру не верим.
             runs.append((run, fetch(name)))
             again = True
         else:
@@ -241,10 +256,27 @@ def judge(facts: NameFacts) -> tuple[float | None, tuple[NameVerdict, ...]]:
         measured = [run.kbps for run in runs if run.kbps is not None]
         if any(run.kind == RUN_CANCELLED for run in runs):
             continue
+        if len(runs) > 1 and all(run.kind == RUN_CUT for run in runs):
+            # Оборвалось дважды подряд. Контроль в конце не прошёл — рвалась сама линия, имя ни при чём.
+            got = max(run.received for run in runs) // 1024
+            if sagged:
+                verdicts.append(NameVerdict(name, UNKNOWN, "поток обрывался, но во время замера просела сама линия"))
+            else:
+                verdicts.append(
+                    NameVerdict(
+                        name,
+                        CUT,
+                        f"поток дважды оборвался (самое большее после {got} КБ), а с обычным именем тот же файл идёт — "
+                        "соединения с этим именем обрывают",
+                    )
+                )
+            continue
         if not measured:
             reason = (
                 "сервер с этим именем файл не отдал"
                 if runs[0].kind == RUN_REFUSED
+                else "поток оборвался, повторить замер не удалось"
+                if runs[0].kind == RUN_CUT
                 else "соединение с этим именем к постороннему серверу не прошло"
             )
             verdicts.append(NameVerdict(name, UNKNOWN, f"скорость не измерить: {reason}"))

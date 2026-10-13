@@ -886,15 +886,39 @@ def check_site(host: str, *, should_stop: ShouldStop | None = None, emit: Emit |
         collected = _run_probes(run, services, full=True, emit=emit or (lambda _line: None))
         verdicts = {key: _service_verdict(item, collected[key], zapret_running=zapret_running) for key, item in services.items()}
         report = report_text.services_report(services, verdicts, collected)
+        # Сайт может открываться, а поток к нему — придерживаться или обрываться по имени (так «крутит
+        # загрузку» видео). Соединение этого не покажет: нужен замер потока с именем сайта и видеосервера.
+        names = sections.check_name_speed(run, collected, services, emit or (lambda _line: None))
         registry_index = registry_wait(REGISTRY_WAIT_S, run.probe_cancel)
         if run.stopped():
             raise _Stopped()
         report = registry.annotate(report, registry_index)
-        return report[0] if report else None
+        site = report[0] if report else None
+        if site is not None and names:
+            _add_name_speed(site, names, zapret_running=zapret_running)
+        return site
     except _Stopped:
         return None
     finally:
         run.close()
+
+
+def _add_name_speed(site: dict, names: dict, *, zapret_running: bool | None) -> None:
+    """Дописывает к записи сайта замер потока по имени; замедление или обрыв меняют итог."""
+    site["names"] = names
+    if names.get("level") != "warn":
+        return
+    hurt = [str(item.get("host") or "") for item in names.get("items") or () if item.get("state") == "warn"]
+    if site.get("level") == "ok":
+        # Иначе итогом осталось бы «открывается», хотя пользоваться сайтом нельзя.
+        site["level"] = "warn"
+        site["status"] = "Поток режут"
+        site["headline"] = f"{site.get('label', '')} открывается, но поток данных режут по имени: {', '.join(hurt)}"
+    for problem in sections.speed_problems({"names": names}, zapret_running=zapret_running):
+        advice = problem.get("advice") or ()
+        for item in [advice] if isinstance(advice, str) else advice:
+            if item and item not in site.setdefault("advice", []):
+                site["advice"].append(str(item))
 
 
 # Один сайт проверяется быстрее целого набора: дольше ждать незачем.

@@ -388,6 +388,9 @@ def _site_card(service: dict) -> Card:
         detail.append(Section("Что делать", tuple(Line(INFO, item) for item in advice)))
     if service.get("dns_note"):
         detail.append(Section("DNS", (Line(WARN, str(service["dns_note"])),)))
+    if service.get("names"):
+        # Замер потока по имени сайта и видеосервера: есть только у проверки одного сайта («Проверка домена»).
+        detail.extend(_name_speed_sections(service["names"]))
     if kind and kind_info(kind).about:
         detail.append(Section(kind_info(kind).title, (Line(INFO, kind_info(kind).about),)))
 

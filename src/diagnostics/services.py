@@ -159,6 +159,8 @@ SERVICES: dict[str, Service] = {
         (
             Target(YOUTUBE_HOST, "сайт", read_body=True, main=True),
             Target("i.ytimg.com", "превью видео", path="/generate_204"),
+            # Через него плеер спрашивает, что и откуда играть: закрыт он — страница есть, а видео крутит загрузку.
+            Target("youtubei.googleapis.com", "служба плеера"),
             Target(
                 GOOGLEVIDEO_FALLBACK_HOST,
                 "видео",

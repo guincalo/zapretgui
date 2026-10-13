@@ -249,6 +249,8 @@ class _Net:
         self.network: dict = {"external_ip": "", "provider": "", "lines": []}
         self.telegram: tuple = ()
         self.speed: dict | None = None
+        # Что «показал» замер потока по имени в проверке одного сайта: по умолчанию замера нет.
+        self.names: dict | None = None
         self.crowd: dict | None = None
         self.crowd_tools: list | None = None
         # TLS 1.2 / TLS 1.3 / HTTP по отдельности: по умолчанию проверку будто сняли.
@@ -327,6 +329,8 @@ class _Net:
             # «Ваша сеть» и дата-центры Telegram ходят в сеть сами: в сценариях движка их нет.
             patch.object(sections, "check_network", side_effect=lambda _run, _tools: self.network),
             patch.object(sections, "check_speed", side_effect=lambda _run, _emit, *_sites: self.speed),
+            # Замер потока по имени в проверке одного сайта качает файл с постороннего сервера.
+            patch.object(sections, "check_name_speed", side_effect=lambda *_a, **_k: self.names),
             # Пачка одновременных соединений — настоящие приветствия в сеть.
             patch.object(sections, "check_crowd", side_effect=self._crowd),
             patch.object(engine.telegram_check, "check_telegram", side_effect=lambda *_a, **_k: self.telegram),
@@ -874,12 +878,16 @@ class SiteWordsComeFromTheReportTests(unittest.TestCase):
                 ("youtube.com", "сайт", True),
                 ("www.youtube.com", "основной адрес", False),
                 ("i.ytimg.com", "превью видео", False),
+                ("youtubei.googleapis.com", "служба плеера", False),
                 (engine.GOOGLEVIDEO_FALLBACK_HOST, "видео", False),
             ],
         )
         self.assertTrue(site_service("m.youtube.com").targets[-1].discover_googlevideo)
         self.assertEqual([target.host for target in related_targets("gateway.discord.gg")], ["discord.com", "cdn.discordapp.com"])
-        self.assertEqual([target.host for target in related_targets("www.youtube.com")], ["i.ytimg.com", engine.GOOGLEVIDEO_FALLBACK_HOST])
+        self.assertEqual(
+            [target.host for target in related_targets("www.youtube.com")],
+            ["i.ytimg.com", "youtubei.googleapis.com", engine.GOOGLEVIDEO_FALLBACK_HOST],
+        )
         # Чужой сайт и сайт из одного адреса остаются сами по себе.
         self.assertEqual(related_targets("example.org"), ())
         self.assertEqual(related_targets("notyoutube.com"), ())
@@ -888,7 +896,31 @@ class SiteWordsComeFromTheReportTests(unittest.TestCase):
         net = _Net()
         site = net.run(engine.check_site, "youtube.com")
         self.assertEqual([target["host"] for target in site["targets"]][:3], ["youtube.com", "www.youtube.com", "i.ytimg.com"])
-        self.assertEqual(len(site["targets"]), 4)
+        self.assertEqual(len(site["targets"]), 5)
+
+    def test_single_site_check_measures_the_stream_by_name_and_does_not_call_a_cut_stream_open(self) -> None:
+        # Соединение есть, а поток с именем сайта обрывают: «открывается» было бы неправдой.
+        names = {
+            "level": "warn",
+            "headline": "Обрывают поток по имени сайта: example.org",
+            "server": "mirror.yandex.ru",
+            "control": "90 Мбит/с",
+            "items": [{"name": "example.org", "host": "example.org", "kbps": None, "state": "warn", "text": "поток дважды оборвался"}],
+        }
+        net = _Net()
+        net.names = names
+        site = net.run(engine.check_site, "example.org")
+
+        self.assertEqual(site["names"], names)
+        self.assertEqual((site["level"], site["status"]), ("warn", "Поток режут"))
+        self.assertIn("открывается, но поток данных режут по имени: example.org", site["headline"])
+        self.assertTrue(any("Подбор стратегии" in item or "Запустите Zapret" in item for item in site["advice"]))
+
+        calm = dict(names, level="ok", items=[dict(names["items"][0], state="ok")])
+        net.names = calm
+        site = net.run(engine.check_site, "example.org")
+        self.assertEqual((site["level"], site["headline"]), ("ok", "example.org открывается"))
+        self.assertEqual(site["names"], calm)
 
     def test_control_and_registry_tags(self) -> None:
         net = _Net()

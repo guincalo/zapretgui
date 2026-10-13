@@ -643,17 +643,22 @@ def _name_speed(run: Run, collected: dict[str, list[Probe]], services, emit: Emi
     if control is None or not verdicts:
         return None
     slow = [labels[item.name] for item in verdicts if item.code == name_speed.SLOW]
-    headline = (
-        f"Замедляют по имени сайта: {', '.join(slow)}"
-        if slow
-        else "Замедления по имени сайта не видно: с именами сайтов скорость та же, что с обычным"
-    )
+    cut = [labels[item.name] for item in verdicts if item.code == name_speed.CUT]
+    if cut:
+        headline = f"Обрывают поток по имени сайта: {', '.join(dict.fromkeys(cut))}"
+        if slow:
+            headline += f"; замедляют: {', '.join(dict.fromkeys(slow))}"
+    elif slow:
+        headline = f"Замедляют по имени сайта: {', '.join(slow)}"
+    else:
+        headline = "Замедления по имени сайта не видно: с именами сайтов скорость та же, что с обычным"
+    slow = slow + cut
     emit(f"ℹ️ Замедление по имени: контроль {name_speed.SERVER_HOST} — {name_speed.speed_text(control)}")
     for item in verdicts:
-        icon = {name_speed.SLOW: "⚠️", name_speed.FINE: "✅"}.get(item.code, "❔")
+        icon = {name_speed.SLOW: "⚠️", name_speed.CUT: "⚠️", name_speed.FINE: "✅"}.get(item.code, "❔")
         emit(f"{icon} {labels[item.name]} ({item.name}): {item.text}")
     emit(f"{'⚠️' if slow else '✅'} {headline}")
-    states = {name_speed.SLOW: "warn", name_speed.FINE: "ok"}
+    states = {name_speed.SLOW: "warn", name_speed.CUT: "warn", name_speed.FINE: "ok"}
     return {
         "level": "warn" if slow else "ok",
         "headline": headline,
@@ -670,6 +675,11 @@ def _name_speed(run: Run, collected: dict[str, list[Probe]], services, emit: Emi
             for item in verdicts
         ],
     }
+
+
+def check_name_speed(run: Run, collected: dict[str, list[Probe]], services, emit: Emit) -> dict | None:
+    """Замер потока по имени для проверки одного сайта («Проверка домена»): сам сайт и его видеосервер."""
+    return _name_speed(run, collected, services, emit)
 
 
 def speed_problems(speed: dict | None, *, zapret_running: bool | None) -> list[dict]:

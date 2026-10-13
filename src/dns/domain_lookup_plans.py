@@ -537,6 +537,11 @@ def build_site_lines(report: DomainLookupReport) -> list[str]:
         registry = target.get("registry") or {}
         if registry.get("listed"):
             lines.append("    Реестр РКН: сайт в реестре")
+    names = site.get("names") or {}
+    if names.get("items"):
+        lines.append(f"Поток по имени: {names.get('headline', '')}")
+        lines.append(f"    контроль {names.get('server', '')} под своим именем: {names.get('control', '')}")
+        lines += [f"    {item.get('host', '')}: {item.get('text', '')}" for item in names["items"]]
     return [line for line in lines if line or line == ""]
 
 

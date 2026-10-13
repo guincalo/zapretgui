@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
 
 from diagnostics import name_speed as ns
 from diagnostics import sections
@@ -113,6 +114,103 @@ class NameSpeedTests(unittest.TestCase):
 
         self.assertAlmostEqual(crawl.kbps, 9_000 / 1024 / ns.SAMPLE_SECONDS)
         self.assertIsNone(early.kbps)
+
+
+class CutStreamTests(unittest.TestCase):
+    """Поток, который пошёл и оборвался, — не «быстрая загрузка»."""
+
+    CONTROL = ns.NameRun(ns.SERVER_HOST, ns.RUN_OK, ns.ENOUGH_BYTES, 0.2)
+
+    def _fetch(self, by_name):
+        calls: list[str] = []
+
+        def fetch(name: str) -> ns.NameRun:
+            calls.append(name)
+            if name == ns.SERVER_HOST:
+                return self.CONTROL
+            queue = by_name[name]
+            return queue.pop(0) if len(queue) > 1 else queue[0]
+
+        return fetch, calls
+
+    def test_stream_cut_twice_is_a_cut_by_name(self) -> None:
+        # Сброс после 24 КБ за 0,05 с раньше читался как «быстро»: байты за короткое время.
+        fetch, calls = self._fetch({"rr1.googlevideo.com": [ns.NameRun("rr1.googlevideo.com", ns.RUN_CUT, 24_000, 0.05)]})
+
+        _control, verdicts = ns.judge(ns.collect(["rr1.googlevideo.com"], fetch))
+
+        self.assertEqual(calls.count("rr1.googlevideo.com"), 2)
+        self.assertEqual(verdicts[0].code, ns.CUT)
+        self.assertIn("поток дважды оборвался (самое большее после 23 КБ)", verdicts[0].text)
+        self.assertIsNone(ns.NameRun("x", ns.RUN_CUT, 24_000, 0.05).kbps)
+
+    def test_single_cut_followed_by_a_full_stream_is_not_a_finding(self) -> None:
+        fine = ns.NameRun("a.example", ns.RUN_OK, ns.ENOUGH_BYTES, 0.2)
+        fetch, _calls = self._fetch({"a.example": [ns.NameRun("a.example", ns.RUN_CUT, 24_000, 0.05), fine]})
+
+        _control, verdicts = ns.judge(ns.collect(["a.example"], fetch))
+
+        self.assertEqual(verdicts[0].code, ns.FINE)
+
+    def test_cut_while_the_line_itself_fails_is_not_blamed_on_the_name(self) -> None:
+        cut = ns.NameRun("a.example", ns.RUN_CUT, 24_000, 0.05)
+        facts = ns.NameFacts((self.CONTROL,), ((cut, cut),), (ns.NameRun(ns.SERVER_HOST, ns.RUN_CONNECT),))
+
+        _control, verdicts = ns.judge(facts)
+
+        self.assertEqual(verdicts[0].code, ns.UNKNOWN)
+
+    def test_download_reports_a_reset_in_the_middle_as_a_cut(self) -> None:
+        import socket
+        import ssl
+        import subprocess
+        import tempfile
+        import threading
+        from pathlib import Path
+
+        if not __import__("shutil").which("openssl"):
+            self.skipTest("нет openssl для пробного сертификата")
+        with tempfile.TemporaryDirectory() as folder:
+            key, cert = Path(folder) / "k.pem", Path(folder) / "c.pem"
+            subprocess.run(
+                ["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", str(key), "-out", str(cert),
+                 "-days", "1", "-subj", "/CN=test"],
+                check=True, capture_output=True,
+            )
+            context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            context.load_cert_chain(str(cert), str(key))
+            listener = socket.socket()
+            listener.bind(("127.0.0.1", 0))
+            listener.listen(2)
+            port = listener.getsockname()[1]
+
+            def serve() -> None:
+                for _ in range(1):
+                    raw, _addr = listener.accept()
+                    try:
+                        tls = context.wrap_socket(raw, server_side=True)
+                        tls.recv(4096)
+                        tls.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 9000000\r\n\r\n" + b"x" * 30_000)
+                        # Жёсткий сброс посреди потока — так фильтр рвёт соединение после первых килобайт.
+                        raw.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, __import__("struct").pack("ii", 1, 0))
+                        raw.close()
+                    except OSError:
+                        pass
+
+            thread = threading.Thread(target=serve, daemon=True)
+            thread.start()
+            original = socket.socket.connect
+
+            def connect(sock, address):
+                return original(sock, (address[0], port))
+
+            with patch.object(socket.socket, "connect", connect):
+                run = ns.download("127.0.0.1", "rr1.googlevideo.com", seconds=2.0)
+            thread.join(2)
+            listener.close()
+
+        self.assertEqual(run.kind, ns.RUN_CUT)
+        self.assertGreater(run.received, 20_000)
 
 
 class NameChoiceTests(unittest.TestCase):
