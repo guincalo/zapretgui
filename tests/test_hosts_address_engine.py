@@ -322,6 +322,40 @@ class EngineTests(unittest.TestCase):
         self.assertIsNone(overlay)
         self.assertFalse(report.network)
 
+    def test_address_that_loses_packets_gives_way_to_a_steady_one(self) -> None:
+        """Жалоба владельца 2026-10-13: ping первого адреса YouTube — два ответа из четырёх,
+        «не самое лучшее он нашёл». Одно удачное соединение потерь не показывает."""
+        steady = {"1.1.1.1": Probe(ALIVE, 1.0, connect_ms=18.0), "1.1.1.2": Probe(ALIVE, 1.0, connect_ms=25.0)}
+        first, _report, _asked = _check(YOUTUBE_EVEN, {"YouTube": HOSTS_PROFILE_ID}, steady, ipv6=False)
+        self.assertEqual(_rows(first)[0], ("www.youtube.com", "1.1.1.1"))
+
+        # Одна потеря из шести замеров бывает и на здоровой линии — порядок прежний.
+        blip = {**steady, "1.1.1.1": Probe(ALIVE, 1.0, connect_ms=18.0, lost=1, samples=6)}
+        same, report, _asked = _check(YOUTUBE_EVEN, {"YouTube": HOSTS_PROFILE_ID}, blip, ipv6=False, previous=first)
+        self.assertFalse(report.changed)
+
+        # Половина замеров без ответа: первым становится адрес без потерь, хотя он и не быстрее.
+        lossy = {**steady, "1.1.1.1": Probe(ALIVE, 1.0, connect_ms=18.0, lost=3, samples=6)}
+        moved, report, _asked = _check(YOUTUBE_EVEN, {"YouTube": HOSTS_PROFILE_ID}, lossy, ipv6=False, previous=first)
+        self.assertEqual(_rows(moved)[:2], [("www.youtube.com", "1.1.1.2"), ("www.youtube.com", "1.1.1.1")])
+        self.assertTrue(report.changed)
+
+        # Быстрый адрес с потерями не вытесняет устойчивый.
+        fast_but_lossy = {"1.1.1.1": Probe(ALIVE, 1.0, connect_ms=5.0, lost=3, samples=6), "1.1.1.2": Probe(ALIVE, 1.0, connect_ms=60.0)}
+        kept, report, _asked = _check(YOUTUBE_EVEN, {"YouTube": HOSTS_PROFILE_ID}, fast_but_lossy, ipv6=False, previous=moved)
+        self.assertEqual(_rows(kept)[0], ("www.youtube.com", "1.1.1.2"))
+
+    def test_spare_address_is_a_steady_one_when_there_is_a_choice(self) -> None:
+        verdicts = {
+            "1.1.1.1": Probe(ALIVE, 1.0, connect_ms=20.0),
+            "1.1.1.2": Probe(ALIVE, 1.0, connect_ms=20.0, lost=4, samples=6),
+            "1.1.1.3": Probe(ALIVE, 1.0, connect_ms=22.0),
+        }
+
+        overlay, _report, _asked = _check(YOUTUBE_EVEN, {"YouTube": HOSTS_PROFILE_ID}, verdicts, ipv6=False)
+
+        self.assertEqual(_rows(overlay)[:2], [("www.youtube.com", "1.1.1.1"), ("www.youtube.com", "1.1.1.3")])
+
     def test_one_address_is_not_hit_by_all_names_at_once(self) -> None:
         import threading
         import time
@@ -713,6 +747,31 @@ class ProbeTests(unittest.TestCase):
 
         self.assertEqual((result.verdict, result.reason), (DEAD, "не отвечает"))
         self.assertEqual(len(tries), 2)
+
+    def test_living_address_is_measured_several_times_for_speed_and_losses(self) -> None:
+        outcomes = iter(["ok", "timeout", "ok", "timeout", "ok", "ok"])
+        # Время берётся перед каждым соединением и ещё раз — после удачного.
+        clock = iter([0.0, 0.030, 1.0, 2.0, 2.010, 3.0, 4.0, 4.020, 5.0, 5.016])
+
+        class _Sock:
+            def close(self):
+                pass
+
+        def connect(address, timeout_s):
+            outcome = next(outcomes)
+            return (_Sock() if outcome == "ok" else None), outcome
+
+        with (
+            patch.object(probe_module, "_connect", connect),
+            patch.object(probe_module.time, "perf_counter", lambda: next(clock)),
+            patch.object(probe_module.time, "sleep", lambda _s: None),
+        ):
+            middle, lost, samples = probe_module._quality("203.0.113.1", 18.0)
+
+        # Два соединения из шести без ответа; время — середина удачных замеров
+        # (18, 30, 10, 20 и 16 мс), потерянные в него не входят.
+        self.assertEqual((lost, samples), (2, 6))
+        self.assertEqual(middle, 18.0)
 
     def test_closed_port_is_dead_at_once(self) -> None:
         with patch.object(probe_module, "_connect", lambda address: (None, "refused")) as _connect:

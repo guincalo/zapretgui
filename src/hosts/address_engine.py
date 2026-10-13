@@ -19,9 +19,9 @@
 мёртвый адрес убирается. И здесь программа сама ищет адреса: при каждой
 проверке спрашивает шифрованный DNS (IPv4, а где есть IPv6 — и IPv6), пробует
 найденное той же пробой и складывает живое в копилку — запас, который
-проверяется вместе с каталогом и в следующий раз. Первым ставится самый
-быстрый по времени соединения; дальше он уступает место, только если другой
-адрес заметно быстрее. IPv6 пишется, только если адрес по IPv6 на этом
+проверяется вместе с каталогом и в следующий раз. Каждый живой адрес меряется
+несколько раз настоящим соединением: видны и скорость, и потери. Первый адрес уступает место другому, только если у того
+заметно меньше потерь или он заметно быстрее. IPv6 пишется, только если адрес по IPv6 на этом
 компьютере действительно отвечает, а не просто «у адаптера есть IPv6».
 
 Итог — набор для ``hosts.catalog_overlay``: в нём только сервисы, у которых
@@ -67,6 +67,9 @@ POOL_PER_FAMILY = 4
 # и во столько раз: иначе шум замера переставлял бы адреса при каждой проверке.
 SWITCH_MIN_MS = 30.0
 SWITCH_RATIO = 0.6
+# Первый адрес уступает место из-за потерь, когда у него без ответа осталось хотя бы столько
+# замеров и у другого адреса их меньше на столько же: одна потеря бывает и на здоровой линии.
+LOSS_SWITCH = 2
 
 
 @dataclass(frozen=True, slots=True)
@@ -286,14 +289,14 @@ def check_selection(
         answered_any = False
         for host, addresses in plan.hosts.items():
             ranked: list[tuple[str, int]] = []
-            speed: dict[str, float] = {}
+            score: dict[str, tuple[int, float]] = {}
             doomed: list[str] = []
             for address in addresses:
                 probed = verdicts.get(plan.key(host, address))
                 verdict = probed.verdict if probed is not None else None
                 if verdict == ALIVE:
                     ranked.append((address, _RANK_ALIVE))
-                    speed[address] = _speed(probed)
+                    score[address] = _score(probed)
                     answered_any = True
                 elif verdict == DEAD:
                     ranked.append((address, _RANK_SILENT))
@@ -313,8 +316,8 @@ def check_selection(
                 probed = verdicts.get(plan.key(host, address))
                 if probed is not None and probed.verdict == ALIVE:
                     proven.append(address)
-                    speed[address] = _speed(probed)
-            ranked.extend((address, _RANK_ALIVE) for address in sorted(proven, key=speed.__getitem__))
+                    score[address] = _score(probed)
+            ranked.extend((address, _RANK_ALIVE) for address in sorted(proven, key=score.__getitem__))
             # Имя не остаётся без адреса, которым этот компьютер может пользоваться.
             usable = [address for address, _rank in ranked if address not in doomed and (ipv6 or not _is_v6(address))]
             if not usable:
@@ -325,7 +328,7 @@ def check_selection(
                 remembered=before_rows,
                 first_v6=_is_v6(addresses[0]),
                 keep=KEEP_PER_FAMILY if full else 0,
-                speed=speed if full else None,
+                score=score if full else None,
             )
             if doomed:
                 dropped.setdefault(plan.service_name, set()).update(doomed)
@@ -338,12 +341,12 @@ def check_selection(
                 # явный отказ — выбрасывает. Адреса другого вида (IPv6 без IPv6) ждут своего часа.
                 known = pool_before.get(plan.service_id, {}).get(host, [])
                 alive_found = sorted(
-                    (address for address in extra if address in speed), key=lambda address: speed[address]
+                    (address for address in extra if address in score), key=lambda address: score[address]
                 )
                 waiting = [
                     address
                     for address in known
-                    if address not in speed
+                    if address not in score
                     and ((probed := verdicts.get(plan.key(host, address))) is None or probed.verdict != DEAD)
                 ]
                 kept_pool: list[str] = []
@@ -414,11 +417,14 @@ def _verdict_of(verdicts: dict, plan: _Plan, host: str, address: str) -> str | N
     return found.verdict if found is not None else None
 
 
-def _speed(probed: Probe) -> float:
-    """Чем сравнивать живые адреса: время соединения («пинг»), а если его нет — время всей пробы."""
+def _score(probed: Probe) -> tuple[int, float]:
+    """Чем сравнивать живые адреса: сначала потери, потом время соединения."""
     if probed.connect_ms is not None:
-        return float(probed.connect_ms)
-    return float(probed.ms) if probed.ms is not None else 0.0
+        return int(probed.lost), float(probed.connect_ms)
+    return int(probed.lost), float(probed.ms) if probed.ms is not None else 0.0
+
+
+_NO_SCORE = (10**6, float("inf"))
 
 
 def _order(
@@ -427,7 +433,7 @@ def _order(
     remembered: list[str],
     first_v6: bool,
     keep: int,
-    speed: dict[str, float] | None = None,
+    score: dict[str, tuple[int, float]] | None = None,
 ) -> list[str]:
     """Порядок адресов одного имени. ``ranked`` — (адрес, место в очереди) в порядке каталога.
 
@@ -436,9 +442,10 @@ def _order(
     стоять адрес с лучшим ответом из имеющихся: именно первый берёт браузер. ``keep`` —
     сколько адресов каждого вида оставить (0 — все); лишними становятся худшие.
 
-    ``speed`` — время соединения живых адресов (только у сервисов с паспортом). С ним первый
-    адрес уступает место другому живому, если тот заметно быстрее: разница в пару миллисекунд
-    от замера к замеру — шум, а не повод переписывать hosts.
+    ``score`` — (потери, время соединения) живых адресов, только у сервисов с паспортом.
+    С ним первый адрес уступает место другому живому в двух случаях: у первого теряются
+    пакеты, а у другого заметно меньше; или потерь не больше, а соединение заметно быстрее.
+    Одна потеря или пара миллисекунд от замера к замеру — шум, а не повод переписывать hosts.
     """
 
     def family(want_v6: bool) -> list[str]:
@@ -447,27 +454,27 @@ def _order(
             return []
         kept = [address for address in dict.fromkeys(remembered) if address in rank]
         # Отправная точка — порядок каталога, найденные адреса за ним: адрес каталога проверен
-        # из многих сетей и уступает первое место только заметно более быстрому.
+        # из многих сетей и уступает первое место только заметно лучшему.
         ordered = kept + [address for address in rank if address not in kept]
         best = min(rank.values())
         leaders = [address for address in ordered if rank[address] == best]
-        fastest = min(leaders, key=lambda address: speed.get(address, float("inf"))) if speed is not None else leaders[0]
+        top = min(leaders, key=lambda address: score.get(address, _NO_SCORE)) if score is not None else leaders[0]
         head = ordered[0]
         if rank[head] != best:
-            head = fastest
-        elif (
-            speed is not None
-            and fastest != head
-            and head in speed
-            and fastest in speed
-            and speed[fastest] + SWITCH_MIN_MS <= speed[head]
-            and speed[fastest] <= speed[head] * SWITCH_RATIO
-        ):
-            head = fastest
+            head = top
+        elif score is not None and top != head and head in score and top in score:
+            head_lost, head_ms = score[head]
+            top_lost, top_ms = score[top]
+            steadier = head_lost >= LOSS_SWITCH and top_lost + LOSS_SWITCH <= head_lost
+            faster = top_lost <= head_lost and top_ms + SWITCH_MIN_MS <= head_ms and top_ms <= head_ms * SWITCH_RATIO
+            if steadier or faster:
+                head = top
         ordered.remove(head)
         ordered.insert(0, head)
         if keep and len(ordered) > keep:
-            ordered = [ordered[0]] + sorted(ordered[1:], key=rank.__getitem__)[: keep - 1]
+            # Запасным остаётся адрес без заметных потерь, если такой есть.
+            lossy = (lambda address: score.get(address, (0, 0.0))[0] >= LOSS_SWITCH) if score is not None else (lambda address: False)
+            ordered = [ordered[0]] + sorted(ordered[1:], key=lambda address: (rank[address], lossy(address)))[: keep - 1]
         return ordered
 
     v4, v6 = family(False), family(True)

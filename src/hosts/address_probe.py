@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import socket
 import ssl
+import statistics
 import threading
 import time
 from dataclasses import dataclass
@@ -38,6 +39,12 @@ CONNECT_TIMEOUT_S = 2.5
 HELLO_TIMEOUT_S = 3.0
 # Одна потеря — ещё не смерть: молчащий адрес пробуется второй раз.
 RETRY_PAUSE_S = 0.5
+# Живой адрес меряется несколько раз: одно удачное соединение не показывает, что половина
+# пакетов до адреса теряется (жалоба владельца 2026-10-13: «ping» — два ответа из четырёх).
+QUALITY_SAMPLES = 6
+SAMPLE_TIMEOUT_S = 0.8
+# Замеры идут не вплотную: пачку одинаковых запросов подряд сеть может проредить сама.
+SAMPLE_PAUSE_S = 0.05
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,8 +55,12 @@ class Probe:
     reason: str = ""
     # За сколько установилось соединение — то же, что показывает «пинг»: по этому числу
     # движок сравнивает живые адреса. Вся проба для сравнения не годится: у адреса с
-    # нейтральным именем в неё входит ещё и запрос страницы.
+    # нейтральным именем в неё входит ещё и запрос страницы. Это середина нескольких замеров.
     connect_ms: float | None = None
+    # Сколько повторных соединений осталось без ответа и сколько их было всего.
+    # Адрес с потерями работает, но хуже: страницы грузятся рывками.
+    lost: int = 0
+    samples: int = 0
 
 
 _context_lock = threading.Lock()
@@ -65,11 +76,11 @@ def _verified_context() -> ssl.SSLContext:
         return _context
 
 
-def _connect(ip: str) -> tuple[socket.socket | None, str]:
+def _connect(ip: str, timeout_s: float = CONNECT_TIMEOUT_S) -> tuple[socket.socket | None, str]:
     """(сокет, исход): ok / refused / timeout / error."""
     family = socket.AF_INET6 if ":" in ip else socket.AF_INET
     sock = socket.socket(family, socket.SOCK_STREAM)
-    sock.settimeout(CONNECT_TIMEOUT_S)
+    sock.settimeout(timeout_s)
     try:
         sock.connect((ip, PORT))
     except (socket.timeout, TimeoutError):
@@ -82,6 +93,28 @@ def _connect(ip: str) -> tuple[socket.socket | None, str]:
         sock.close()
         return None, "error"
     return sock, "ok"
+
+
+def _quality(ip: str, first_connect_ms: float) -> tuple[float, int, int]:
+    """Повторные замеры живого адреса: (время соединения — середина замеров, потеряно, всего).
+
+    Меряются настоящие соединения с портом сайта, а не эхо-запросы команды ping: их по дороге
+    часто режут отдельно (на стенде 2026-10-13 каждый второй запрос подряд оставался без ответа
+    у любого адреса), а браузеру важны именно соединения. Потерянный запрос на соединение
+    Windows повторяет примерно через секунду — не успели раньше, значит пакет потерян.
+    """
+    times = [first_connect_ms]
+    lost = 0
+    for _ in range(QUALITY_SAMPLES):
+        time.sleep(SAMPLE_PAUSE_S)
+        started = time.perf_counter()
+        sock, _outcome = _connect(ip, SAMPLE_TIMEOUT_S)
+        if sock is None:
+            lost += 1
+        else:
+            times.append((time.perf_counter() - started) * 1000.0)
+            sock.close()
+    return statistics.median(times), lost, QUALITY_SAMPLES
 
 
 def _base(name: str) -> str:
@@ -108,6 +141,11 @@ def _serves(host: str, head: bytes) -> bool:
     return _base(target) == _base(host)
 
 
+def _alive(ip: str, total_ms: float, connect_ms: float) -> Probe:
+    middle, lost, samples = _quality(ip, connect_ms)
+    return Probe(ALIVE, total_ms, connect_ms=middle, lost=lost, samples=samples)
+
+
 def check_address(ip: str, host: str, *, front: str = "") -> Probe:
     """Проба одного адреса для имени ``host``. ``front`` — нейтральное имя владельца, если оно известно."""
     started = time.perf_counter()
@@ -125,7 +163,7 @@ def check_address(ip: str, host: str, *, front: str = "") -> Probe:
         with _verified_context().wrap_socket(sock, server_hostname=hello_name) as tls:
             if not front:
                 # Сертификат проверен для самого имени сервиса: адрес его и отдаёт.
-                return Probe(ALIVE, (time.perf_counter() - started) * 1000.0, connect_ms=connect_ms)
+                return _alive(ip, (time.perf_counter() - started) * 1000.0, connect_ms)
             tls.sendall(f"HEAD / HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n".encode("ascii", "ignore"))
             head = b""
             while b"\r\n\r\n" not in head and len(head) < 16384:
@@ -134,7 +172,7 @@ def check_address(ip: str, host: str, *, front: str = "") -> Probe:
                     break
                 head += chunk
             if _serves(host, head):
-                return Probe(ALIVE, (time.perf_counter() - started) * 1000.0, connect_ms=connect_ms)
+                return _alive(ip, (time.perf_counter() - started) * 1000.0, connect_ms)
             return Probe(DEAD, reason="адрес занят другим сервисом")
     except ssl.SSLCertVerificationError:
         return Probe(DEAD, reason="чужой сертификат")
