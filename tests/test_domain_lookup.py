@@ -769,6 +769,165 @@ class PlansTests(unittest.TestCase):
         self.assertIn(names[-1], plans.build_text_report(report))
 
 
+V6 = "2a00:1450:4010:c08::88"
+V4 = "93.184.216.34"
+
+
+class ProgramRoadTests(unittest.TestCase):
+    """Жалоба владельца 2026-10-14: «нифига не открывается», а проверка «пишет что всё ок».
+
+    Windows отдавала программам адрес IPv6, пинг по нему терял всё, а сайт проверялся по IPv4.
+    """
+
+    def _run(self, *, first=V6, v6_tcp="timeout", road=None, site_level="ok", v4_tcp="ok", hint=("YouTube", ())):
+        net = _Network(self)
+        net.site = {"level": site_level, "headline": "www.youtube.com открывается"}
+        infos = [(socket.AF_INET6, 0, 0, "", (V6, 0, 0, 0)), (socket.AF_INET, 0, 0, "", (V4, 0))]
+        if first == V4:
+            infos.reverse()
+
+        def tcp(ip, port=443):
+            status = v6_tcp if ":" in ip else v4_tcp
+            return engine.TcpReport(ip, port, status, 5.0 if status == "ok" else None)
+
+        patches = [
+            patch("utils.net_resolve.resolve_addrinfo", lambda host, **k: infos),
+            patch.object(engine, "_tcp_connect", tcp),
+            patch.object(engine, "_hosts_hint", lambda domain: hint),
+        ]
+        if road is not None:
+            patches.append(patch.object(engine, "_program_road", lambda domain, ip, cancel: road))
+        for item in patches:
+            item.start()
+            self.addCleanup(item.stop)
+        return engine.run_domain_lookup("www.youtube.com", servers=[SECURE, GOOD])
+
+    def test_windows_answer_remembers_which_address_goes_first(self) -> None:
+        infos = [(socket.AF_INET6, 0, 0, "", (V6, 0, 0, 0)), (socket.AF_INET, 0, 0, "", (V4, 0))]
+        with patch("utils.net_resolve.resolve_addrinfo", return_value=infos):
+            answer = engine._ask_windows("www.youtube.com")
+        self.assertEqual(answer.first, V6)
+        self.assertEqual(engine.program_ipv6([answer]), V6)
+        with patch("utils.net_resolve.resolve_addrinfo", return_value=list(reversed(infos))):
+            self.assertEqual(engine.program_ipv6([engine._ask_windows("www.youtube.com")]), "")
+
+    def test_dead_ipv6_that_windows_prefers_is_the_headline_not_all_is_well(self) -> None:
+        report = self._run()
+
+        # Проверен именно тот адрес, на который идут программы, а не только адрес IPv4.
+        self.assertEqual(report.primary_ip, V4)
+        self.assertEqual((report.road.ip, report.road.tcp.status), (V6, "timeout"))
+        self.assertEqual(report.ping6.ip, V6)
+        self.assertEqual(engine.road_trouble(report), engine.ROAD_DEAD)
+
+        status = plans.build_status(report)
+        self.assertEqual(status.tone, plans.TONE_ERROR)
+        self.assertIn("Windows ведёт программы на адрес IPv6, а связи по IPv6 с сервером нет", status.text)
+        first = plans.build_ping_lines(report)[0]
+        self.assertEqual(first.tone, plans.TONE_ERROR)
+        self.assertIn(V6, first.text)
+        # И сказано, что делать: у YouTube есть тумблер, который пишет адреса IPv4.
+        self.assertIn("Включите тумблер «YouTube» на странице «Редактор hosts»", first.text)
+        entry = plans.build_history_entry(report)
+        self.assertEqual(entry["level"], "fail")
+        self.assertIn("Windows ведёт программы на адрес IPv6", entry["headline"])
+        self.assertIn("Программы идут не туда", plans.build_text_report(report))
+
+    def test_cards_stop_saying_the_site_opens(self) -> None:
+        from dns.ui import domain_lookup_cards as lookup_cards
+
+        site = {
+            "id": "site:user:www.youtube.com", "name": "www.youtube.com", "level": "ok", "headline": "www.youtube.com открывается",
+            "targets": [], "problems": [],
+        }
+        report = self._run()
+        cards = {card.key: card for card in lookup_cards.build_lookup_cards(engine.replace(report, site=site))}
+        ping = cards[lookup_cards.KEY_PING]
+        self.assertEqual((ping.level, ping.status), ("fail", "Программы идут по IPv6 — он не работает"))
+        site_card = next(card for card in cards.values() if card.site)
+        self.assertEqual((site_card.level, site_card.status), ("fail", "В программах не открывается"))
+        self.assertIn("Windows ведёт программы на адрес IPv6", site_card.lines[0].name)
+
+    def test_name_cut_on_the_ipv6_road_is_found_when_ipv4_opens(self) -> None:
+        tcp = engine.TcpReport(V6, 443, "ok", 20.0)
+        road = engine.ProgramRoad(V6, tcp, lines=(("Как Chrome", "fail", "на приветствие ответа нет"),), opens=False)
+        report = self._run(v6_tcp="ok", road=road)
+
+        self.assertEqual(engine.road_trouble(report), engine.ROAD_BLOCKED)
+        lines = [line.text for line in plans.build_ping_lines(report)]
+        self.assertIn("по нему сайт не открывается", lines[0])
+        self.assertIn("По IPv6 · Как Chrome: на приветствие ответа нет.", lines)
+        self.assertIn("а по IPv6 сайт не открывается", plans.build_status(report).text)
+
+    def test_no_alarm_without_a_working_ipv4_to_compare_with(self) -> None:
+        for name, kwargs in (
+            ("Windows ставит первым IPv4", {"first": V4}),
+            ("по IPv6 сайт открывается", {"v6_tcp": "ok", "road": engine.ProgramRoad(V6, engine.TcpReport(V6, 443, "ok", 9.0), opens=True)}),
+            ("проба по IPv6 ничего не доказала", {"v6_tcp": "ok", "road": engine.ProgramRoad(V6, engine.TcpReport(V6, 443, "ok", 9.0), opens=None)}),
+            ("не отвечает и IPv4 — это не про IPv6", {"v4_tcp": "timeout"}),
+            (
+                "сайт закрыт и по IPv4 — это обычная блокировка",
+                {"v6_tcp": "ok", "site_level": "fail", "road": engine.ProgramRoad(V6, engine.TcpReport(V6, 443, "ok", 9.0), opens=False)},
+            ),
+        ):
+            with self.subTest(name):
+                report = self._run(**kwargs)
+                self.assertEqual(engine.road_trouble(report), "")
+                self.assertEqual(plans.road_problem(report), "")
+                self.assertNotEqual(plans.build_ping_lines(report)[0].tone, plans.TONE_ERROR)
+
+    def test_advice_depends_on_what_hosts_already_holds(self) -> None:
+        written = self._run(hint=("YouTube", (V6,)))
+        self.assertIn("Этот адрес записан в файле hosts. Выключите и снова включите тумблер «YouTube»", plans.road_cure(written))
+        foreign = self._run(hint=("", (V6,)))
+        self.assertIn("уберите строку", plans.road_cure(foreign))
+        unknown = self._run(hint=("", ()))
+        self.assertIn("отключить IPv6", plans.road_cure(unknown))
+
+    def test_road_probe_uses_the_real_site_name_and_judges_only_cut_greetings(self) -> None:
+        from diagnostics import protocol_probe
+
+        def line(key, state):
+            return protocol_probe.ProtocolLine(key, key, state, "", "текст")
+
+        asked: list[tuple[str, str]] = []
+
+        def collect(host, ip, *, submit, cancel):
+            asked.append((host, ip))
+            return "facts"
+
+        for states, expected in (
+            ((protocol_probe.STATE_FAIL, protocol_probe.STATE_OK), True),
+            ((protocol_probe.STATE_FAIL, protocol_probe.STATE_FAIL), False),
+            ((protocol_probe.STATE_UNKNOWN, protocol_probe.STATE_UNKNOWN), None),
+        ):
+            found = (line(protocol_probe.PROTO_TLS13, states[0]), line(protocol_probe.PROTO_BROWSER, states[1]), line(protocol_probe.PROTO_HTTP, "ok"))
+            with (
+                patch.object(engine, "_tcp_connect", lambda ip, port=443: engine.TcpReport(ip, port, "ok", 5.0)),
+                patch.object(protocol_probe, "collect", collect),
+                patch.object(protocol_probe, "judge", lambda facts: found),
+            ):
+                road = engine._program_road("www.youtube.com", V6, engine.SocketCancel())
+            self.assertEqual(road.opens, expected)
+        self.assertEqual(asked[0], ("www.youtube.com", V6))
+        # Без соединения пробы с именем не шлются.
+        with patch.object(engine, "_tcp_connect", lambda ip, port=443: engine.TcpReport(ip, port, "timeout")):
+            self.assertEqual(engine._program_road("www.youtube.com", V6, engine.SocketCancel()).lines, ())
+
+    def test_hosts_file_reader_returns_both_families_in_file_order(self) -> None:
+        import os
+        import tempfile
+
+        from utils.windows_dns_query import hosts_file_addresses, hosts_file_ipv4
+
+        handle, path = tempfile.mkstemp(text=True)
+        self.addCleanup(os.unlink, path)
+        with os.fdopen(handle, "w", encoding="utf-8") as stream:
+            stream.write("2001:db8::10 www.youtube.com\n# 1.1.1.1 www.youtube.com\n1.2.3.4 WWW.YouTube.com other.example\nbad www.youtube.com\n")
+        self.assertEqual(hosts_file_addresses("www.youtube.com", path=path), ("2001:db8::10", "1.2.3.4"))
+        self.assertEqual(hosts_file_ipv4("www.youtube.com", path=path), ("1.2.3.4",))
+
+
 class WiringTests(unittest.TestCase):
     def test_server_list_is_large_and_has_encrypted_reference(self) -> None:
         with patch("settings.store.get_custom_dns_servers", return_value=[{"id": "1", "name": "Мой", "ipv4": ["10.9.8.7"]}]):

@@ -318,6 +318,29 @@ def relay_addresses_of(catalog: HostsCatalog) -> set[str]:
     }
 
 
+def direct_service_with_ipv4(hostname: str) -> str:
+    """Название сервиса, тумблер которого записывает этому имени адрес IPv4. Пусто — такого нет.
+
+    Нужен «Проверке домена»: когда Windows ведёт программы на адрес IPv6, по которому сайт не
+    открывается, тумблер этого сервиса возвращает имя на IPv4.
+    """
+    wanted = _clean_str(hostname).rstrip(".").casefold()
+    if not wanted:
+        return ""
+    catalog = load_shipped_catalog()
+    index = _infer_direct_profile_index(catalog)
+    if index is None:
+        return ""
+    for service_name in catalog.service_order:
+        if catalog.service_modes.get(_clean_str(service_name).casefold()) == _SERVICE_MODE_DNS:
+            continue
+        for domain, ips in catalog.service_entries.get(service_name, []):
+            address = _clean_str(ips[index]) if index < len(ips) else ""
+            if address and ":" not in address and _clean_str(domain).casefold() == wanted:
+                return service_name
+    return ""
+
+
 def _infer_direct_profile_index(catalog: HostsCatalog) -> int | None:
     try:
         return catalog.dns_profiles.index(HOSTS_PROFILE_ID)

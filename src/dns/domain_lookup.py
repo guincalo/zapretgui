@@ -146,6 +146,8 @@ class ResolverAnswer:
     # Что тот же сервер ответил по TCP, когда на обычный запрос (UDP) пришло «домена нет».
     # Фильтр подделывает только UDP, поэтому адреса здесь — прямое доказательство подмены.
     tcp_ipv4: tuple[str, ...] = ()
+    # Только у строки Windows: адрес, который система ставит первым, — на него программы идут сначала.
+    first: str = ""
 
     @property
     def addresses(self) -> tuple[str, ...]:
@@ -178,6 +180,23 @@ class TcpReport:
     status: str  # ok / refused / timeout / error
     elapsed_ms: float | None = None
     detail: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class ProgramRoad:
+    """Дорога, которой на самом деле идут программы, когда Windows ставит первым адрес IPv6.
+
+    Сайт проверяется по IPv4, а Windows при живом IPv6 ведёт программы на адрес IPv6. Если по
+    нему связи нет или имя сайта на этой дороге режут, сайт «открывается» в проверке и не
+    открывается в браузере — пока эту дорогу не проверить отдельно.
+    """
+
+    ip: str
+    tcp: TcpReport
+    # Пробы с настоящим именем сайта по этому адресу: (название, состояние ok/fail/unknown, текст).
+    lines: tuple[tuple[str, str, str], ...] = ()
+    # Дошло ли до сервера приветствие с именем сайта (обычное или как у Chrome). None — не проверяли.
+    opens: bool | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -217,6 +236,12 @@ class DomainLookupReport:
     ping: PingReport | None = None
     ping6: PingReport | None = None
     tcp: TcpReport | None = None
+    # Адрес IPv6, который Windows отдаёт программам первым, и что по нему получается.
+    road: ProgramRoad | None = None
+    # Сервис «Редактора hosts», тумблер которого даёт этому имени адрес IPv4 (пусто — такого нет),
+    # и адреса имени, которые уже записаны в файле hosts.
+    hosts_service: str = ""
+    hosts_rows: tuple[str, ...] = ()
     network: NetworkInfo | None = None
     sources: tuple[NeighborSource, ...] = ()
     # Путь до адреса по узлам. None — ещё не готов.
@@ -394,7 +419,8 @@ def _ask_windows(domain: str) -> ResolverAnswer:
     ipv6 = tuple(dict.fromkeys(info[4][0] for info in infos if info[0] == socket.AF_INET6 and info[4]))
     if not ipv4 and not ipv6:
         return ResolverAnswer(server=server, status=status, level=LEVEL_UNKNOWN, elapsed_ms=elapsed)
-    return ResolverAnswer(server=server, status=STATUS_OK, ipv4=ipv4, ipv6=ipv6, elapsed_ms=elapsed)
+    first = next((str(info[4][0]) for info in infos if info[4]), "")
+    return ResolverAnswer(server=server, status=STATUS_OK, ipv4=ipv4, ipv6=ipv6, elapsed_ms=elapsed, first=first)
 
 
 def _ping(ip: str, should_stop: Callable[[], bool]) -> PingReport:
@@ -438,6 +464,69 @@ def _tcp_connect(ip: str, port: int = 443) -> TcpReport:
     except OSError as exc:
         return TcpReport(ip=ip, port=port, status="error", detail=str(exc))
     return TcpReport(ip=ip, port=port, status="ok", elapsed_ms=(time.perf_counter() - started) * 1000.0)
+
+
+def program_ipv6(answers: Iterable[ResolverAnswer]) -> str:
+    """Адрес IPv6, на который Windows ведёт программы первым. Пусто — первым идёт IPv4."""
+    for item in answers:
+        if item.server.kind == SERVER_WINDOWS and item.status == STATUS_OK:
+            return item.first if ":" in item.first and classify_ip(item.first)[0] == LEVEL_OK else ""
+    return ""
+
+
+def _program_road(domain: str | None, ip: str, cancel: SocketCancel) -> ProgramRoad:
+    """Что получается по адресу, на который Windows ведёт программы: соединение и пробы с именем сайта."""
+    tcp = _tcp_connect(ip)
+    if tcp.status != "ok" or not domain:
+        return ProgramRoad(ip=ip, tcp=tcp)
+    from diagnostics import protocol_probe
+
+    # Свой маленький пул: общий занят другими пробами, а эти четыре ждут друг друга.
+    with ThreadPoolExecutor(max_workers=4, thread_name_prefix="domain-road") as pool:
+        found = protocol_probe.judge(protocol_probe.collect(domain, ip, submit=pool.submit, cancel=cancel))
+    lines = tuple((line.title, line.state, line.text) for line in found)
+    hello = [line for line in found if line.key in (protocol_probe.PROTO_TLS12, protocol_probe.PROTO_TLS13, protocol_probe.PROTO_BROWSER)]
+    # «Не проходит» — только когда приветствие именно оборвали; несостоявшаяся проба ничего не доказывает.
+    opens: bool | None = None
+    if any(line.state == protocol_probe.STATE_OK for line in hello):
+        opens = True
+    elif any(line.state == protocol_probe.STATE_FAIL for line in hello):
+        opens = False
+    return ProgramRoad(ip=ip, tcp=tcp, lines=lines, opens=opens)
+
+
+def _hosts_hint(domain: str) -> tuple[str, tuple[str, ...]]:
+    """Чем помочь через hosts: сервис с адресом IPv4 для имени и адреса имени, уже записанные в файл."""
+    from hosts.proxy_domains import direct_service_with_ipv4
+    from utils.windows_dns_query import hosts_file_addresses
+
+    try:
+        service = direct_service_with_ipv4(domain)
+    except Exception:
+        service = ""
+    return service, tuple(hosts_file_addresses(domain))
+
+
+ROAD_DEAD = "dead"
+ROAD_BLOCKED = "blocked"
+
+
+def road_trouble(report: "DomainLookupReport") -> str:
+    """Беда на дороге программ: ``ROAD_DEAD`` — по IPv6 нет связи, ``ROAD_BLOCKED`` — связь есть,
+    а имя сайта не проходит. Пусто — беды нет или сравнить не с чем.
+
+    Вывод делается только из сравнения: по IPv4 то же самое работает. Если не работает и там,
+    это обычная блокировка или лежащий сайт — о них говорят другие строки.
+    """
+    road, tcp = getattr(report, "road", None), getattr(report, "tcp", None)
+    if road is None or tcp is None or tcp.status != "ok" or ":" in tcp.ip:
+        return ""
+    if road.tcp.status != "ok":
+        return ROAD_DEAD
+    site = getattr(report, "site", None) or {}
+    if road.opens is False and str(site.get("level") or "") in ("ok", "warn"):
+        return ROAD_BLOCKED
+    return ""
 
 
 def _ask_helpers(name: str, rtype: int, servers: Iterable[str]):
@@ -1023,9 +1112,15 @@ def _address_stage(run: _Run, report: DomainLookupReport, servers, use_external:
         run.pool.submit(_tcp_connect, ip): "tcp",
         run.pool.submit(_lookup_ptr, ip, helpers): SOURCE_PTR,
     }
-    ipv6 = pick_ipv6(report.answers, ip)
+    # Пингуется тот IPv6, на который Windows ведёт программы; нет такого — любой адрес IPv6 сайта.
+    road_ip = program_ipv6(report.answers) if ":" not in ip else ""
+    ipv6 = road_ip or pick_ipv6(report.answers, ip)
     if ipv6:
         futures[run.pool.submit(_ping, ipv6, run.halted)] = "ping6"
+    if road_ip:
+        futures[run.pool.submit(_program_road, domain, road_ip, run.cancel)] = "road"
+        if domain:
+            futures[run.pool.submit(_hosts_hint, domain)] = "hosts_hint"
     if ":" not in ip:
         futures[run.pool.submit(trace_route, ip, should_stop=run.halted)] = "route"
         if domain and public:
@@ -1065,6 +1160,10 @@ def _address_stage(run: _Run, report: DomainLookupReport, servers, use_external:
             report = replace(report, ping6=result)
         elif key == "tcp" and isinstance(result, TcpReport):
             report = replace(report, tcp=result)
+        elif key == "road" and isinstance(result, ProgramRoad):
+            report = replace(report, road=result)
+        elif key == "hosts_hint" and isinstance(result, tuple):
+            report = replace(report, hosts_service=str(result[0]), hosts_rows=tuple(result[1]))
         elif key == "route" and isinstance(result, RouteTrace):
             report = replace(report, route=result)
         elif key == "quic" and isinstance(result, tuple):
@@ -1107,6 +1206,11 @@ __all__ = [
     "SERVER_PROVIDER",
     "SERVER_SYSTEM",
     "SERVER_WINDOWS",
+    "ROAD_BLOCKED",
+    "ROAD_DEAD",
+    "ProgramRoad",
+    "program_ipv6",
+    "road_trouble",
     "SOURCE_CERT_DEFAULT",
     "SOURCE_CERT_NAMED",
     "SOURCE_EMPTY",

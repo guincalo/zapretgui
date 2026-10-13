@@ -69,7 +69,9 @@ def _ping_card(report, title: str) -> Card | None:
             head, _separator, rest = part.partition(": ")
             network.append(Line("info", f"{head[:1].upper()}{head[1:]}", rest))
     states = {line.state for line in ping}
-    if "ok" in states:
+    if plans.road_problem(report):
+        level, status = "fail", "Программы идут по IPv6 — он не работает"
+    elif "ok" in states:
         level, status = "ok", "Сервер отвечает"
     elif "warn" in states:
         level, status = "warn", "Сервер не отвечает"
@@ -152,7 +154,17 @@ def _site_card(report, title: str) -> Card | None:
         return None
     from blockcheck.ui.result_cards_model import site_card
 
-    return replace(site_card(report.site), title=title)
+    card = replace(site_card(report.site), title=title)
+    trouble = plans.road_problem(report)
+    if not trouble or card.level == "fail":
+        return card
+    # Сайт проверен по IPv4 и открывается, а программы Windows ведёт по IPv6, где он не открывается:
+    # «Открывается» на карточке было бы неправдой.
+    warning = Line("fail", trouble, plans.road_cure(report))
+    section = Section("Почему в программах не открывается", (warning,))
+    return replace(
+        card, level="fail", status="В программах не открывается", lines=(warning, *card.lines), sections=(section, *card.sections)
+    )
 
 
 def _neighbors_card(report, title: str) -> Card | None:

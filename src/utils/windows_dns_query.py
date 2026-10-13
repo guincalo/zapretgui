@@ -29,6 +29,7 @@ __all__ = [
     "DNS_STATUS_NAME_ERROR",
     "DNS_STATUS_NO_RECORDS",
     "DnsAnswer",
+    "hosts_file_addresses",
     "hosts_file_ipv4",
     "query_ipv4",
     "system_dns_servers",
@@ -390,8 +391,8 @@ def _hosts_path() -> str:
     return os.path.join(root, "System32", "drivers", "etc", "hosts")
 
 
-def hosts_file_ipv4(name: str, *, path: str | None = None) -> tuple[str, ...]:
-    """IPv4-адреса, которые файл hosts задаёт для имени (без учёта регистра)."""
+def hosts_file_addresses(name: str, *, path: str | None = None) -> tuple[str, ...]:
+    """Все адреса (IPv4 и IPv6), которые файл hosts задаёт для имени, в порядке строк файла."""
     host = str(name or "").strip().rstrip(".").lower()
     if not host:
         return ()
@@ -408,11 +409,16 @@ def hosts_file_ipv4(name: str, *, path: str | None = None) -> tuple[str, ...]:
             continue
         address, names = content[0], content[1:]
         try:
-            socket.inet_aton(address)
+            socket.inet_pton(socket.AF_INET6 if ":" in address else socket.AF_INET, address)
         except OSError:
             continue
-        if address.count(".") != 3:
+        if ":" not in address and address.count(".") != 3:
             continue
         if host in (item.rstrip(".").lower() for item in names) and address not in found:
             found.append(address)
     return tuple(found)
+
+
+def hosts_file_ipv4(name: str, *, path: str | None = None) -> tuple[str, ...]:
+    """IPv4-адреса, которые файл hosts задаёт для имени (без учёта регистра)."""
+    return tuple(address for address in hosts_file_addresses(name, path=path) if ":" not in address)
