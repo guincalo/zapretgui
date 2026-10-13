@@ -37,6 +37,9 @@ _PROBE_CACHE: dict[tuple[str, str, str], tuple[float, object]] = {}
 # Проверки не идут одновременно: фоновая, начатая со старым выбором, иначе затёрла бы
 # набор, который только что собрала проверка по нажатию тумблера.
 _CHECK_LOCK = threading.Lock()
+# Запись блока и сохранение выбора — одно целое: сверка, начатая фоновой проверкой, иначе могла
+# бы прочитать прежний выбор и записать его поверх только что нажатого тумблера.
+_WRITE_LOCK = threading.Lock()
 # Набор адресов до последней фоновой проверки. Страница узнаёт включённый сервис по тому,
 # что его адреса записаны в hosts; если новые адреса записать не удалось, набор возвращается
 # к прежнему — иначе включённые сервисы показались бы выключенными.
@@ -62,9 +65,10 @@ def check_addresses(selection: dict[str, str] | None = None, *, strict: bool = F
     """Умный движок: проверяет адреса включённых сервисов и запоминает рабочие (hosts.address_engine).
 
     ``selection`` — выбор «сервис → профиль»; None — сохранённый выбор. ``strict`` — человек
-    только что переключил сервис и ждёт результата. ``recheck`` — названия сервисов, которые
-    проверить сейчас (None — все включённые). Сам файл hosts здесь не меняется: запись
-    делают apply_hosts_draft и refresh_applied_selection по уже проверенным адресам.
+    только что переключил сервис: мёртвый адрес убирается сразу, без второй проверки.
+    ``recheck`` — названия сервисов, которые проверить сейчас (None — все включённые).
+    Сам файл hosts здесь не меняется: его переписывает refresh_applied_selection, если
+    проверенные адреса отличаются от записанных.
     """
     with _CHECK_LOCK:
         return _check_addresses(selection, strict=strict, recheck=recheck)
@@ -152,10 +156,11 @@ def refresh_applied_selection(hosts_manager=None) -> HostsCommandResult:
     manager = hosts_manager or create_hosts_manager(
         status_callback=lambda message: log(f"Hosts при запуске: {message}", "DEBUG")
     )
-    changed, reason = manager.refresh_applied_service_selection(
-        load_user_selection(),
-        has_saved_selection=has_saved_user_hosts_selection(),
-    )
+    with _WRITE_LOCK:
+        changed, reason = manager.refresh_applied_service_selection(
+            load_user_selection(),
+            has_saved_selection=has_saved_user_hosts_selection(),
+        )
     _settle_overlay_after_refresh(write_failed=bool(getattr(manager, "refresh_write_failed", False)))
     return HostsCommandResult(success=True, message=reason, changed=bool(changed))
 
@@ -185,6 +190,11 @@ def apply_hosts_draft(selection: dict[str, str], adobe: bool | None = None) -> H
 
     selection — полный выбор «сервис → профиль»; adobe — None, если блок
     Adobe не меняли.
+
+    Запись идёт сразу, с теми адресами, которые известны сейчас: нажатие тумблера
+    не ждёт сеть. Проверку адресов только что включённых сервисов страница
+    запускает следом (``recheck_applied``); найдёт лучший порядок — блок будет
+    переписан ещё раз, уже без участия человека.
     """
     from log.log import log
 
@@ -192,40 +202,43 @@ def apply_hosts_draft(selection: dict[str, str], adobe: bool | None = None) -> H
         status_callback=lambda message: log(f"Hosts: {message}", "DEBUG")
     )
     selection = dict(selection or {})
-    # Сначала проверка адресов: в hosts идут те, что сейчас отвечают, и рабочий — первым.
-    # Проверяется только то, что человек сейчас поменял; остальное проверено раньше.
-    note = ""
-    overlay_before = None
-    try:
-        from hosts import proxy_domains
-
-        overlay_before = proxy_domains.get_engine_overlay()
+    with _WRITE_LOCK:
         saved = load_user_selection()
-        touched = {name for name, profile in selection.items() if saved.get(name) != profile}
-        note = describe_address_check(check_addresses(selection, strict=True, recheck=touched))
-    except Exception as exc:
-        log(f"Hosts: проверка адресов не выполнена, пишутся адреса каталога: {exc}", "WARNING")
-    success = bool(manager.apply_service_dns_selections(selection))
-    message = str(manager.last_status or "")
-    if success:
-        save_user_selection(selection)
-    elif overlay_before is not None:
-        # В файле остались прежние адреса: набор должен говорить то же самое.
-        try:
-            proxy_domains.set_engine_overlay(overlay_before)
-        except Exception as exc:
-            log(f"Hosts: не удалось вернуть прежний набор адресов: {exc}", "WARNING")
-        note = ""
-    if success and adobe is not None:
-        success = bool(manager.add_adobe_domains() if adobe else manager.remove_adobe_domains())
-        message = str(manager.last_status or message)
+        touched = tuple(
+            name
+            for name, profile in selection.items()
+            if isinstance(name, str)
+            and isinstance(profile, str)
+            and profile.strip().lower() not in _OFF_PROFILES
+            and saved.get(name) != profile
+        )
+        success = bool(manager.apply_service_dns_selections(selection))
+        message = str(manager.last_status or "")
+        if success:
+            save_user_selection(selection)
+        if success and adobe is not None:
+            success = bool(manager.add_adobe_domains() if adobe else manager.remove_adobe_domains())
+            message = str(manager.last_status or message)
 
     snapshot = None
     try:
         snapshot = load_page_snapshot()
     except Exception as exc:
         log(f"Hosts: не удалось перечитать состояние после записи: {exc}", "WARNING")
-    return HostsApplyResult(success=success, message=message, snapshot=snapshot, note=note)
+    return HostsApplyResult(success=success, message=message, snapshot=snapshot, touched=touched if success else ())
+
+
+def recheck_applied(names) -> HostsCommandResult:
+    """Сразу после записи: проверить адреса только что включённых сервисов.
+
+    Если проверка нашла порядок лучше записанного (первый адрес молчит, есть живой) —
+    блок в hosts переписывается. ``message`` — что сказать человеку (пусто — нечего),
+    ``changed`` — переписан ли файл.
+    """
+    report = check_addresses(None, strict=True, recheck=set(names or ()))
+    changed = bool(report.changed) and bool(refresh_applied_selection().changed)
+    note = describe_address_check(report) if changed or report.silent else ""
+    return HostsCommandResult(success=True, message=note, changed=changed)
 
 
 def load_hosts_text() -> HostsFileText:

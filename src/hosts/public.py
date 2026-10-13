@@ -3,6 +3,7 @@ from __future__ import annotations
 from hosts.commands import (
     apply_hosts_draft,
     check_addresses,
+    recheck_applied,
     get_hosts_path_str,
     load_hosts_text,
     load_page_snapshot,
@@ -25,6 +26,7 @@ __all__ = [
     "HostsFileText",
     "apply_hosts_draft",
     "check_addresses",
+    "recheck_applied",
     "get_hosts_path_str",
     "load_geo_services_for_site_list",
     "load_geo_sites",

@@ -436,22 +436,58 @@ class HostsPageTests(unittest.TestCase):
         page._set_snapshot(_manual_snapshot(addresses_checked_at=today.isoformat()))
         self.assertEqual(page.summary_detail.text(), "")
 
-    def test_what_the_address_check_found_is_shown_after_the_write(self) -> None:
+    def test_addresses_are_checked_after_the_write_and_never_hold_it(self) -> None:
+        """Замер 2026-10-13: с проверкой перед записью тумблер ждал от 0,6 с до нескольких секунд
+        (раньше 0,04 с). Запись идёт сразу, проверка — следом."""
         page = self._page(_manual_snapshot())
-        page._on_tile_activated("Direct")
+        checks: list[tuple] = []
+        callbacks: list[dict] = []
+        page._hosts.create_address_check_worker = lambda request_id, names, parent=None: checks.append(tuple(names))
+        running = {"value": False}
+
+        def _start(**kwargs):
+            callbacks.append(kwargs)
+            kwargs["worker_factory"](len(callbacks))
+            running["value"] = True
+            return True
+
+        for target, replacement in (
+            (patch.object(page._check_runtime, "start_qthread_worker", side_effect=_start), None),
+            (patch.object(page._check_runtime, "is_running", side_effect=lambda: running["value"]), None),
+            (patch.object(page._check_runtime, "is_current", return_value=True), None),
+        ):
+            target.start()
+            self.addCleanup(target.stop)
         written = _manual_snapshot(block_lines=("4.4.4.4 direct.example",), direct="hosts")
 
+        page._on_tile_activated("Direct")
+        self.assertEqual(checks, [])
+        self.write_callbacks[-1]["on_loaded"](
+            len(self.write_callbacks), SimpleNamespace(success=True, snapshot=written, message="", touched=("Direct",))
+        )
+        # Запись закончена, страница свободна — и только теперь адреса ушли на проверку.
+        self.assertFalse(page._applying)
+        self.assertEqual(checks, [("Direct",)])
+
+        # Пока проверка идёт, следующее нажатие пишется сразу; его сервис ждёт своей очереди на проверку.
+        page._set_service_profile("Alpha", "p1")
+        self.assertTrue(page._applying)
+        self.write_callbacks[-1]["on_loaded"](
+            len(self.write_callbacks), SimpleNamespace(success=True, snapshot=written, message="", touched=("Alpha",))
+        )
+        self.assertEqual(checks, [("Direct",)])
+
         with patch("hosts.ui.page.InfoBar") as info_bar:
-            self.write_callbacks[-1]["on_loaded"](
-                len(self.write_callbacks),
-                SimpleNamespace(success=True, snapshot=written, message="", note="Неработающие адреса убраны: Direct."),
-            )
+            callbacks[-1]["on_loaded"](1, SimpleNamespace(success=True, changed=True, message="Неработающие адреса убраны: Direct."))
         self.assertEqual(info_bar.info.call_args.kwargs["content"], "Неработающие адреса убраны: Direct.")
+        page._request_snapshot.assert_called()
+        running["value"] = False
+        callbacks[-1]["on_finished"](None)
+        self.assertEqual(checks, [("Direct",), ("Alpha",)])
 
         # Сказать нечего — никаких сообщений.
-        page._on_tile_activated("Direct")
         with patch("hosts.ui.page.InfoBar") as info_bar:
-            self._finish_write(page, snapshot=_manual_snapshot())
+            callbacks[-1]["on_loaded"](2, SimpleNamespace(success=True, changed=False, message=""))
         info_bar.info.assert_not_called()
 
     def test_clicks_during_write_are_written_next_in_one_go(self) -> None:

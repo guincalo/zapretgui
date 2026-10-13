@@ -17,6 +17,8 @@ class HostsFeature:
     get_hosts_path_str: Callable
     create_snapshot_worker: Callable
     create_apply_worker: Callable
+    # Проверка адресов только что включённых сервисов — следом за записью, запись её не ждёт.
+    create_address_check_worker: Callable
     create_open_hosts_file_worker: Callable
     create_permission_restore_worker: Callable
     create_file_text_worker: Callable
@@ -66,6 +68,15 @@ def build_hosts_feature() -> HostsFeature:
             parent=parent,
         )
 
+    def _create_address_check_worker(request_id: int, names, parent=None):
+        names = tuple(names or ())
+        return _call_worker(
+            request_id,
+            lambda: _public().recheck_applied(names),
+            name="address_check",
+            parent=parent,
+        )
+
     def _create_open_hosts_file_worker(request_id: int, parent=None):
         return _call_worker(
             request_id,
@@ -108,6 +119,7 @@ def build_hosts_feature() -> HostsFeature:
         get_hosts_path_str=lambda *args, **kwargs: _public().get_hosts_path_str(*args, **kwargs),
         create_snapshot_worker=_create_snapshot_worker,
         create_apply_worker=_create_apply_worker,
+        create_address_check_worker=_create_address_check_worker,
         create_open_hosts_file_worker=_create_open_hosts_file_worker,
         create_permission_restore_worker=_create_permission_restore_worker,
         create_file_text_worker=_create_file_text_worker,

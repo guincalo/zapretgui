@@ -187,6 +187,10 @@ class HostsPage(BasePage):
         self._apply_pending = False
         self._apply_force_pending = False
         self._just_written = False
+        # Проверка адресов идёт следом за записью и её не задерживает: тумблер щёлкает сразу.
+        self._check_runtime = OneShotWorkerRuntime()
+        # Сервисы, включённые записью, но ещё не отданные на проверку.
+        self._unchecked: set[str] = set()
         self._restore_runtime = OneShotWorkerRuntime()
         # Меню «DNS для всех» пересобирается, только когда меняется его содержимое.
         self._dns_all_menu_key: tuple | None = None
@@ -358,7 +362,7 @@ class HostsPage(BasePage):
 
     def cleanup(self) -> None:
         self._cleanup_in_progress = True
-        for runtime in (self._snapshot_runtime, self._apply_runtime, self._restore_runtime):
+        for runtime in (self._snapshot_runtime, self._apply_runtime, self._check_runtime, self._restore_runtime):
             try:
                 runtime.stop(blocking=False, warning_prefix="Hosts worker")
                 runtime.cancel()
@@ -456,15 +460,7 @@ class HostsPage(BasePage):
             self._fail_write(str(getattr(result, "message", "") or ""), snapshot)
             return
         self._just_written = True
-        note = str(getattr(result, "note", "") or "")
-        if note:
-            # Проверка перед записью что-то поменяла или не дозвалась ни до одного адреса.
-            InfoBar.info(
-                title=self._tr("page.hosts.addresses.checked.title", "Адреса проверены"),
-                content=note,
-                duration=8000,
-                parent=self.window(),
-            )
+        self._unchecked.update(getattr(result, "touched", ()) or ())
         if snapshot is not None:
             # Записанное уходит из черновика само; остаётся только то, что
             # пользователь поменял во время записи.
@@ -480,6 +476,38 @@ class HostsPage(BasePage):
         if self._snapshot_pending and not self._applying:
             self._request_snapshot()
         self._render_changes()
+        self._start_address_check()
+
+    def _start_address_check(self) -> None:
+        """Отдаёт только что включённые сервисы на проверку адресов. Запись уже сделана."""
+        if self._cleanup_in_progress or self._applying or not self._unchecked or self._check_runtime.is_running():
+            return
+        create = getattr(self._hosts, "create_address_check_worker", None)
+        if create is None:
+            self._unchecked.clear()
+            return
+        names = tuple(sorted(self._unchecked))
+        self._unchecked.clear()
+        self._check_runtime.start_qthread_worker(
+            worker_factory=lambda request_id: create(request_id, names, self),
+            on_loaded=self._on_address_check_finished,
+            on_finished=lambda _worker: self._start_address_check(),
+        )
+
+    def _on_address_check_finished(self, request_id: int, result) -> None:
+        if not self._check_runtime.is_current(request_id, cleanup_in_progress=self._cleanup_in_progress):
+            return
+        note = str(getattr(result, "message", "") or "")
+        if note:
+            # Проверка заменила неработающие адреса или не дозвалась ни до одного.
+            InfoBar.info(
+                title=self._tr("page.hosts.addresses.checked.title", "Адреса проверены"),
+                content=note,
+                duration=8000,
+                parent=self.window(),
+            )
+        # Время проверки и, возможно, строки в файле стали другими.
+        self._request_snapshot()
 
     def _on_apply_failed(self, request_id: int, error: str) -> None:
         if not self._apply_runtime.is_current(request_id, cleanup_in_progress=self._cleanup_in_progress):

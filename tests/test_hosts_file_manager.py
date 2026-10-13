@@ -5,15 +5,6 @@ import unittest
 from unittest.mock import patch
 
 
-def _report():
-    from hosts.address_engine import EngineReport
-
-    return EngineReport(checked=3, changed=True, dropped={"ChatGPT (OpenAI)": ("1.1.1.1",)})
-
-
-_REPORT = _report()
-
-
 class HostsFileManagerTests(unittest.TestCase):
     def test_hosts_manager_has_no_legacy_bootstrap(self) -> None:
         from hosts import hosts as hosts_module
@@ -49,23 +40,22 @@ class HostsFileManagerTests(unittest.TestCase):
             patch.object(hosts_commands, "create_hosts_manager", return_value=FakeHostsManager()),
             patch.object(hosts_commands, "save_user_selection", side_effect=lambda sel: calls.append(f"save:{sel}") or True),
             patch.object(hosts_commands, "load_page_snapshot", return_value=snapshot),
-            patch.object(hosts_commands, "load_user_selection", return_value={"Discord": "hosts"}),
-            patch.object(
-                hosts_commands,
-                "check_addresses",
-                side_effect=lambda sel, **kw: calls.append(f"check:{sorted(kw['recheck'])}:{kw['strict']}") or _REPORT,
-            ),
+            patch.object(hosts_commands, "load_user_selection", return_value={"Discord": "hosts", "Rutor": "hosts"}),
+            patch.object(hosts_commands, "check_addresses", side_effect=AssertionError("запись не ждёт проверку адресов")),
         ):
-            result = hosts_commands.apply_hosts_draft({"ChatGPT": "xbox_dns", "Discord": "hosts"}, adobe=True)
+            result = hosts_commands.apply_hosts_draft(
+                {"ChatGPT": "xbox_dns", "Discord": "hosts", "Rutor": "off"}, adobe=True
+            )
 
         self.assertTrue(result.success)
         self.assertIs(result.snapshot, snapshot)
-        # Адреса проверяются до записи, и только у сервиса, который человек сейчас поменял.
         self.assertEqual(
             calls,
-            ["check:['ChatGPT']:True", "apply:xbox_dns", "save:{'ChatGPT': 'xbox_dns', 'Discord': 'hosts'}", "adobe:on"],
+            ["apply:xbox_dns", "save:{'ChatGPT': 'xbox_dns', 'Discord': 'hosts', 'Rutor': 'off'}", "adobe:on"],
         )
-        self.assertEqual(result.note, "Неработающие адреса убраны: ChatGPT.")
+        # На проверку адресов уходит только то, что эта запись включила: Discord был включён и раньше,
+        # Rutor выключен — проверять у них нечего.
+        self.assertEqual(result.touched, ("ChatGPT",))
 
     def test_apply_draft_does_not_save_selection_when_write_fails(self) -> None:
         from hosts import commands as hosts_commands
@@ -84,40 +74,42 @@ class HostsFileManagerTests(unittest.TestCase):
             patch.object(hosts_commands, "save_user_selection") as save,
             patch.object(hosts_commands, "load_page_snapshot", return_value=None),
             patch.object(hosts_commands, "load_user_selection", return_value={}),
-            patch.object(hosts_commands, "check_addresses", return_value=_REPORT),
-            patch("hosts.proxy_domains.get_engine_overlay", return_value={"catalog": "было"}),
-            patch("hosts.proxy_domains.set_engine_overlay") as restore,
         ):
             result = hosts_commands.apply_hosts_draft({"ChatGPT": "xbox_dns"}, adobe=True)
 
         self.assertFalse(result.success)
         self.assertEqual(result.message, "Файл hosts недоступен для изменения")
         save.assert_not_called()
-        # В файле остались прежние адреса — набор проверенных возвращается к прежнему, иначе
-        # страница показала бы включённые сервисы выключенными. И хвалиться проверкой нечего.
-        restore.assert_called_once_with({"catalog": "было"})
-        self.assertEqual(result.note, "")
+        # Ничего не записано — проверять нечего.
+        self.assertEqual(result.touched, ())
 
-    def test_failed_address_check_does_not_block_the_write(self) -> None:
+    def test_check_after_the_write_rewrites_hosts_only_when_it_found_something_better(self) -> None:
         from hosts import commands as hosts_commands
+        from hosts.address_engine import EngineReport
+        from hosts.state import HostsCommandResult
 
-        class FakeHostsManager:
-            last_status = "Файл hosts обновлён"
+        asked: list[tuple] = []
 
-            def apply_service_dns_selections(self, service_dns) -> bool:
-                return True
+        def check(selection, *, strict, recheck):
+            asked.append((selection, strict, sorted(recheck)))
+            return report
 
         with (
-            patch.object(hosts_commands, "create_hosts_manager", return_value=FakeHostsManager()),
-            patch.object(hosts_commands, "save_user_selection", return_value=True),
-            patch.object(hosts_commands, "load_page_snapshot", return_value=None),
-            patch.object(hosts_commands, "load_user_selection", return_value={}),
-            patch.object(hosts_commands, "check_addresses", side_effect=OSError("сеть упала")),
+            patch.object(hosts_commands, "check_addresses", side_effect=check),
+            patch.object(hosts_commands, "refresh_applied_selection", return_value=HostsCommandResult(True, changed=True)) as refresh,
         ):
-            result = hosts_commands.apply_hosts_draft({"ChatGPT": "xbox_dns"})
+            report = EngineReport(checked=6, changed=False)
+            same = hosts_commands.recheck_applied(("YouTube",))
+            refresh.assert_not_called()
 
-        self.assertTrue(result.success)
-        self.assertEqual(result.note, "")
+            report = EngineReport(checked=6, changed=True, dropped={"YouTube": ("1.1.1.1",)})
+            better = hosts_commands.recheck_applied(("YouTube",))
+            refresh.assert_called_once()
+
+        # Проверяется сохранённый выбор и только названные сервисы; мёртвый адрес убирается сразу.
+        self.assertEqual(asked[0], (None, True, ["YouTube"]))
+        self.assertEqual((same.changed, same.message), (False, ""))
+        self.assertEqual((better.changed, better.message), (True, "Неработающие адреса убраны: YouTube."))
 
     def test_apply_domain_rows_skips_write_when_content_is_unchanged(self) -> None:
         from hosts import hosts as hosts_module
