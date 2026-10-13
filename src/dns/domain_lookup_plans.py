@@ -251,6 +251,27 @@ def hosts_advice(report: DomainLookupReport) -> str:
     )
 
 
+def hosts_try_note(report: DomainLookupReport) -> str:
+    """Чем кончилась проба адреса из «Редактора hosts», когда совета она не дала. Пусто — пробы не было.
+
+    Без этой строки непонятно, пробовала ли проверка тумблер вообще: «не советует» читалось
+    как «не проверяет» (замечание владельца 2026-10-14).
+    """
+    road = getattr(report, "hosts_road", None)
+    if road is None or hosts_advice(report):
+        return ""
+    if road.tcp.status != "ok":
+        what = "соединение не установилось"
+    elif road.opens is False:
+        what = "приветствие с именем сайта тоже оборвали"
+    else:
+        what = "проба ничего не показала"
+    return (
+        f"Адрес из «Редактора hosts» ({road.ip}) тоже проверен — {what}. Значит, сейчас дело не в адресе: "
+        f"тумблер «{report.hosts_service}» в этот раз не помог бы."
+    )
+
+
 def build_road_lines(report: DomainLookupReport) -> tuple[InfoLine, ...]:
     """Строки о дороге программ: вывод, что по ней получается и что делать."""
     road = getattr(report, "road", None)
@@ -670,6 +691,11 @@ def build_site_lines(report: DomainLookupReport) -> list[str]:
     advice = hosts_advice(report)
     if advice:
         lines.append(f"Что поможет: {advice}")
+    note = hosts_try_note(report)
+    if note:
+        lines.append(note)
+        road = report.hosts_road
+        lines += [f"    {title}: {text}" for title, _state, text in road.lines]
     return [line for line in lines if line or line == ""]
 
 
@@ -742,6 +768,7 @@ __all__ = [
     "count_neighbors",
     "own_dns_trouble",
     "hosts_advice",
+    "hosts_try_note",
     "road_cure",
     "road_is_fatal",
     "road_problem",

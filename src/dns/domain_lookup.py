@@ -243,6 +243,8 @@ class DomainLookupReport:
     # Адреса имени в файле hosts: все и те из них, что записала программа (в своём блоке).
     hosts_rows: tuple[str, ...] = ()
     hosts_managed: tuple[str, ...] = ()
+    # Адреса IPv4, которые этот сервис записал бы имени.
+    hosts_offered: tuple[str, ...] = ()
     # Что получается по адресу из «Редактора hosts», пока его тумблер выключен. None — не пробовали.
     hosts_road: ProgramRoad | None = None
     network: NetworkInfo | None = None
@@ -502,8 +504,13 @@ def _program_road(domain: str | None, ip: str, cancel: SocketCancel) -> ProgramR
     return ProgramRoad(ip=ip, tcp=tcp, lines=lines, opens=opens)
 
 
-# Сколько адресов из «Редактора hosts» пробовать, пока один не откроет сайт.
+# Сколько адресов из «Редактора hosts» пробовать, пока один не откроет сайт, и пауза между попытками.
 HOSTS_ROAD_TRIES = 2
+HOSTS_ROAD_PAUSE_S = 1.5
+# Если первая попытка шла дольше этого, фильтр молча глушит имя: вторая кончится так же, а ждать её долго.
+HOSTS_ROAD_SLOW_S = 6.0
+# Запас времени на эту пробу: она идёт после остальных и не должна выглядеть как «проверки не успели».
+HOSTS_ROAD_BUDGET_S = 14.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -511,9 +518,9 @@ class HostsHelp:
     """Что о сайте знает «Редактор hosts» и что уже записано в файле."""
 
     service: str = ""
+    offered: tuple[str, ...] = ()
     rows: tuple[str, ...] = ()
     managed: tuple[str, ...] = ()
-    road: ProgramRoad | None = None
 
 
 def _hosts_facts(domain: str) -> tuple[str, tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
@@ -543,20 +550,38 @@ def _hosts_facts(domain: str) -> tuple[str, tuple[str, ...], tuple[str, ...], tu
     return service, offered, tuple(address.lower() for address in hosts_file_addresses(domain)), managed
 
 
-def _hosts_help(domain: str, cancel: SocketCancel) -> HostsHelp:
-    """Подсказка через hosts. Если тумблер сервиса выключен, его адреса пробуются настоящим именем сайта:
-    откроется по ним сайт — значит, тумблер поможет, и об этом можно сказать прямо."""
+def _hosts_help(domain: str) -> HostsHelp:
+    """Что «Редактор hosts» знает об имени и что уже записано в файле. В сеть не ходит."""
     try:
         service, offered, rows, managed = _hosts_facts(domain)
     except Exception:
         return HostsHelp()
+    return HostsHelp(service=service, offered=offered, rows=rows, managed=managed)
+
+
+def hosts_road_wanted(report: "DomainLookupReport") -> bool:
+    """Стоит ли пробовать адреса из «Редактора hosts»: сайт закрыт, сервис для имени есть, его тумблер выключен."""
+    site = getattr(report, "site", None) or {}
+    if str(site.get("level") or "") != "fail" or not report.hosts_service or not report.hosts_offered:
+        return False
+    return not any(address in report.hosts_rows for address in report.hosts_offered)
+
+
+def _hosts_road(domain: str, offered: tuple[str, ...], cancel: SocketCancel) -> ProgramRoad | None:
+    """Адреса из «Редактора hosts» настоящим именем сайта — по очереди, до первого, по которому сайт открылся.
+
+    Идёт после основной проверки сайта и с паузами: пачка одновременных соединений с одним именем
+    сама бывает поводом для фильтра оборвать их все, и проба мешала бы основной проверке.
+    """
     road: ProgramRoad | None = None
-    if service and not any(address in rows for address in offered):
-        for address in offered[:HOSTS_ROAD_TRIES]:
-            road = _program_road(domain, address, cancel)
-            if road.opens:
-                break
-    return HostsHelp(service=service, rows=rows, managed=managed, road=road)
+    for address in offered[:HOSTS_ROAD_TRIES]:
+        if not cancel.sleep(HOSTS_ROAD_PAUSE_S):
+            break
+        started = time.monotonic()
+        road = _program_road(domain, address, cancel)
+        if road.opens or time.monotonic() - started > HOSTS_ROAD_SLOW_S:
+            break
+    return road
 
 
 ROAD_DEAD = "dead"
@@ -1036,6 +1061,10 @@ class _Run:
     def halted(self) -> bool:
         return self.stopped() or self.expired()
 
+    def extend(self, seconds: float) -> None:
+        """Даёт время на шаг, который идёт после всех остальных."""
+        self._deadline = max(self._deadline, time.monotonic()) + max(0.0, float(seconds))
+
     def each_done(self, futures: dict[Future, object]):
         """Отдаёт (ключ, результат) по мере готовности; прекращает по «Стоп» и по времени."""
         pending = set(futures)
@@ -1184,7 +1213,7 @@ def _address_stage(run: _Run, report: DomainLookupReport, servers, use_external:
     if road_ip:
         futures[run.pool.submit(_program_road, domain, road_ip, run.cancel)] = "road"
     if domain and public:
-        futures[run.pool.submit(_hosts_help, domain, run.cancel)] = "hosts_help"
+        futures[run.pool.submit(_hosts_help, domain)] = "hosts_help"
     if ":" not in ip:
         futures[run.pool.submit(trace_route, ip, should_stop=run.halted)] = "route"
         if domain and public:
@@ -1228,7 +1257,11 @@ def _address_stage(run: _Run, report: DomainLookupReport, servers, use_external:
             report = replace(report, road=result)
         elif key == "hosts_help" and isinstance(result, HostsHelp):
             report = replace(
-                report, hosts_service=result.service, hosts_rows=result.rows, hosts_managed=result.managed, hosts_road=result.road
+                report,
+                hosts_service=result.service,
+                hosts_rows=result.rows,
+                hosts_managed=result.managed,
+                hosts_offered=result.offered,
             )
         elif key == "route" and isinstance(result, RouteTrace):
             report = replace(report, route=result)
@@ -1255,6 +1288,10 @@ def _address_stage(run: _Run, report: DomainLookupReport, servers, use_external:
         else:
             continue
         report = publish(report)
+    if domain and hosts_road_wanted(report) and not run.halted():
+        # Сайт закрыт, а у «Редактора hosts» есть для него свои адреса: откроется ли он по ним.
+        run.extend(HOSTS_ROAD_BUDGET_S)
+        report = publish(replace(report, hosts_road=_hosts_road(domain, report.hosts_offered, run.cancel)))
     return report
 
 
@@ -1276,6 +1313,7 @@ __all__ = [
     "ROAD_DEAD",
     "HostsHelp",
     "ProgramRoad",
+    "hosts_road_wanted",
     "program_ipv6",
     "road_is_the_only_way",
     "road_trouble",

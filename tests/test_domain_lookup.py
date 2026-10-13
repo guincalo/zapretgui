@@ -102,7 +102,8 @@ class _Network:
             patch.object(engine, "_http", http_spy),
             patch.object(engine, "_check_site", site_spy),
             # Подсказка через hosts читает каталог и файл hosts и пробует адреса по сети.
-            patch.object(engine, "_hosts_help", lambda domain, cancel: engine.HostsHelp()),
+            patch.object(engine, "_hosts_help", lambda domain: engine.HostsHelp()),
+            patch.object(engine, "_hosts_road", lambda domain, offered, cancel: None),
             patch.object(engine, "fetch_cert_names", lambda ip, server_name=None: CertNames("ok", ("cert.example",), "cn.example")),
             patch.object(engine, "_tcp_connect", lambda ip, port=443: engine.TcpReport(ip, port, "ok", 5.0)),
             patch("utils.windows_icmp.ping_ipv4_host_winapi", lambda *a, **k: ping),
@@ -782,7 +783,7 @@ class ProgramRoadTests(unittest.TestCase):
     программам только их; с тумблером — ставила их впереди адресов IPv4. Сайт проверялся по IPv4.
     """
 
-    def _run(self, *, first=V6, only_v6=False, v6_tcp="timeout", road=None, site_level="ok", v4_tcp="ok", help=None):
+    def _run(self, *, first=V6, only_v6=False, v6_tcp="timeout", road=None, site_level="ok", v4_tcp="ok", help=None, hosts_road=None):
         net = _Network(self)
         net.site = {"level": site_level, "headline": "www.youtube.com открывается"}
         infos = [(socket.AF_INET6, 0, 0, "", (V6, 0, 0, 0)), (socket.AF_INET, 0, 0, "", (V4, 0))]
@@ -799,8 +800,10 @@ class ProgramRoadTests(unittest.TestCase):
         patches = [
             patch("utils.net_resolve.resolve_addrinfo", lambda host, **k: infos),
             patch.object(engine, "_tcp_connect", tcp),
-            patch.object(engine, "_hosts_help", lambda domain, cancel: found),
+            patch.object(engine, "_hosts_help", lambda domain: found),
+            patch.object(engine, "_hosts_road", lambda domain, offered, cancel: self.hosts_tried.append(offered) or hosts_road),
         ]
+        self.hosts_tried: list[tuple[str, ...]] = []
         if road is not None:
             patches.append(patch.object(engine, "_program_road", lambda domain, ip, cancel: road))
         for item in patches:
@@ -920,41 +923,79 @@ class ProgramRoadTests(unittest.TestCase):
         """Владелец 2026-10-14: «только после hosts открывается, а программа это не проверяет и не
         советует включить обход». По адресу от DNS имя резали, по адресу из «Редактора hosts» — нет."""
         opens = engine.ProgramRoad("64.233.162.198", engine.TcpReport("64.233.162.198", 443, "ok", 20.0), opens=True)
-        report = self._run(first=V4, site_level="fail", help=engine.HostsHelp("YouTube", road=opens))
+        offered = ("64.233.162.198", "74.125.205.198")
+        report = self._run(first=V4, site_level="fail", help=engine.HostsHelp("YouTube", offered=offered), hosts_road=opens)
 
+        self.assertEqual(self.hosts_tried, [offered])
+        # Проба идёт после остальных проверок и не выдаёт себя за «проверки не успели».
+        self.assertFalse(report.timed_out)
         advice = plans.hosts_advice(report)
         self.assertIn("По адресу из «Редактора hosts» (64.233.162.198) этот сайт открывается", advice)
         self.assertIn("тумблер «YouTube»", advice)
         self.assertIn(advice, plans.build_status(report).text)
         self.assertIn(advice, plans.build_history_entry(report)["problems"])
         self.assertIn(f"Что поможет: {advice}", plans.build_text_report(report))
-        # Совет даётся только по доказанному: сайт закрыт, а по адресу из hosts открылся.
-        for kwargs in (
-            {"site_level": "ok", "help": engine.HostsHelp("YouTube", road=opens)},
-            {"site_level": "fail", "help": engine.HostsHelp("YouTube", road=engine.replace(opens, opens=False))},
-            {"site_level": "fail", "help": engine.HostsHelp("YouTube")},
-        ):
-            self.assertEqual(plans.hosts_advice(self._run(first=V4, **kwargs)), "")
+        self.assertEqual(plans.hosts_try_note(report), "")
 
-    def test_hosts_addresses_are_tried_only_while_the_tile_is_off(self) -> None:
+    def test_failed_hosts_try_is_shown_instead_of_silence(self) -> None:
+        """Снимок владельца на 21.1.7.150: сайт закрыт, совета нет — и не видно, пробовала ли проверка тумблер."""
+        from dns.ui import domain_lookup_cards as lookup_cards
+
+        cut = engine.ProgramRoad(
+            "64.233.162.198", engine.TcpReport("64.233.162.198", 443, "ok", 20.0), lines=(("Как Chrome", "fail", "соединение сбрасывают"),), opens=False
+        )
+        report = self._run(first=V4, site_level="fail", help=engine.HostsHelp("YouTube", offered=("64.233.162.198",)), hosts_road=cut)
+
+        self.assertEqual(plans.hosts_advice(report), "")
+        note = plans.hosts_try_note(report)
+        self.assertIn("Адрес из «Редактора hosts» (64.233.162.198) тоже проверен — приветствие с именем сайта тоже оборвали", note)
+        self.assertIn("тумблер «YouTube» в этот раз не помог бы", note)
+        text = plans.build_text_report(report)
+        self.assertIn(note, text)
+        self.assertIn("    Как Chrome: соединение сбрасывают", text)
+        site = {"id": "site:user:www.youtube.com", "name": "www.youtube.com", "level": "fail", "headline": "закрыт", "targets": [], "problems": []}
+        card = lookup_cards.build_lookup_cards(engine.replace(report, site=site))[0]
+        self.assertIn(note, [line.text for line in card.lines])
+
+    def test_hosts_addresses_are_tried_only_for_a_closed_site_with_the_tile_off(self) -> None:
+        offered = ("64.233.162.198",)
+        for name, kwargs in (
+            ("сайт открывается — пробовать незачем", {"site_level": "ok", "help": engine.HostsHelp("YouTube", offered=offered)}),
+            ("сервиса для имени нет", {"site_level": "fail", "help": engine.HostsHelp()}),
+            ("тумблер уже включён", {"site_level": "fail", "help": engine.HostsHelp("YouTube", offered=offered, rows=offered, managed=offered)}),
+        ):
+            with self.subTest(name):
+                report = self._run(first=V4, **kwargs)
+                self.assertEqual(self.hosts_tried, [])
+                self.assertIsNone(report.hosts_road)
+                self.assertEqual(plans.hosts_try_note(report), "")
+
+    def test_hosts_addresses_are_tried_one_by_one_until_the_site_opens(self) -> None:
         tried: list[str] = []
 
         def road(domain, ip, cancel):
             tried.append(ip)
             return engine.ProgramRoad(ip, engine.TcpReport(ip, 443, "ok", 5.0), opens=ip == "2.2.2.2")
 
-        offered = ("1.1.1.1", "2.2.2.2", "3.3.3.3")
+        with patch.object(engine, "_program_road", road), patch.object(engine, "HOSTS_ROAD_PAUSE_S", 0.0), patch.object(engine, "HOSTS_ROAD_TRIES", 3):
+            found = engine._hosts_road("www.youtube.com", ("1.1.1.1", "2.2.2.2", "3.3.3.3"), engine.SocketCancel())
+        self.assertEqual(tried, ["1.1.1.1", "2.2.2.2"])
+        self.assertEqual((found.ip, found.opens), ("2.2.2.2", True))
+        # Первая попытка шла долго — фильтр глушит имя молча, вторая кончилась бы так же: не ждём её.
+        tried.clear()
+        clock = iter([0.0, 9.0])
+        with (
+            patch.object(engine, "_program_road", road),
+            patch.object(engine, "HOSTS_ROAD_PAUSE_S", 0.0),
+            patch.object(engine.time, "monotonic", lambda: next(clock)),
+        ):
+            engine._hosts_road("www.youtube.com", ("1.1.1.1", "3.3.3.3"), engine.SocketCancel())
+        self.assertEqual(tried, ["1.1.1.1"])
+        # Проверку сняли — дальше не идём.
+        stopped = engine.SocketCancel()
+        stopped.cancel()
         with patch.object(engine, "_program_road", road):
-            with patch.object(engine, "_hosts_facts", lambda domain: ("YouTube", offered, (V6,), ())):
-                found = engine._hosts_help("www.youtube.com", engine.SocketCancel())
-            # Пробуются по очереди, до первого адреса, по которому сайт открылся.
-            self.assertEqual(tried, ["1.1.1.1", "2.2.2.2"])
-            self.assertEqual((found.service, found.road.ip, found.road.opens), ("YouTube", "2.2.2.2", True))
-            tried.clear()
-            # Адрес сервиса уже в файле — тумблер включён, пробовать нечего: сайт и так проверяется по нему.
-            with patch.object(engine, "_hosts_facts", lambda domain: ("YouTube", offered, ("1.1.1.1",), ("1.1.1.1",))):
-                self.assertIsNone(engine._hosts_help("www.youtube.com", engine.SocketCancel()).road)
-            self.assertEqual(tried, [])
+            self.assertIsNone(engine._hosts_road("www.youtube.com", ("1.1.1.1",), stopped))
 
     def test_road_probe_uses_the_real_site_name_and_judges_only_cut_greetings(self) -> None:
         from diagnostics import protocol_probe

@@ -166,6 +166,9 @@ def _site_card(report, title: str) -> Card | None:
     advice = plans.hosts_advice(report)
     if advice:
         notes.append(Line("info", "Что поможет", advice))
+    tried = plans.hosts_try_note(report)
+    if tried:
+        notes.append(Line("unknown", "Тумблер в «Редакторе hosts»", tried))
     if not notes:
         return card
     return replace(card, lines=(*notes, *card.lines), sections=(Section("Что важно знать", tuple(notes)), *card.sections))
