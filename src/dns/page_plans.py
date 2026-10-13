@@ -214,6 +214,55 @@ def describe_adapter_dns(
     )
 
 
+LEFTOVER_IPV6 = "ipv6"
+LEFTOVER_ADAPTER = "adapter"
+
+
+@dataclass(frozen=True, slots=True)
+class DnsLeftover:
+    """Дорога, по которой DNS-запросы идут мимо выбранного сервера."""
+
+    kind: str  # LEFTOVER_IPV6 | LEFTOVER_ADAPTER
+    adapter: str
+    addresses: tuple[str, ...]
+
+
+def _real_dns(addresses) -> tuple[str, ...]:
+    """Адреса DNS без заглушек Windows: fec0:0:0:ffff::1…3 она показывает там, где IPv6-DNS нет вовсе."""
+    return tuple(item for item in addresses if not str(item).lower().startswith("fec0:"))
+
+
+def find_dns_leftovers(adapters, selected_guids) -> tuple[DnsLeftover, ...]:
+    """Что осталось мимо выбранного сервера после его установки. Пусто — выбранный сервер один на всех дорогах.
+
+    Windows спрашивает все DNS-серверы, которые у неё есть, и берёт первый ответ:
+
+    - у адаптера с выбранным сервером по IPv4 может остаться автоматический DNS по
+      IPv6 (от роутера или провайдера) — так бывает, когда у выбранного сервера
+      адресов IPv6 нет; Windows спрашивает его наравне с выбранным;
+    - на подключённом, но не отмеченном адаптере остаётся его собственный DNS.
+
+    Пока сервер не выбран («Автоматически»), утечки нет: выбирать не из чего.
+    """
+    selected = set(selected_guids)
+    chosen = [item for item in adapters if item.guid in selected and item.connected and (item.static_ipv4 or item.static_ipv6)]
+    if not chosen:
+        return ()
+    found: list[DnsLeftover] = []
+    for adapter in chosen:
+        automatic_v6 = _real_dns(adapter.auto_ipv6)
+        if adapter.static_ipv4 and not adapter.static_ipv6 and automatic_v6:
+            found.append(DnsLeftover(LEFTOVER_IPV6, adapter.name, automatic_v6))
+    primary = {(adapter.static_ipv4 or adapter.static_ipv6)[0] for adapter in chosen}
+    for adapter in adapters:
+        if adapter.guid in selected or not adapter.connected:
+            continue
+        own = _real_dns((*adapter.static_ipv4, *adapter.static_ipv6)) or _real_dns((*adapter.auto_ipv4, *adapter.auto_ipv6))
+        if own and own[0] not in primary:
+            found.append(DnsLeftover(LEFTOVER_ADAPTER, adapter.name, own))
+    return tuple(found)
+
+
 def build_current_dns_plan(
     *, adapters, providers: dict, local_proxy_mode: str = "", local_proxy_server: str = ""
 ) -> CurrentDnsPlan:

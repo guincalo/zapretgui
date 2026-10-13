@@ -372,6 +372,37 @@ class DnsPageTests(unittest.TestCase):
         page._request_answering()
         page._answering_lane.request.assert_not_called()
 
+    def test_dns_that_stays_beside_the_chosen_server_is_named(self) -> None:
+        """Жалоба 2026-10-13 «шифрованный DNS не спасает»: Windows спрашивает все DNS, что у неё есть."""
+        from dns.page_plans import LEFTOVER_ADAPTER, LEFTOVER_IPV6, find_dns_leftovers
+
+        # У выбранного сервера нет IPv6, а роутер раздаёт свой IPv6-DNS: Windows спрашивает и его.
+        leaky = replace(ETHERNET, static_ipv4=("83.220.169.155",), static_ipv6=(), auto_ipv6=("fe80::1", "fec0:0:0:ffff::1"))
+        other = replace(WIFI_ADAPTER, auto_ipv4=("192.168.1.1",))
+
+        found = find_dns_leftovers((leaky, other, SPARE_ADAPTER), [ETH])
+        self.assertEqual([(item.kind, item.adapter, item.addresses) for item in found], [
+            (LEFTOVER_IPV6, "Ethernet", ("fe80::1",)),
+            (LEFTOVER_ADAPTER, "Wi-Fi", ("192.168.1.1",)),
+        ])
+        # Заглушки Windows fec0:… — не DNS; отключённый адаптер не в счёт; пока сервер не выбран, утечки нет.
+        only_stub = replace(leaky, auto_ipv6=("fec0:0:0:ffff::1", "fec0:0:0:ffff::2"))
+        self.assertEqual(find_dns_leftovers((only_stub, SPARE_ADAPTER), [ETH]), ())
+        self.assertEqual(find_dns_leftovers((WIFI_ADAPTER,), [WIFI]), ())
+        # Шифрованный DNS с адресом ::1 закрывает IPv6; тот же сервер на втором адаптере — не утечка.
+        closed = replace(leaky, static_ipv4=("127.0.0.1",), static_ipv6=("::1",))
+        twin = replace(WIFI_ADAPTER, static_ipv4=("127.0.0.1",), auto_ipv4=())
+        self.assertEqual(find_dns_leftovers((closed, twin), [ETH]), ())
+
+        page = self._page(state=replace(STATE, adapters=(leaky, other, SPARE_ADAPTER)))
+        page.now_panel._chips[WIFI].setChecked(False)
+        notice = page.now_panel.notice_label.text()
+        self.assertIn("На адаптере «Ethernet» по IPv6 остался DNS роутера или провайдера (fe80::1)", notice)
+        self.assertIn("Адаптер «Wi-Fi» подключён, но не отмечен: на нём свой DNS (192.168.1.1)", notice)
+        # Отметили второй адаптер — его строка ушла, осталась только про IPv6.
+        page.now_panel._chips[WIFI].setChecked(True)
+        self.assertNotIn("не отмечен", page.now_panel.notice_label.text())
+
     def test_interception_is_not_blamed_on_automatic_or_encrypted_dns(self) -> None:
         from dns.answering import Answering
 

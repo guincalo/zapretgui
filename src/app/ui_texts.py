@@ -2149,6 +2149,14 @@ TEXTS: dict[str, dict[str, str]] = {
         "ru": "Вы выбрали {name}, но отвечает не он, а {owner}: провайдер или роутер перехватывает обычные DNS-запросы. Выберите сервер из группы «Шифрованные» — его ответы не подменить.",
         "en": "You chose {name}, but {owner} answers instead: your provider or router intercepts plain DNS queries. Pick a server from the “Encrypted” group — its answers cannot be replaced.",
     },
+    "page.network.now.leftover.ipv6": {
+        "ru": "На адаптере «{adapter}» по IPv6 остался DNS роутера или провайдера ({addresses}): Windows спрашивает и его, так что ответ может прийти не от выбранного сервера. У выбранного сервера адресов IPv6 нет — выберите сервер с IPv6 или из группы «Шифрованные».",
+        "en": "Adapter “{adapter}” still has the router's or provider's DNS over IPv6 ({addresses}): Windows asks it too, so the answer may come from it instead of the chosen server. The chosen server has no IPv6 addresses — pick a server with IPv6 or one from the “Encrypted” group.",
+    },
+    "page.network.now.leftover.adapter": {
+        "ru": "Адаптер «{adapter}» подключён, но не отмечен: на нём свой DNS ({addresses}), и запросы через него идут мимо выбранного сервера.",
+        "en": "Adapter “{adapter}” is connected but not ticked: it keeps its own DNS ({addresses}), and queries through it bypass the chosen server.",
+    },
     "page.network.now.intercepted.unknown": {
         "ru": "Вы выбрали {name}, но отвечает не он, а чужая сеть: провайдер или роутер перехватывает обычные DNS-запросы. Выберите сервер из группы «Шифрованные» — его ответы не подменить.",
         "en": "You chose {name}, but another network answers instead: your provider or router intercepts plain DNS queries. Pick a server from the “Encrypted” group — its answers cannot be replaced.",
