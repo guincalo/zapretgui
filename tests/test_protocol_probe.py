@@ -58,6 +58,23 @@ class ProtocolJudgeTests(unittest.TestCase):
                 [line] = pp.judge(_facts(tls13=bc.HelloResult(kind)))
                 self.assertEqual((line.state, line.word), expected)
 
+    def test_old_hello_cut_while_the_new_one_passes_is_explained(self) -> None:
+        # Отчёт 2026-10-13: обход пропускал к youtube.com TLS 1.3, а TLS 1.2 молчал — строка читалась как «заблокирован».
+        lines = {line.key: line for line in pp.judge(_facts(
+            tls12=bc.HelloResult(bc.HELLO_TIMEOUT), tls13=bc.HelloResult(bc.HELLO_OK, ms=29.0)
+        ))}
+
+        old = lines[pp.PROTO_TLS12]
+        self.assertEqual((old.state, old.word), (pp.STATE_FAIL, "молчит"))
+        self.assertIn("а TLS 1.3 к тому же сайту проходит", old.text)
+        self.assertIn("Браузеру это не мешает", old.text)
+        self.assertIn("«Подбор стратегии»", old.text)
+        # Обе версии закрыты — это обычная блокировка, прежние слова.
+        [both] = [line for line in pp.judge(_facts(
+            tls12=bc.HelloResult(bc.HELLO_TIMEOUT), tls13=bc.HelloResult(bc.HELLO_TIMEOUT)
+        )) if line.key == pp.PROTO_TLS12]
+        self.assertIn("так фильтр молча глушит соединения с этим сайтом", both.text)
+
     def test_cancelled_probe_gives_no_lines(self) -> None:
         self.assertEqual(pp.judge(None), ())
         self.assertEqual(pp.judge(_facts(tls12=bc.HelloResult(bc.HELLO_OK, ms=1.0), cancelled=True)), ())

@@ -264,7 +264,30 @@ def judge(facts: ProtocolFacts | None) -> tuple[ProtocolLine, ...]:
     found = tuple(line for line in lines if line is not None)
     if any(line.code == CODE_BROWSER_ONLY for line in found):
         found = tuple(_calm(line) if line.key in (PROTO_TLS12, PROTO_TLS13) else line for line in found)
+    states = {line.key: line.state for line in found}
+    if states.get(PROTO_TLS12) == STATE_FAIL and states.get(PROTO_TLS13) == STATE_OK:
+        found = tuple(_old_hello_only(line) if line.key == PROTO_TLS12 else line for line in found)
     return found
+
+
+def _old_hello_only(line: ProtocolLine) -> ProtocolLine:
+    """TLS 1.2 режут, а TLS 1.3 к тому же сайту проходит: объяснить, кому это мешает и что делать.
+
+    Так выглядит обход, который закрывает не все приветствия (отчёт владельца 2026-10-13:
+    простое разрезание пропускало к youtube.com только TLS 1.3). Красной строка остаётся —
+    дорога и правда закрыта, — но без пояснения она читалась как «сайт заблокирован».
+    """
+    how = "молча глушит (ответа нет)" if line.word == "молчит" else "обрывает"
+    return ProtocolLine(
+        line.key,
+        line.title,
+        line.state,
+        line.word,
+        f"приветствие этой версии фильтр {how}, а TLS 1.3 к тому же сайту проходит. Браузеру это не мешает: он берёт "
+        "TLS 1.3. Мешает старым программам и телевизорам — им поможет другой пресет или «Подбор стратегии»",
+        line.ms,
+        line.code,
+    )
 
 
 # Что это за дорога — одной фразой для человека, который видит слово впервые.
