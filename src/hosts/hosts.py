@@ -71,6 +71,62 @@ def _remove_managed_hosts_block(lines: list[str]) -> tuple[list[str], int]:
     return new_lines, removed_entries
 
 
+# Блоки других возможностей программы в том же файле: у них свой хозяин, их строки не трогаются.
+_OTHER_BLOCKS: tuple[tuple[str, str], ...] = (
+    ("# >>> zapretgui:", "# <<< zapretgui:"),
+    ("# MAX BLOCKED BY ZAPRET GUI", "# END MAX BLOCK"),
+    # У блока Telegram Proxy нет конечной метки: он идёт до пустой строки или до конца файла.
+    ("# --- Telegram Proxy (auto-managed", ""),
+)
+
+
+def _drop_conflicting_foreign_rows(lines: list[str], rows: list[tuple[str, str]]) -> tuple[list[str], list[str]]:
+    """Убирает из чужих строк hosts адреса, которые мешают включённому сервису.
+
+    Решение владельца 2026-10-14: «такие записи надо удалять, даже если они ручные, — если они
+    мешают и для нашего ресурса». Повод: в конце файла стояли две строки IPv6 для www.youtube.com.
+    Блок программы стоит выше, но Windows складывает все строки имени вместе и ставит IPv6 первым,
+    поэтому программы шли на адрес из чужой строки, а не из блока.
+
+    Мешает строка с именем, которое ведёт включённый сервис, и с адресом, которого у сервиса для
+    этого имени нет. Такая же строка, как в блоке, никому не мешает и остаётся. В строке на
+    несколько имён убирается только мешающее имя. ``lines`` — файл уже без блока программы.
+    Возвращает (строки файла, убранные записи «адрес имя»).
+    """
+    wanted: dict[str, set[str]] = {}
+    for domain, ip in rows:
+        wanted.setdefault(str(domain).strip().casefold(), set()).add(str(ip).strip().casefold())
+    kept: list[str] = []
+    dropped: list[str] = []
+    closing: str | None = None
+    for line in lines:
+        stripped = line.strip()
+        if closing is not None:
+            kept.append(line)
+            if (closing and stripped.startswith(closing)) or (not closing and not stripped):
+                closing = None
+            continue
+        opened = next((end for begin, end in _OTHER_BLOCKS if stripped.startswith(begin)), None)
+        if opened is not None:
+            closing = opened
+            kept.append(line)
+            continue
+        parsed = None if stripped.startswith("#") else _parse_hosts_mapping_line(line)
+        if parsed is None:
+            kept.append(line)
+            continue
+        ip, domains, comment = parsed
+        clash = [domain for domain in domains if domain.casefold() in wanted and ip.casefold() not in wanted[domain.casefold()]]
+        if not clash:
+            kept.append(line)
+            continue
+        dropped.extend(f"{ip} {domain}" for domain in clash)
+        rest = [domain for domain in domains if domain not in clash]
+        if rest:
+            kept.append(_format_hosts_mapping_line(ip, rest, comment))
+    return kept, dropped
+
+
 def _format_hosts_mapping_line(ip: str, domains: list[str], comment: str) -> str:
     line = f"{ip} {' '.join(domains)}"
     if comment:
@@ -700,6 +756,11 @@ class HostsManager:
             ipv6_available=allow_ipv6,
             build_desired_rows=_desired_rows,
         )
+        if not should_apply and block_rows and has_saved_selection:
+            # Блок верен, но рядом появилась чужая строка с другим адресом для того же имени.
+            foreign, _removed = _remove_managed_hosts_block((content or "").splitlines(keepends=True))
+            if _drop_conflicting_foreign_rows(foreign, _desired_rows())[1]:
+                should_apply, reason = True, "включённым сервисам мешают чужие строки hosts"
         if not should_apply:
             log(f"Hosts при запуске: обновление не нужно ({reason})", "DEBUG")
             return False, reason
@@ -765,8 +826,11 @@ class HostsManager:
                 self.set_status(f"Файл hosts обновлён: удалено {removed_count} записей")
                 return True
 
-            # Чужие строки не трогаем: блок встаёт перед первой записью файла,
-            # поэтому Windows всё равно возьмёт адрес из него.
+            # Чужие строки остаются на месте, кроме тех, что мешают включённому сервису: другой адрес
+            # для того же имени Windows ставит наравне с блоком, а IPv6 — впереди него.
+            new_lines, conflicts = _drop_conflicting_foreign_rows(new_lines, desired_rows)
+            if conflicts:
+                log(f"Hosts: убраны чужие строки, мешавшие включённым сервисам: {'; '.join(conflicts)}", "WARNING")
             _insert_managed_hosts_block(new_lines, desired_rows)
 
             updated_content = "".join(new_lines)
@@ -779,7 +843,10 @@ class HostsManager:
                 self.set_status("Не удалось записать файл hosts")
                 return False
 
-            self.set_status(f"Файл hosts обновлён: применено {_format_hosts_entries_count(len(desired_rows))}")
+            status = f"Файл hosts обновлён: применено {_format_hosts_entries_count(len(desired_rows))}"
+            if conflicts:
+                status += f". Убраны чужие строки, которые мешали: {', '.join(conflicts)}"
+            self.set_status(status)
             log(
                 f"✅ apply_domain_ip_rows: removed={removed_count}, added={len(desired_rows)}",
                 "DEBUG",
