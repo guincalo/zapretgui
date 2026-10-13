@@ -81,7 +81,7 @@ class HostsCatalogSqliteTests(unittest.TestCase):
         self.assertFalse(
             (PROJECT_ROOT / "private_zapretgui" / "resources" / "json" / "hosts_catalog").exists()
         )
-        self.assertEqual(catalog.catalog_version, "2026.10.13.3")
+        self.assertEqual(catalog.catalog_version, "2026.10.14.1")
         # У каждого сервиса свой значок, а не запасной глобус.
         self.assertEqual(
             [name for name, (icon, _color) in catalog.service_icons.items() if icon == "fa5s.globe"],
@@ -171,7 +171,7 @@ class HostsCatalogSqliteTests(unittest.TestCase):
                     0,
                     dead_relay,
                 )
-            self.assertEqual(connection.execute("SELECT COUNT(*) FROM hosts_entries").fetchone()[0], 552)
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM hosts_entries").fetchone()[0], 549)
             # У XBOX DNS остался один живой посредник — вход в Xbox Live: профиль
             # предлагается только сервису Microsoft.
             self.assertEqual(
@@ -192,7 +192,7 @@ class HostsCatalogSqliteTests(unittest.TestCase):
         после этого не осталось рабочего профиля, выключены, а не удалены.
         """
         relays = {
-            "comss_dns": ("157.22.177.90", "95.81.102.20", "132.243.112.221"),
+            "comss_dns": ("157.22.177.90", "157.22.178.170", "132.243.112.221"),
             "geohide": ("159.194.200.33", "193.233.112.67", "193.233.112.68", "193.233.112.88"),
             "astracat": ("217.60.179.6",),
         }
@@ -496,6 +496,64 @@ class HostsCatalogSqliteTests(unittest.TestCase):
             stored["catalog"] = "старый каталог"
             self.proxy_domains.invalidate_hosts_catalog_cache()
             self.assertEqual(self.proxy_domains.get_service_domain_ip_rows("YouTube", HOSTS_PROFILE_ID), before)
+
+    def test_direct_services_hold_only_addresses_that_answered_on_2026_10_14(self) -> None:
+        """Сверка прямых сервисов 2026-10-14 (стенд win10 и российские домашние сети).
+
+        Supercell: посредники 144.31.14.104, 185.246.223.127 и 185.36.125.240–.245 не принимали
+        соединение, 45.95.233.23 отвечал чужим сертификатом. Игровые серверы и магазин (он из России
+        отдаёт отказ) идут через живых посредников; остальные имена открываются из России напрямую,
+        в hosts они вели на мёртвый адрес и только мешали — убраны.
+        Rutor: адреса Cloudflare отдавали «error code: 1034» вместо сайта — стоят настоящие адреса.
+        """
+        connection = sqlite3.connect(PRIVATE_DATABASE)
+        try:
+            rows = connection.execute("SELECT service_id, hostname, ip_address FROM hosts_entries").fetchall()
+        finally:
+            connection.close()
+        addresses = {ip for _service, _host, ip in rows}
+        for dead in (
+            "144.31.14.104", "185.246.223.127", "45.95.233.23",
+            "185.36.125.240", "185.36.125.241", "185.36.125.244", "185.36.125.245",
+            "173.245.59.219", "172.64.33.155",  # Cloudflare: «error code: 1034»
+            "185.199.110.133",  # отдавал camo.githubassets.com сертификат *.github.io
+        ):
+            self.assertNotIn(dead, addresses, dead)
+        hosts = {host for _service, host, _ip in rows}
+        # Имён больше нет в DNS (1.1.1.1, 8.8.8.8, 9.9.9.9 и 77.88.8.8 ответили «домена нет»).
+        self.assertNotIn("static.instagram.com", hosts)
+        self.assertNotIn("d.rutor.is", hosts)
+
+        def of(service_id: str) -> dict[str, list[str]]:
+            found: dict[str, list[str]] = {}
+            for service, host, ip in rows:
+                if service == service_id:
+                    found.setdefault(host, []).append(ip)
+            return found
+
+        supercell = of("hosts.supercell")
+        self.assertEqual(
+            set(supercell),
+            {
+                "game.brawlstarsgame.com", "game.clashroyaleapp.com", "game.mocogame.com",
+                "game.squadbustersgame.com", "gamea.clashofclans.com", "store.supercell.com",
+            },
+        )
+        # У магазина два посредника разных владельцев: умный движок ставит первым ответивший.
+        self.assertEqual(supercell["store.supercell.com"], ["143.20.64.192", "217.60.179.6"])
+        self.assertEqual(
+            of("hosts.rutor"),
+            {
+                "rutor.info": ["193.46.255.29"],
+                "rutor.is": ["193.46.255.26"],
+                "d.rutor.info": ["193.46.255.29"],
+                "tracker.openbittorrent.com": ["52.223.13.41"],
+            },
+        )
+        github = of("hosts.github")
+        self.assertEqual(github["github.com"], ["140.82.121.3", "140.82.121.4"])
+        self.assertEqual(github["camo.githubassets.com"], ["185.199.108.154", "185.199.109.154"])
+        self.assertEqual(of("hosts.render"), {"render.com": ["216.24.57.1"]})
 
     def test_direct_services_carry_ipv6_wherever_the_site_itself_has_it(self) -> None:
         # Решение владельца 2026-10-13: один тумблер с IPv4 и IPv6 сразу, а не отдельные «…IPv6».

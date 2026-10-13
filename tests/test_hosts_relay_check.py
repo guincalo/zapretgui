@@ -43,7 +43,7 @@ class HostsRelayCheckTests(unittest.TestCase):
         from hosts import proxy_domains
 
         relays = proxy_domains.get_relay_addresses()
-        for address in ("83.217.211.149", "157.22.177.90", "95.81.102.20", "132.243.112.221", "217.60.179.6", "159.194.200.33"):
+        for address in ("83.217.211.149", "157.22.177.90", "157.22.178.170", "132.243.112.221", "217.60.179.6", "159.194.200.33"):
             self.assertIn(address, relays)
         # Обычные адреса сайтов из профилей Comss и GeoHide: на них ссылались отказы у пользователя.
         for address in ("108.156.22.111", "65.9.46.4", "65.9.46.49", "40.180.22.93", "52.50.163.132", "52.208.113.195", "35.228.34.253"):
