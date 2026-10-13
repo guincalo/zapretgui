@@ -81,7 +81,7 @@ class HostsCatalogSqliteTests(unittest.TestCase):
         self.assertFalse(
             (PROJECT_ROOT / "private_zapretgui" / "resources" / "json" / "hosts_catalog").exists()
         )
-        self.assertEqual(catalog.catalog_version, "2026.10.13.1")
+        self.assertEqual(catalog.catalog_version, "2026.10.13.2")
         # У каждого сервиса свой значок, а не запасной глобус.
         self.assertEqual(
             [name for name, (icon, _color) in catalog.service_icons.items() if icon == "fa5s.globe"],
@@ -171,7 +171,7 @@ class HostsCatalogSqliteTests(unittest.TestCase):
                     0,
                     dead_relay,
                 )
-            self.assertEqual(connection.execute("SELECT COUNT(*) FROM hosts_entries").fetchone()[0], 547)
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM hosts_entries").fetchone()[0], 552)
             # У XBOX DNS остался один живой посредник — вход в Xbox Live: профиль
             # предлагается только сервису Microsoft.
             self.assertEqual(
@@ -435,6 +435,36 @@ class HostsCatalogSqliteTests(unittest.TestCase):
                 self.assertEqual(addresses, by_host["www.youtube.com"])
         # Этот адрес 2026-10-13 не отвечал ни со стенда, ни из шести российских сетей.
         self.assertNotIn("216.58.206.78", {ip for _hostname, ip in rows})
+
+    def test_direct_services_carry_ipv6_wherever_the_site_itself_has_it(self) -> None:
+        # Решение владельца 2026-10-13: один тумблер с IPv4 и IPv6 сразу, а не отдельные «…IPv6».
+        # IPv6 есть не у всех: у Discord, x.com, github.com, Rutor и Render его нет у самих сайтов,
+        # а Supercell, ntc.party и голос Discord идут через посредника по IPv4.
+        import ipaddress
+
+        expected = {
+            "hosts.instagram": {
+                "b.i.instagram.com", "help.instagram.com", "instagram.com", "www.instagram.com",
+                "scontent.cdninstagram.com", "scontent-hel3-1.cdninstagram.com", "z-p42-chat-e2ee-ig.facebook.com",
+            },
+            "hosts.github": {"github.githubassets.com"},
+            "hosts.whatsapp_ipv6": {"www.whatsapp.com", "web.whatsapp.com", "static.whatsapp.net", "scontent.whatsapp.net"},
+            "hosts.youtube": {"www.youtube.com", "youtube.com", "m.youtube.com"},
+        }
+        connection = sqlite3.connect(PRIVATE_DATABASE)
+        try:
+            for service_id, hostnames in expected.items():
+                rows = connection.execute(
+                    "SELECT hostname, ip_address FROM hosts_entries WHERE service_id = ?", (service_id,)
+                ).fetchall()
+                with_ipv6 = {hostname for hostname, ip in rows if ipaddress.ip_address(ip).version == 6}
+                with_ipv4 = {hostname for hostname, ip in rows if ipaddress.ip_address(ip).version == 4}
+                with self.subTest(service_id=service_id):
+                    self.assertEqual(with_ipv6, hostnames)
+                    # У каждого имени с IPv6 есть и IPv4: без IPv6 на компьютере тумблер продолжает работать.
+                    self.assertLessEqual(with_ipv6, with_ipv4)
+        finally:
+            connection.close()
 
     def test_githubusercontent_service_has_ipv6_and_ipv4_for_every_host(self) -> None:
         connection = sqlite3.connect(PRIVATE_DATABASE)
