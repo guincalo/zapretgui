@@ -81,7 +81,7 @@ class HostsCatalogSqliteTests(unittest.TestCase):
         self.assertFalse(
             (PROJECT_ROOT / "private_zapretgui" / "resources" / "json" / "hosts_catalog").exists()
         )
-        self.assertEqual(catalog.catalog_version, "2026.10.09.6")
+        self.assertEqual(catalog.catalog_version, "2026.10.13.1")
         # У каждого сервиса свой значок, а не запасной глобус.
         self.assertEqual(
             [name for name, (icon, _color) in catalog.service_icons.items() if icon == "fa5s.globe"],
@@ -171,7 +171,7 @@ class HostsCatalogSqliteTests(unittest.TestCase):
                     0,
                     dead_relay,
                 )
-            self.assertEqual(connection.execute("SELECT COUNT(*) FROM hosts_entries").fetchone()[0], 517)
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM hosts_entries").fetchone()[0], 547)
             # У XBOX DNS остался один живой посредник — вход в Xbox Live: профиль
             # предлагается только сервису Microsoft.
             self.assertEqual(
@@ -410,6 +410,31 @@ class HostsCatalogSqliteTests(unittest.TestCase):
         self.proxy_domains.invalidate_hosts_catalog_cache()
         self.assertIn("dns_ai", self.proxy_domains.get_service_available_dns_profiles("Claude"))
         self.assertNotIn("dns_ai", self.proxy_domains.get_service_available_dns_profiles("Gemini AI"))
+
+    def test_youtube_service_covers_the_names_dns_denies_with_ipv4_and_ipv6(self) -> None:
+        # С 2026-10 на обычный запрос DNS про youtube.com, www.youtube.com и m.youtube.com по дороге
+        # приходит подставной «такого домена нет». Записи в hosts снимают зависимость от DNS целиком.
+        import ipaddress
+
+        connection = sqlite3.connect(PRIVATE_DATABASE)
+        try:
+            rows = connection.execute(
+                "SELECT hostname, ip_address FROM hosts_entries WHERE service_id = 'hosts.youtube' ORDER BY priority"
+            ).fetchall()
+        finally:
+            connection.close()
+
+        by_host: dict[str, list] = {}
+        for hostname, ip in rows:
+            by_host.setdefault(hostname, []).append(ipaddress.ip_address(ip))
+        self.assertEqual(list(by_host), ["www.youtube.com", "youtube.com", "m.youtube.com"])
+        for hostname, addresses in by_host.items():
+            with self.subTest(hostname=hostname):
+                # Адреса IPv4 идут первыми: у кого IPv6 нет, тому программа пишет только их.
+                self.assertEqual([address.version for address in addresses], [4] * 6 + [6] * 6)
+                self.assertEqual(addresses, by_host["www.youtube.com"])
+        # Этот адрес 2026-10-13 не отвечал ни со стенда, ни из шести российских сетей.
+        self.assertNotIn("216.58.206.78", {ip for _hostname, ip in rows})
 
     def test_githubusercontent_service_has_ipv6_and_ipv4_for_every_host(self) -> None:
         connection = sqlite3.connect(PRIVATE_DATABASE)
