@@ -115,6 +115,68 @@ class InstallerRuntimeSwapTests(unittest.TestCase):
         self.assertIn("Sleep(", rename)
         self.assertIn("for Attempt := 1 to", remove)
 
+    def test_processes_are_stopped_again_right_before_the_working_copy_is_moved(self) -> None:
+        """Жалоба 2026-10-13 «рабочая папка занята другим процессом».
+
+        Процессы останавливаются в PrepareToInstall, потом идёт распаковка. Программу за это
+        время могут запустить снова, и одной остановки в начале мало.
+        """
+        stop = self.swap.index("StopInstallRootProcesses(AppRoot, ExpandConstant('{srcexe}'))")
+        move_aside = self.swap.index("TryRenameRuntimeDirectory(LiveDir, BackupDir)")
+        rounds = self.swap.index("for Round := 1 to")
+
+        self.assertLess(rounds, stop)
+        self.assertLess(stop, move_aside)
+        # Без исключения самого установщика он завершил бы себя: его запускают из каталога состояния.
+        self.assertNotIn("StopInstallRootProcesses(AppRoot, '')", self.swap)
+
+    def test_busy_working_copy_is_reported_with_the_name_of_its_holder(self) -> None:
+        describe = self.swap.index("DescribeRuntimeDirectoryHolders(LiveDir)")
+        generic = self.swap.index("'рабочая папка занята другим процессом'")
+
+        self.assertLess(self.swap.index("TryRenameRuntimeDirectory(LiveDir, BackupDir)"), describe)
+        self.assertLess(describe, generic)
+        self.assertIn("'рабочую папку держит другая программа — ' + Holders", self.swap)
+        # Чужую программу установщик только называет: завершать её он не вправе.
+        holders = _routine(self.iss, "DescribeRuntimeDirectoryHolders")
+        self.assertNotIn("Stop-Process", holders)
+        self.assertNotIn("taskkill", holders.lower())
+
+    def test_holder_script_gets_a_working_directory_that_exists_for_64_bit_programs(self) -> None:
+        """С пустой рабочей папкой Inno берёт папку PowerShell — C:\\Windows\\Sysnative\\...
+
+        Это имя видит только 32-разрядный установщик. 64-разрядный PowerShell получал
+        несуществующую текущую папку, Add-Type не мог запустить компилятор, и сценарий
+        возвращал пустой ответ: на стенде 2026-10-13 установщик так и не назвал программу,
+        которая держала папку, хотя тот же сценарий вручную её находил.
+        """
+        holders = _routine(self.iss, "DescribeRuntimeDirectoryHolders")
+        launch = holders[holders.index("if not Exec("):]
+        launch = launch[: launch.index(") then")]
+
+        self.assertIn("NativePowerShellExe", launch)
+        self.assertIn("ExpandConstant('{win}'), SW_HIDE", launch)
+        self.assertNotIn("'', SW_HIDE", launch)
+
+    def test_holder_script_is_plain_ascii_and_uses_three_ways_to_find_the_holder(self) -> None:
+        routine = _routine(self.iss, "RuntimeHoldersScript")
+        lines = re.findall(r"^  Result := Result \+ '(.*)' \+ #13#10;$", routine, re.MULTILINE)
+        script = "\n".join(line.replace("''", "'") for line in lines)
+
+        self.assertGreater(len(lines), 60)
+        # Файл пишется без BOM: Windows PowerShell 5.1 прочла бы кириллицу в системной кодировке.
+        self.assertTrue(script.isascii())
+        self.assertTrue(script.startswith("param([string]$Dir, [string]$Out)"))
+        for marker in ("RmGetList", ".Modules", "CurrentDirectory"):
+            self.assertIn(marker, script)
+        # Ответ уходит в файл с BOM: перехват вывода консоли на стенде терял единственную строку
+        # без перевода строки, а названия программ бывают русскими.
+        self.assertIn("[System.IO.File]::WriteAllText($Out, $text, (New-Object System.Text.UTF8Encoding($true)))", script)
+        self.assertIn("LoadStringsFromFile(AnswerPath, Lines)", _routine(self.iss, "DescribeRuntimeDirectoryHolders"))
+        self.assertNotIn("Stop-Process", script)
+        # Препроцессор Inno разбирает такие вставки даже внутри строк.
+        self.assertNotIn("{#", script)
+
     def test_swap_runs_before_anything_else_after_installation(self) -> None:
         step_changed = _routine(self.iss, "CurStepChanged")
         swap_call = step_changed.index("CommitRuntimeSwap(FailureReason)")
