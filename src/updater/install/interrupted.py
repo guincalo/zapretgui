@@ -12,6 +12,7 @@ from __future__ import annotations
 «сорвалось ли прошлое обновление и что об этом известно».
 """
 
+import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -33,6 +34,7 @@ UPDATE_LOG_LEVEL = "🔁 UPDATE"
 # доказывает: установка могла оборваться, и программа обязана запускаться.
 PREPARED_IN_PROGRESS_SECONDS = 2 * 60.0
 LAUNCHED_IN_PROGRESS_SECONDS = 5 * 60.0
+_CODE_RE = re.compile(r"\A[a-z][a-z0-9]{0,15}\Z")
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,6 +47,23 @@ class InterruptedUpdate:
     reason: str
     installer_available: bool
     state: HandoffState
+    # Короткая причина для сервера очереди: код наблюдателя (exit5, same…),
+    # ``cut`` — установка оборвалась (перезагрузка, выключение, наблюдателя
+    # закрыли), ``other`` — причина неизвестна.
+    code: str = "other"
+
+
+def failure_code(record: UpdateHandoffRecord) -> str:
+    """Короткая причина сорвавшейся установки по записи наблюдателя."""
+    if record.state is HandoffState.LAUNCHED:
+        return "cut"
+    written = str(record.failure or "").strip().lower()
+    if _CODE_RE.fullmatch(written):
+        return written
+    exit_code = record.installer_exit_code
+    if exit_code is not None and exit_code != 0 and 0 <= exit_code < 1000:
+        return f"exit{exit_code}"
+    return "other"
 
 
 def _installer_exists(installer_path: str) -> bool:
@@ -158,6 +177,7 @@ def detect_interrupted_update(
         reason=reason,
         installer_available=_installer_exists(known.installer_path),
         state=known.state,
+        code=failure_code(known),
     )
 
 
@@ -182,5 +202,6 @@ __all__ = [
     "InterruptedUpdate",
     "describe_interrupted_update",
     "detect_interrupted_update",
+    "failure_code",
     "installation_in_progress",
 ]

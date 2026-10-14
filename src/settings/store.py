@@ -697,12 +697,15 @@ def get_auto_install_attempts(version: str) -> int:
 
 
 def get_auto_install_state() -> dict[str, Any]:
-    """``{"version", "attempts", "from_version", "granted_at", "outcome"}``."""
+    """``{"version", "attempts", "from_version", "granted_at", "outcome", "why"}``."""
     return dict(_read_path_value(("updater", "auto_install"), {}) or {})
 
 
-def set_auto_install_outcome(version: str, outcome: str) -> bool:
-    """Меняет исход автоустановки версии; чужую версию не трогает."""
+def set_auto_install_outcome(version: str, outcome: str, why: str = "") -> bool:
+    """Меняет исход автоустановки версии; чужую версию не трогает.
+
+    ``why`` — короткая причина неудачи для сервера очереди.
+    """
     target = str(version or "")
     changed = False
 
@@ -710,9 +713,10 @@ def set_auto_install_outcome(version: str, outcome: str) -> bool:
         nonlocal changed
 
         state = _as_dict(_get_path_value(data, ("updater", "auto_install"), {}))
-        if str(state.get("version") or "") != target or state.get("outcome") == outcome:
+        wanted = {"outcome": str(outcome or ""), "why": str(why or "")}
+        if str(state.get("version") or "") != target or all(state.get(k, "") == v for k, v in wanted.items()):
             return
-        _set_path_value(data, ("updater", "auto_install"), {**state, "outcome": str(outcome or "")})
+        _set_path_value(data, ("updater", "auto_install"), {**state, **wanted})
         changed = True
 
     _update_settings(_mutate)
@@ -752,6 +756,7 @@ def add_auto_install_attempt(version: str, *, from_version: str = "", granted_at
                 "from_version": str(from_version or ""),
                 "granted_at": max(float(granted_at or 0.0), 0.0),
                 "outcome": "started",
+                "why": "",
             },
         )
 

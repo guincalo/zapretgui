@@ -15,10 +15,11 @@ class _Store:
     def get_auto_install_state(self) -> dict:
         return dict(self.state)
 
-    def set_auto_install_outcome(self, version: str, value: str) -> bool:
+    def set_auto_install_outcome(self, version: str, value: str, why: str = "") -> bool:
         if self.state.get("version") != version:
             return False
         self.state["outcome"] = value
+        self.state["why"] = why
         return True
 
 
@@ -65,6 +66,44 @@ class UpdateOutcomeTests(unittest.TestCase):
         outcome.report_delivered(report)
         self.assertEqual(store.state["outcome"], "")
 
+    def test_failed_installer_tells_the_reason(self) -> None:
+        self._store(version="21.1.7.119", from_version="21.1.7.118", granted_at=1000.0, outcome="started")
+
+        outcome.note_attempt_failed("21.1.7.119", "exit5")
+
+        self.assertEqual(
+            outcome.pending_report(current_version="21.1.7.118", now=1100.0), {"fail": "21.1.7.119", "why": "exit5"}
+        )
+
+    def test_lost_download_is_reported_separately_with_its_reason(self) -> None:
+        store = self._store(version="21.1.7.119", from_version="21.1.7.118", granted_at=1000.0, outcome="started")
+
+        outcome.note_download_failed("21.1.7.119", "hash")
+        report = outcome.pending_report(current_version="21.1.7.118", now=1100.0)
+
+        # Не «fail»: сорвавшееся скачивание раздачу версии не держит.
+        self.assertEqual(report, {"miss": "21.1.7.119", "why": "hash"})
+        outcome.report_delivered(report)
+        self.assertEqual((store.state["outcome"], store.state["why"]), ("", ""))
+
+    def test_lost_download_does_not_overwrite_a_known_outcome_or_another_version(self) -> None:
+        store = self._store(version="21.1.7.119", from_version="21.1.7.118", granted_at=1000.0, outcome="failed", why="exit5")
+
+        outcome.note_download_failed("21.1.7.119", "net")
+        self.assertEqual((store.state["outcome"], store.state["why"]), ("failed", "exit5"))
+
+        store.state.update(outcome="started", why="")
+        # Ручная установка другой версии: сервер разрешения не давал.
+        outcome.note_download_failed("21.1.7.120", "net")
+        self.assertEqual(store.state["outcome"], "started")
+
+    def test_strange_reason_is_not_sent(self) -> None:
+        self._store(version="21.1.7.119", from_version="21.1.7.118", granted_at=1000.0, outcome="started")
+
+        outcome.note_attempt_failed("21.1.7.119", "код 5; DROP")
+
+        self.assertEqual(outcome.pending_report(current_version="21.1.7.118", now=1100.0), {"fail": "21.1.7.119"})
+
     def test_failure_of_a_version_the_program_did_not_install_itself_is_not_reported(self) -> None:
         store = self._store(version="21.1.7.119", from_version="21.1.7.118", granted_at=1000.0, outcome="")
 
@@ -97,6 +136,30 @@ class UpdateOutcomeTests(unittest.TestCase):
 
         self.assertEqual(outcome.granted_at("77.0.0.1"), 500.0)
         self.assertEqual(outcome.granted_at("77.0.0.2"), 0.0)
+
+
+class StoredReasonTests(unittest.TestCase):
+    """Причина хранится в настоящих настройках и уходит вместе с исходом."""
+
+    def test_reason_survives_in_settings_and_is_cleared_after_delivery(self) -> None:
+        import tempfile
+
+        from settings import store as settings_store
+
+        with tempfile.TemporaryDirectory() as tmp, patch("settings.store.MAIN_DIRECTORY", tmp):
+            settings_store.add_auto_install_attempt("21.1.7.119", from_version="21.1.7.118", granted_at=1000.0)
+            outcome.note_download_failed("21.1.7.119", "disk")
+            self.assertEqual(settings_store.get_auto_install_state()["why"], "disk")
+
+            report = outcome.pending_report(current_version="21.1.7.118", now=1100.0)
+            self.assertEqual(report, {"miss": "21.1.7.119", "why": "disk"})
+            outcome.report_delivered(report)
+
+            state = settings_store.get_auto_install_state()
+            self.assertEqual((state["outcome"], state["why"]), ("", ""))
+            # Следующая попытка начинается без старой причины.
+            settings_store.add_auto_install_attempt("21.1.7.119", from_version="21.1.7.118")
+            self.assertEqual(settings_store.get_auto_install_state()["why"], "")
 
 
 if __name__ == "__main__":

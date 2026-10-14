@@ -38,10 +38,10 @@ from ..network_hints import maybe_log_disable_dpi_for_update
 from ..release.http import new_session, short_error
 from .contracts import (
     CancellationToken,
+    DownloadFailedError,
     DownloadSource,
     LocalWriteError,
     UpdateCancelled,
-    UpdatePipelineError,
 )
 
 
@@ -174,7 +174,7 @@ class MultiSourceDownload:
     def run(self) -> frozenset[str]:
         """Скачивает файл целиком. Возвращает имена источников, давших байты."""
         if not self._states:
-            raise UpdatePipelineError("Не удалось скачать обновление: нет источников")
+            raise DownloadFailedError("Не удалось скачать обновление: нет источников")
         self._token.checkpoint()
         try:
             self._file = _open_target(self._path, self._total)
@@ -442,7 +442,7 @@ class MultiSourceDownload:
             self._left = 0
             return
         reasons = "; ".join(f"{state.name} — {state.reason or 'нет ответа'}" for state in self._states)
-        raise UpdatePipelineError(f"Не удалось скачать обновление: {reasons}")
+        raise DownloadFailedError(f"Не удалось скачать обновление: {reasons}")
 
     def _stream_whole(self, state: _SourceState) -> None:
         session = new_session()

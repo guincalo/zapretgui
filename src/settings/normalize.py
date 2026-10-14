@@ -702,7 +702,11 @@ def normalize_self_repair(data: object) -> dict[str, Any]:
     return {"attempts": attempts[-SELF_REPAIR_ATTEMPTS_KEPT:]}
 
 
-AUTO_INSTALL_OUTCOMES = ("", "started", "failed")
+# started — программа взялась ставить версию; failed — установщик не справился
+# (это держит раздачу версии); missed — версия не скачалась или не дошла до
+# установщика (раздачу не держит, сервер только считает причины).
+AUTO_INSTALL_OUTCOMES = ("", "started", "failed", "missed")
+AUTO_INSTALL_WHY_RE = re.compile(r"\A[a-z][a-z0-9]{0,15}\Z")
 
 
 def normalize_auto_install(data: object) -> dict[str, Any]:
@@ -713,6 +717,9 @@ def normalize_auto_install(data: object) -> dict[str, Any]:
     except (TypeError, ValueError):
         granted_at = 0.0
     outcome = as_clean_str(raw.get("outcome"), "")
+    if not (version and outcome in AUTO_INSTALL_OUTCOMES):
+        outcome = ""
+    why = as_clean_str(raw.get("why"), "")
     return {
         "version": version,
         "attempts": as_int(raw.get("attempts"), 0, minimum=0) if version else 0,
@@ -720,7 +727,8 @@ def normalize_auto_install(data: object) -> dict[str, Any]:
         # кончилось: новая версия сообщает об этом серверу один раз.
         "from_version": as_clean_str(raw.get("from_version"), "") if version else "",
         "granted_at": granted_at if version else 0.0,
-        "outcome": outcome if version and outcome in AUTO_INSTALL_OUTCOMES else "",
+        "outcome": outcome,
+        "why": why if outcome in ("failed", "missed") and AUTO_INSTALL_WHY_RE.fullmatch(why) else "",
     }
 
 

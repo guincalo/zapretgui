@@ -30,6 +30,7 @@ from ..release import mirrors
 from ..release_contract import ReleaseArtifactMetadata
 from .contracts import (
     CancellationToken,
+    DownloadFailedError,
     DownloadSource,
     LocalWriteError,
     UpdateArtifact,
@@ -139,7 +140,7 @@ def download_artifact(
         if not failed:
             log(f"✅ Установщик скачан с {name} и проверен: {artifact.expected_sha256}", LOG_LEVEL)
             return
-    raise UpdatePipelineError("Не удалось скачать обновление: " + "; ".join(dict.fromkeys(errors)))
+    raise DownloadFailedError("Не удалось скачать обновление: " + "; ".join(dict.fromkeys(errors)))
 
 
 __all__ = [

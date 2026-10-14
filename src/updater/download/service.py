@@ -22,7 +22,7 @@ from PyQt6.QtCore import QObject, QTimer, pyqtSignal
 from log.log import log
 
 from ..dpi_guard import DpiGuard
-from .downloader import CancellationToken, UpdateCancelled
+from .downloader import CancellationToken, UpdateCancelled, UpdatePipelineError
 from .flow import run_update_install
 
 
@@ -48,11 +48,15 @@ class UpdateInstallService(QObject):
         *,
         runtime_actions,
         run_install: Callable[..., None] = run_update_install,
+        note_failure: Callable[[str, str], None] | None = None,
         parent=None,
     ) -> None:
+        """``note_failure(версия, код)`` — запомнить, почему версия не скачалась
+        или не дошла до установщика: сервер очереди узнает причину."""
         super().__init__(parent)
         self._runtime_actions = runtime_actions
         self._run_install = run_install
+        self._note_failure = note_failure
         self._generation = 0
         self._token: CancellationToken | None = None
         self._busy = False
@@ -119,10 +123,21 @@ class UpdateInstallService(QObject):
             except Exception as exc:
                 error = str(exc) or type(exc).__name__
                 log(f"Обновление не установлено: {error}", "🔁❌ ERROR")
+                self._remember_failure(str(requested_version or ""), exc)
             emit(self._task_done, generation, error)
 
         threading.Thread(target=run, name="update-install", daemon=True).start()
         return True
+
+    def _remember_failure(self, version: str, exc: Exception) -> None:
+        # Неизвестная ошибка — тоже причина: «other» лучше молчания.
+        code = getattr(exc, "code", "other") if isinstance(exc, UpdatePipelineError) else "other"
+        if not code or self._note_failure is None:
+            return
+        try:
+            self._note_failure(version, str(code))
+        except Exception as note_error:
+            log(f"Причина неудачи обновления не записана: {note_error}", "WARNING")
 
     def cancel(self) -> None:
         if self._token is not None:

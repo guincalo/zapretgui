@@ -496,7 +496,9 @@ def install_update_check(
                 return
             # Если эту версию программа ставила сама, сервер узнает о неудаче
             # и придержит раздачу версии остальным.
-            updater_feature.note_auto_install_failed(str(interrupted.expected_version or ""))
+            updater_feature.note_auto_install_failed(
+                str(interrupted.expected_version or ""), str(interrupted.code or "")
+            )
             update_bridge.interrupted_update_found.emit(
                 str(interrupted.expected_version or ""),
                 str(describe_interrupted_update(interrupted) or ""),

@@ -494,6 +494,27 @@ class UpdateInstallServiceTests(unittest.TestCase):
         self.assertEqual(errors, ["Не удалось скачать обновление"])
         self.assertFalse(service.is_busy)
 
+    def test_failure_reason_is_remembered_for_the_update_server(self) -> None:
+        from updater.download.contracts import DownloadFailedError, UpdateIntegrityError
+
+        noted: list[tuple[str, str]] = []
+        errors: list[str] = []
+        raised = iter([DownloadFailedError("нет сети"), UpdateIntegrityError("SHA-256"), UpdateCancelled("стоп"), KeyError("x")])
+
+        def run_install(*_args, **_kwargs):
+            raise next(raised)
+
+        service = UpdateInstallService(
+            runtime_actions=_Dpi().actions(), run_install=run_install, note_failure=lambda v, c: noted.append((v, c))
+        )
+        service.failed.connect(errors.append)
+        for expected in range(1, 5):
+            service.start("1.0.0.9")
+            self.assertTrue(_wait(lambda: len(errors) == expected))
+
+        # Отмена — не неудача; непонятная ошибка — «other».
+        self.assertEqual(noted, [("1.0.0.9", "net"), ("1.0.0.9", "hash"), ("1.0.0.9", "other")])
+
 
 
 class DpiRestoreThreadTests(unittest.TestCase):

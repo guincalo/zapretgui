@@ -48,6 +48,9 @@ class UpdateHandoffRecord:
     installer_exit_code: int | None = None
     installed_version: str = ""
     error: str = ""
+    # Короткая причина неудачи для сервера очереди (пишет наблюдатель):
+    # gone, tamper, start, exit<код>, same.
+    failure: str = ""
     updated_at: float = 0.0
     schema_version: int = SCHEMA_VERSION
 
@@ -64,6 +67,7 @@ class UpdateHandoffRecord:
             "installer_exit_code": self.installer_exit_code,
             "installed_version": str(self.installed_version),
             "error": str(self.error),
+            "failure": str(self.failure),
             "updated_at": float(self.updated_at),
         }
 
@@ -94,6 +98,7 @@ class UpdateHandoffRecord:
             installer_exit_code=_as_int(payload.get("installer_exit_code")),
             installed_version=str(payload.get("installed_version") or ""),
             error=str(payload.get("error") or ""),
+            failure=str(payload.get("failure") or ""),
             updated_at=_as_float(payload.get("updated_at")),
             schema_version=_as_int(payload.get("schema_version")) or 1,
         )

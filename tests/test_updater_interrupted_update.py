@@ -34,6 +34,32 @@ def _record(**overrides) -> UpdateHandoffRecord:
     return UpdateHandoffRecord(**payload)
 
 
+class FailureCodeTests(unittest.TestCase):
+    """Короткая причина сорвавшейся установки, которую узнает сервер очереди."""
+
+    def test_code_written_by_the_watchdog_is_taken_as_is(self) -> None:
+        self.assertEqual(interrupted.failure_code(_record(failure="exit5", installer_exit_code=5)), "exit5")
+        self.assertEqual(interrupted.failure_code(_record(failure="same")), "same")
+
+    def test_older_watchdog_without_a_code_gives_the_exit_code(self) -> None:
+        self.assertEqual(interrupted.failure_code(_record(installer_exit_code=2)), "exit2")
+
+    def test_installation_cut_short_is_told_apart(self) -> None:
+        """Перезагрузка или выключение посреди установки: итог никто не дописал."""
+        self.assertEqual(interrupted.failure_code(_record(state=HandoffState.LAUNCHED, error="")), "cut")
+
+    def test_strange_or_missing_code_is_other(self) -> None:
+        self.assertEqual(interrupted.failure_code(_record(failure="../x")), "other")
+        self.assertEqual(interrupted.failure_code(_record()), "other")
+
+    def test_detected_update_carries_its_code(self) -> None:
+        detected = detect_interrupted_update(
+            current_version="21.1.1.3", record=_record(failure="exit5", installer_exit_code=5), forget=False
+        )
+
+        self.assertEqual(detected.code, "exit5")
+
+
 class InterruptedUpdateDetectionTests(unittest.TestCase):
     def test_failed_update_with_old_version_is_reported(self) -> None:
         detected = detect_interrupted_update(

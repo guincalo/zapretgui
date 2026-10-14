@@ -32,6 +32,7 @@ from ..install.splash import RestartSplashSpec, show_restart_splash
 from ..release.resolver import lookup_latest_release
 from ..release_contract import ReleaseArtifactMetadata
 from ..versions import compare_versions, normalize_version
+from .contracts import HandoffError, ReleaseLookupError, UpdateNotNeeded
 from .downloader import (
     CancellationToken,
     LocalWriteError,
@@ -55,15 +56,15 @@ def resolve_artifact(*, requested_version: str = "", allow_same_version: bool = 
     """
     lookup = lookup_latest_release(CHANNEL)
     if not lookup.ok:
-        raise UpdatePipelineError(lookup.error or "Не удалось получить данные выпуска")
+        raise ReleaseLookupError(lookup.error or "Не удалось получить данные выпуска")
 
     metadata = ReleaseArtifactMetadata.from_mapping(lookup.release or {})
     remote_version = normalize_version(metadata.version)
     gap = compare_versions(APP_VERSION, remote_version)
     if gap > 0 or (gap == 0 and not allow_same_version):
-        raise UpdatePipelineError(f"Обновление v{remote_version} уже не требуется")
+        raise UpdateNotNeeded(f"Обновление v{remote_version} уже не требуется")
     if requested_version and compare_versions(remote_version, requested_version) < 0:
-        raise UpdatePipelineError("Сервер вернул более старый выпуск")
+        raise ReleaseLookupError("Сервер вернул более старый выпуск")
 
     return UpdateArtifact(
         version=remote_version,
@@ -192,7 +193,7 @@ def run_update_install(
         if start_in_tray:
             handoff = handoff.starting_in_tray()
         if not start_installation(handoff):
-            raise UpdatePipelineError("Не удалось запустить установщик")
+            raise HandoffError("Не удалось запустить установщик")
         launched = True
         # Окно-продолжение встаёт на место окна обновления до закрытия
         # программы: пустого экрана между версиями нет. Его сбой обновлению

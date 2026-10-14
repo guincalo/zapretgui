@@ -9,13 +9,22 @@ from __future__ import annotations
 установщик не справился и работает прежняя версия, она сообщает: «не вышло».
 По этим сообщениям сервер сам останавливает раздачу сломанной версии.
 
-Сообщение — это два-три слова в адресе обычного вопроса слушателя выпусков
-(``updater.release.watch``); ничего, кроме номеров версий и числа секунд, в
-нём нет. Сорвавшееся скачивание неудачей версии не считается: виновата сеть.
+К «не вышло» добавляется короткая причина (``why``): код возврата
+установщика, «файл не тот», «версия не сменилась» и т.п. — так видно, на каком
+шаге обновление срывается у людей.
+
+Сорвавшееся скачивание неудачей версии не считается: виновата обычно сеть, и
+раздачу оно не держит. О нём сообщается отдельно (``miss`` с причиной): если
+вдруг у многих не сходится контрольная сумма файла, это видно на сервере.
+
+Сообщение — это несколько слов в адресе обычного вопроса слушателя выпусков
+(``updater.release.watch``); ничего, кроме номеров версий, числа секунд и
+кода причины, в нём нет.
 
 Модуль не импортирует Qt.
 """
 
+import re
 import threading
 import time
 
@@ -26,6 +35,9 @@ from ..versions import compare_versions
 
 OUTCOME_STARTED = "started"
 OUTCOME_FAILED = "failed"
+OUTCOME_MISSED = "missed"
+# Вид кода причины: его же принимает сервер очереди.
+WHY_RE = re.compile(r"\A[a-z][a-z0-9]{0,15}\Z")
 # Дольше недели от разрешения до запуска — это уже не «время обновления».
 MAX_TOOK_SECONDS = 7 * 86400
 
@@ -45,18 +57,44 @@ def granted_at(version: str) -> float:
         return float(_granted_at.get(str(version or ""), 0.0))
 
 
-def note_attempt_failed(version: str) -> None:
-    """Установщик версии не справился: об этом узнает сервер."""
+def _clean_why(why: str) -> str:
+    text = str(why or "").strip().lower()
+    return text if WHY_RE.fullmatch(text) else ""
+
+
+def note_attempt_failed(version: str, why: str = "") -> None:
+    """Установщик версии не справился: об этом и о причине узнает сервер."""
     from settings import store as settings_store
 
     try:
-        settings_store.set_auto_install_outcome(str(version or ""), OUTCOME_FAILED)
+        settings_store.set_auto_install_outcome(str(version or ""), OUTCOME_FAILED, _clean_why(why))
     except Exception as exc:
         log(f"Не удалось запомнить исход обновления: {exc}", "WARNING")
 
 
+def note_download_failed(version: str, why: str) -> None:
+    """Версия, которую программа взялась ставить сама, не скачалась.
+
+    Пишется только поверх начатой попытки этой версии: сорвавшаяся ручная
+    установка и уже известный исход (например, «не вышло» установщика) не
+    перезаписываются.
+    """
+    code = _clean_why(why)
+    if not code:
+        return
+    from settings import store as settings_store
+
+    try:
+        state = settings_store.get_auto_install_state()
+        if str(state.get("version") or "") != str(version or "") or state.get("outcome") != OUTCOME_STARTED:
+            return
+        settings_store.set_auto_install_outcome(str(version or ""), OUTCOME_MISSED, code)
+    except Exception as exc:
+        log(f"Не удалось запомнить, почему обновление не скачалось: {exc}", "WARNING")
+
+
 def pending_report(*, current_version: str = APP_VERSION, now: float | None = None) -> dict[str, str]:
-    """Что добавить к вопросу серверу: ``prev``/``took``, ``fail`` либо ничего."""
+    """Что добавить к вопросу серверу: ``prev``/``took``, ``fail``/``miss`` с ``why`` либо ничего."""
     from settings import store as settings_store
 
     try:
@@ -67,7 +105,14 @@ def pending_report(*, current_version: str = APP_VERSION, now: float | None = No
             return {}
         installed = compare_versions(current_version, version) >= 0
         if not installed:
-            return {"fail": version} if outcome == OUTCOME_FAILED else {}
+            kind = {OUTCOME_FAILED: "fail", OUTCOME_MISSED: "miss"}.get(outcome)
+            if kind is None:
+                return {}
+            report = {kind: version}
+            why = _clean_why(str(state.get("why") or ""))
+            if why:
+                report["why"] = why
+            return report
         previous = str(state.get("from_version") or "")
         if not previous or compare_versions(previous, current_version) >= 0:
             # Откуда обновлялись, неизвестно: сообщать нечего, вопрос закрыт.
@@ -99,6 +144,7 @@ def report_delivered(report: dict[str, str]) -> None:
 __all__ = [
     "granted_at",
     "note_attempt_failed",
+    "note_download_failed",
     "note_granted",
     "pending_report",
     "report_delivered",

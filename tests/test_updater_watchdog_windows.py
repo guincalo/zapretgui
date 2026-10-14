@@ -180,6 +180,18 @@ class WatchdogExecutionTests(unittest.TestCase):
         self.assertEqual(stored["state"], "failed")
         self.assertEqual(stored["installer_exit_code"], 5)
         self.assertIn("код 5", stored["error"])
+        # Короткая причина для сервера очереди: в записи этого поля не было.
+        self.assertEqual(stored["failure"], "exit5")
+
+    def test_crash_code_of_the_installer_is_written_as_hex(self) -> None:
+        self._write_state(
+            version=self.installed_version,
+            installer_arguments=["/c", "exit", "-1073741819"],
+        )
+
+        self.assertEqual(self._run_watchdog(), 1)
+
+        self.assertEqual(self._stored_state()["failure"], "exitxc0000005")
 
     def test_unchanged_version_after_clean_exit_is_a_failure(self) -> None:
         """Установщик отчитался об успехе, но на диске осталась прежняя версия."""
@@ -193,6 +205,7 @@ class WatchdogExecutionTests(unittest.TestCase):
         stored = self._stored_state()
         self.assertEqual(stored["state"], "failed")
         self.assertIn("версия на диске не изменилась", stored["error"])
+        self.assertEqual(stored["failure"], "same")
 
 
     def test_installer_child_process_does_not_hold_the_watchdog(self) -> None:
@@ -282,6 +295,7 @@ class WatchdogExecutionTests(unittest.TestCase):
 
         self.assertFalse(marker.exists())
         self.assertIn("изменён", self._stored_state()["error"])
+        self.assertEqual(self._stored_state()["failure"], "tamper")
 
     def test_recovery_never_downgrades_newer_installation(self) -> None:
         """Пользователь уже обновился дальше: старый установщик ставить нельзя."""

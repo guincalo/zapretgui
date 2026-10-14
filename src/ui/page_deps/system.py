@@ -294,7 +294,11 @@ def build_servers_page_kwargs(
             updater_feature=updater_feature,
             runtime_actions=runtime_actions,
         ),
-        "install_service": UpdateInstallService(runtime_actions=runtime_actions),
+        "install_service": UpdateInstallService(
+            runtime_actions=runtime_actions,
+            # Вызывается из фонового потока установки: запись в настройки там допустима.
+            note_failure=updater_feature.note_auto_install_missed,
+        ),
         "open_about": lambda: show_page(PageName.ABOUT),
         "create_changelog_link_open_worker": _create_changelog_link_open_worker,
     }

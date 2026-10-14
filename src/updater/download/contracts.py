@@ -8,19 +8,56 @@ from urllib.parse import urlsplit
 
 
 class UpdatePipelineError(RuntimeError):
-    """Понятная пользователю ошибка обновления."""
+    """Понятная пользователю ошибка обновления.
+
+    ``code`` — короткая причина для сервера очереди (``why`` в вопросе
+    слушателя): по ним видно, на каком шаге обновления срываются у людей.
+    Пустой код — сообщать нечего (обновление отменили).
+    """
+
+    code = "other"
 
 
 class UpdateCancelled(UpdatePipelineError):
     """Обновление остановлено по запросу приложения."""
 
+    code = ""
+
 
 class UpdateIntegrityError(UpdatePipelineError):
     """Файл не прошёл проверку размера или SHA-256."""
 
+    code = "hash"
+
 
 class LocalWriteError(UpdatePipelineError):
     """Файл не записать на диск: другие источники тут не помогут."""
+
+    code = "disk"
+
+
+class ReleaseLookupError(UpdatePipelineError):
+    """Не удалось узнать, какой файл качать: данные выпуска не получены."""
+
+    code = "meta"
+
+
+class DownloadFailedError(UpdatePipelineError):
+    """Ни один источник не отдал файл целиком."""
+
+    code = "net"
+
+
+class UpdateNotNeeded(UpdatePipelineError):
+    """Эта версия уже стоит или новее: ставить нечего, и это не неудача."""
+
+    code = ""
+
+
+class HandoffError(UpdatePipelineError):
+    """Файл скачан, но передать его установщику не вышло."""
+
+    code = "handoff"
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,10 +110,14 @@ class CancellationToken:
 
 __all__ = [
     "CancellationToken",
+    "DownloadFailedError",
     "DownloadSource",
+    "HandoffError",
     "LocalWriteError",
+    "ReleaseLookupError",
     "UpdateArtifact",
     "UpdateCancelled",
     "UpdateIntegrityError",
+    "UpdateNotNeeded",
     "UpdatePipelineError",
 ]

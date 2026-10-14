@@ -63,12 +63,14 @@ function Read-State {
     return $raw | ConvertFrom-Json
 }
 
-function Save-State($state, [string]$newState, $exitCode, [string]$installedVersion, [string]$errorText) {
+function Save-State($state, [string]$newState, $exitCode, [string]$installedVersion, [string]$errorText, [string]$failureCode = '') {
     try {
         $state.state = $newState
         $state.installer_exit_code = $exitCode
         $state.installed_version = $installedVersion
         $state.error = $errorText
+        # Поле может отсутствовать в записи: Add-Member -Force добавит или заменит.
+        $state | Add-Member -NotePropertyName failure -NotePropertyValue $failureCode -Force
         $state.updated_at = [double]([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()) / 1000.0
         $temporary = "$StatePath.$PID.tmp"
         [System.IO.File]::WriteAllText($temporary, ($state | ConvertTo-Json -Depth 5), $utf8NoBom)
@@ -222,15 +224,19 @@ Save-State $state 'launched' $null (Get-InstalledVersion $targetRoot) ''
 $succeeded = $false
 $lastExitCode = $null
 $failureReason = ''
+# Короткая причина для сервера очереди; текст выше — для человека.
+$failureCode = ''
 
 for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
     if (-not (Test-Path -LiteralPath $installer)) {
         $failureReason = "установщик не найден: $installer"
+        $failureCode = 'gone'
         Write-Line $failureReason
         break
     }
     if (-not (Test-InstallerHash $installer $installerSha)) {
         $failureReason = 'файл установщика изменён после проверки, запуск отменён'
+        $failureCode = 'tamper'
         Write-Line $failureReason
         break
     }
@@ -249,6 +255,7 @@ for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
     } catch {
         $lastExitCode = $null
         $failureReason = "установщик не запустился: $($_.Exception.Message)"
+        $failureCode = 'start'
         Write-Line $failureReason
         Start-Sleep -Seconds 2
         continue
@@ -257,6 +264,13 @@ for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
     Write-Line "Установщик завершился с кодом $lastExitCode"
     if ($lastExitCode -ne 0) {
         $failureReason = "установщик вернул код $lastExitCode"
+        # Коды Inno Setup (1–8) — числом; аварийные коды Windows вроде
+        # 0xC0000005 — шестнадцатеричными, как их ищут: exitxc0000005.
+        if (([int64]$lastExitCode -ge 0) -and ([int64]$lastExitCode -lt 1000)) {
+            $failureCode = "exit$lastExitCode"
+        } else {
+            $failureCode = 'exitx' + ('{0:x}' -f ([int64]$lastExitCode -band 0xFFFFFFFFL))
+        }
         Start-Sleep -Seconds 2
         continue
     }
@@ -267,6 +281,7 @@ for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
     }
 
     $failureReason = 'установщик отчитался об успехе, но версия на диске не изменилась'
+    $failureCode = 'same'
     Write-Line $failureReason
     Start-Sleep -Seconds 2
 }
@@ -283,7 +298,7 @@ if ($succeeded) {
 if ([string]::IsNullOrWhiteSpace($failureReason)) {
     $failureReason = 'установка не подтверждена'
 }
-Save-State $state 'failed' $lastExitCode $installedVersion $failureReason
+Save-State $state 'failed' $lastExitCode $installedVersion $failureReason $failureCode
 Remove-RecoveryHook
 Write-Line "Обновление не подтверждено: $failureReason"
 
