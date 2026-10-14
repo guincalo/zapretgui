@@ -299,7 +299,7 @@ class AboutPage(BasePage):
                 tr_catalog(
                     "page.about.subscription.desc",
                     language=self._ui_language,
-                    default="Подписка Zapret Premium открывает доступ к дополнительным темам, приоритетной поддержке и VPN-сервису.",
+                    default="Подписка Zapret Premium открывает доступ к дополнительным темам и приоритетной поддержке. Она входит в любой тариф бота @zapretvpns_bot.",
                 )
             )
             set_subscription_description_accessibility(self.sub_desc_label, self.sub_desc_label.text())

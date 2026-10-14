@@ -121,6 +121,7 @@ class PremiumPage(BasePage):
         self._subscription_state_store = None
         self._ui_state_unsubscribe = None
         self._status_checks_unsubscribe = None
+        self._open_guide_runtime = OneShotWorkerRuntime()
         self._open_bot_runtime = OneShotWorkerRuntime()
         self._open_bot_state = LatestValueWorkerState(
             self._open_bot_runtime,
@@ -368,6 +369,11 @@ class PremiumPage(BasePage):
             warning_prefix="Premium open bot worker",
         )
         self._open_bot_runtime.cancel()
+        self._open_guide_runtime.stop(
+            blocking=False,
+            warning_prefix="Premium open guide worker",
+        )
+        self._open_guide_runtime.cancel()
         self._device_info_state_obj().reset()
         self._device_info_runtime.stop(
             blocking=False,
@@ -488,6 +494,7 @@ class PremiumPage(BasePage):
             on_create_pair_code=self._create_pair_code,
         )
         self.activation_card = activation_widgets.card
+        self.about_label = activation_widgets.about_label
         self.instructions_label = activation_widgets.instructions_label
         self.key_input_container = activation_widgets.key_input_container
         self.key_input = activation_widgets.key_input
@@ -502,11 +509,13 @@ class PremiumPage(BasePage):
         device_widgets = build_premium_device_info_section(
             tr=self._tr,
             on_open_bot=self._open_extend_bot,
+            on_open_guide=self._open_premium_guide,
         )
         self.device_id_label = device_widgets.device_id_label
         self.saved_key_label = device_widgets.saved_key_label
         self.last_check_label = device_widgets.last_check_label
         self.server_status_label = device_widgets.server_status_label
+        self.open_guide_btn = device_widgets.open_guide_btn
         self.open_bot_btn = device_widgets.open_bot_btn
         self.add_widget(device_widgets.card)
 
@@ -535,9 +544,11 @@ class PremiumPage(BasePage):
             tr_fn=self._tr,
             activation_in_progress=self._activation_in_progress,
             connection_test_in_progress=self._connection_test_in_progress,
+            about_label=self.about_label,
             instructions_label=self.instructions_label,
             key_input=self.key_input,
             activate_btn=self.activate_btn,
+            open_guide_btn=self.open_guide_btn,
             open_bot_btn=self.open_bot_btn,
             refresh_btn=self.refresh_btn,
             change_key_btn=self.change_key_btn,
@@ -774,6 +785,40 @@ class PremiumPage(BasePage):
     @_open_bot_start_scheduled.setter
     def _open_bot_start_scheduled(self, value: bool) -> None:
         self._open_bot_state_obj().start_scheduled = bool(value)
+
+    def _open_premium_guide(self) -> None:
+        # Повторное нажатие во время открытия ничего не добавляет: страница та же.
+        if self._open_guide_runtime.is_running():
+            return
+        self._open_guide_runtime.start_qthread_worker(
+            worker_factory=lambda request_id: self._premium.create_open_guide_worker(request_id, parent=self),
+            on_loaded=self._on_open_premium_guide_finished,
+            on_failed=self._on_open_premium_guide_failed,
+        )
+
+    def _on_open_premium_guide_finished(self, request_id: int, result) -> None:
+        if not self._open_guide_runtime.is_current(request_id, cleanup_in_progress=self._cleanup_in_progress):
+            return
+        if result.ok:
+            return
+        self._show_open_premium_guide_error(str(result.error))
+
+    def _on_open_premium_guide_failed(self, request_id: int, error: str) -> None:
+        if not self._open_guide_runtime.is_current(request_id, cleanup_in_progress=self._cleanup_in_progress):
+            return
+        self._show_open_premium_guide_error(str(error))
+
+    def _show_open_premium_guide_error(self, error: str) -> None:
+        if InfoBar:
+            InfoBar.warning(
+                title=self._tr("common.error.title", "Ошибка"),
+                content=self._tr(
+                    "page.premium.error.open_guide",
+                    "Не удалось открыть страницу с описанием: {error}",
+                    error=error,
+                ),
+                parent=self.window(),
+            )
 
     def _show_open_extend_bot_error(self, error: str) -> None:
         if InfoBar:

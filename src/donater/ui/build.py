@@ -18,9 +18,33 @@ from ui.accessibility import set_state_text
 from ui.fluent_widgets import SettingsCard, RefreshButton, QuickActionsBar, set_tooltip
 
 
+PREMIUM_ABOUT_DEFAULT = (
+    "Zapret Premium открывается любой подпиской в Telegram-боте @zapretvpns_bot — "
+    "подойдёт даже самый недорогой тариф «Запретик». Код ниже — не ключ и не оплата: "
+    "он один раз связывает этот компьютер с вашим Telegram-аккаунтом, и дальше программа "
+    "сама проверяет, активна ли подписка. VPN — отдельная часть тарифов бота и в этой "
+    "программе не настраивается."
+)
+PREMIUM_INSTRUCTIONS_DEFAULT = (
+    "1. Купите любой тариф в боте @zapretvpns_bot (цены — в боте)\n"
+    "2. Нажмите «Создать код» — код действует 10 минут\n"
+    "3. Отправьте код боту сообщением в Telegram\n"
+    "4. Вернитесь сюда — статус обновится сам"
+)
+
+
+def premium_about_text(tr: Callable[[str, str], str]) -> str:
+    return tr("page.premium.about", PREMIUM_ABOUT_DEFAULT)
+
+
+def premium_instructions_text(tr: Callable[[str, str], str]) -> str:
+    return tr("page.premium.instructions", PREMIUM_INSTRUCTIONS_DEFAULT)
+
+
 @dataclass(slots=True)
 class PremiumActivationWidgets:
     card: SettingsCard
+    about_label: BodyLabel
     instructions_label: BodyLabel
     key_input_container: QWidget
     key_input: LineEdit
@@ -35,6 +59,7 @@ class PremiumDeviceInfoWidgets:
     saved_key_label: CaptionLabel
     last_check_label: CaptionLabel
     server_status_label: CaptionLabel
+    open_guide_btn: PushButton
     open_bot_btn: PushButton
 
 
@@ -54,12 +79,11 @@ def build_premium_activation_section(
 ) -> PremiumActivationWidgets:
     card = SettingsCard()
 
-    instructions_label = BodyLabel(
-        tr(
-            "page.premium.instructions",
-            "1. Нажмите «Создать код»\n2. Отправьте код боту @zapretvpns_bot в Telegram (сообщением)\n3. Вернитесь сюда — приложение обновит статус автоматически",
-        )
-    )
+    about_label = BodyLabel(premium_about_text(tr))
+    about_label.setWordWrap(True)
+    card.add_widget(about_label)
+
+    instructions_label = BodyLabel(premium_instructions_text(tr))
     instructions_label.setWordWrap(True)
     apply_premium_instructions_accessibility(tr_fn=tr, instructions_label=instructions_label)
     card.add_widget(instructions_label)
@@ -98,6 +122,7 @@ def build_premium_activation_section(
 
     return PremiumActivationWidgets(
         card=card,
+        about_label=about_label,
         instructions_label=instructions_label,
         key_input_container=key_input_container,
         key_input=key_input,
@@ -110,6 +135,7 @@ def build_premium_device_info_section(
     *,
     tr: Callable[[str, str], str],
     on_open_bot: Callable[[], None],
+    on_open_guide: Callable[[], None],
 ) -> PremiumDeviceInfoWidgets:
     card = SettingsCard()
 
@@ -118,9 +144,9 @@ def build_premium_device_info_section(
     )
     set_state_text(device_id_label, tr("page.premium.label.device_id.loading", "ID устройства: загрузка..."))
     saved_key_label = CaptionLabel(
-        tr("page.premium.label.device_token.none", "device token: —")
+        tr("page.premium.label.binding.none", "Привязка: —")
     )
-    set_state_text(saved_key_label, tr("page.premium.device_token.accessible_absent", "Токен устройства: не найден"))
+    set_state_text(saved_key_label, tr("page.premium.binding.accessible_absent", "Привязка: нет"))
     last_check_label = CaptionLabel(
         tr("page.premium.label.last_check.none", "Последняя проверка: —")
     )
@@ -138,6 +164,13 @@ def build_premium_device_info_section(
     labels_layout.addWidget(last_check_label)
     labels_layout.addWidget(server_status_label)
 
+    open_guide_btn = PushButton(
+        tr("page.premium.button.open_guide", "Как это работает"),
+        icon=FluentIcon.HELP,
+    )
+    apply_premium_button_accessibility(tr_fn=tr, open_guide_btn=open_guide_btn)
+    open_guide_btn.clicked.connect(on_open_guide)
+
     open_bot_btn = PushButton(
         tr("page.premium.button.open_bot", "Открыть бота"),
         icon=FluentIcon.SEND,
@@ -149,6 +182,7 @@ def build_premium_device_info_section(
     row_layout.setContentsMargins(0, 0, 0, 0)
     row_layout.addLayout(labels_layout)
     row_layout.addStretch(1)
+    row_layout.addWidget(open_guide_btn, 0, Qt.AlignmentFlag.AlignVCenter)
     row_layout.addWidget(open_bot_btn, 0, Qt.AlignmentFlag.AlignVCenter)
     card.add_layout(row_layout)
 
@@ -158,6 +192,7 @@ def build_premium_device_info_section(
         saved_key_label=saved_key_label,
         last_check_label=last_check_label,
         server_status_label=server_status_label,
+        open_guide_btn=open_guide_btn,
         open_bot_btn=open_bot_btn,
     )
 

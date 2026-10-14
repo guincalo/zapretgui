@@ -412,6 +412,7 @@ class PremiumWorkerArchitectureTests(unittest.TestCase):
         page._cleanup_in_progress = False
         page._premium_action_runtime = Mock()
         page._open_bot_runtime = Mock()
+        page._open_guide_runtime = Mock()
         page._device_info_runtime = Mock()
         page._reset_storage_runtime = Mock()
         page._open_bot_pending = True
@@ -444,6 +445,11 @@ class PremiumWorkerArchitectureTests(unittest.TestCase):
             warning_prefix="Premium open bot worker",
         )
         page._open_bot_runtime.cancel.assert_called_once()
+        page._open_guide_runtime.stop.assert_called_once_with(
+            blocking=False,
+            warning_prefix="Premium open guide worker",
+        )
+        page._open_guide_runtime.cancel.assert_called_once()
         page._device_info_runtime.stop.assert_called_once_with(
             blocking=False,
             warning_prefix="Premium device info worker",

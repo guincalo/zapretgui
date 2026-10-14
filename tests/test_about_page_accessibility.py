@@ -67,8 +67,8 @@ class AboutPageAccessibilityTests(unittest.TestCase):
         )
         self.assertEqual(
             widgets.sub_desc_label.property("screenReaderStateText"),
-            "Описание подписки: Подписка Zapret Premium открывает доступ к дополнительным темам, "
-            "приоритетной поддержке и VPN-сервису.",
+            "Описание подписки: Подписка Zapret Premium открывает доступ к дополнительным темам "
+            "и приоритетной поддержке. Она входит в любой тариф бота @zapretvpns_bot.",
         )
         self.assertEqual(widgets.premium_btn.accessibleName(), "Открыть Premium и VPN")
         self.assertEqual(widgets.premium_btn.property("screenReaderStateText"), "Открыть Premium и VPN")
@@ -165,8 +165,8 @@ class AboutPageAccessibilityTests(unittest.TestCase):
         self.assertIn("автоматической проверки", page.update_btn.accessible_description)
         self.assertEqual(
             page.sub_desc_label.property("screenReaderStateText"),
-            "Описание подписки: Подписка Zapret Premium открывает доступ к дополнительным темам, "
-            "приоритетной поддержке и VPN-сервису.",
+            "Описание подписки: Подписка Zapret Premium открывает доступ к дополнительным темам "
+            "и приоритетной поддержке. Она входит в любой тариф бота @zapretvpns_bot.",
         )
         self.assertEqual(page.premium_btn.accessible_name, "Открыть Premium и VPN")
         self.assertEqual(page.premium_btn.property("screenReaderStateText"), "Открыть Premium и VPN")

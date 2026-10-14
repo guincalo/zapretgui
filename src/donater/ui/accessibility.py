@@ -59,6 +59,7 @@ def apply_premium_button_accessibility(
     activate_btn=None,
     activate_loading: bool = False,
     open_bot_btn=None,
+    open_guide_btn=None,
     refresh_btn=None,
     change_key_btn=None,
     test_btn=None,
@@ -101,6 +102,15 @@ def apply_premium_button_accessibility(
             description=tr_fn(
                 "page.premium.action.open_bot.description",
                 "Открывает Telegram-бота для привязки или продления Premium.",
+            ),
+        )
+    if open_guide_btn is not None:
+        _set_button(
+            open_guide_btn,
+            name=tr_fn("page.premium.action.open_guide.accessible_name", "Как работает Premium"),
+            description=tr_fn(
+                "page.premium.action.open_guide.description",
+                "Открывает в браузере страницу вики с описанием Premium и привязки компьютера.",
             ),
         )
     if refresh_btn is not None:

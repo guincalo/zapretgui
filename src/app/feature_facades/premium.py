@@ -114,6 +114,18 @@ class PremiumFeature:
             parent=parent,
         )
 
+    def create_open_guide_worker(self, request_id: int, *, parent=None):
+        from app.external_actions import open_url
+        from app.external_workers import ExternalOpenUrlWorker
+        from config.urls import PREMIUM_GUIDE_URL
+
+        return ExternalOpenUrlWorker(
+            request_id,
+            url=PREMIUM_GUIDE_URL,
+            open_url=open_url,
+            parent=parent,
+        )
+
     def create_device_info_load_worker(self, request_id: int, *, current_time: int, parent=None):
         from donater.device_info_worker import PremiumDeviceInfoLoadWorker
 

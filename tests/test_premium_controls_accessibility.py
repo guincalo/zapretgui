@@ -83,6 +83,7 @@ class PremiumControlsAccessibilityTests(unittest.TestCase):
         device = build_premium_device_info_section(
             tr=lambda _key, default: default,
             on_open_bot=lambda: None,
+            on_open_guide=lambda: None,
         )
         actions = build_premium_actions_section(
             parent=parent,
@@ -99,9 +100,10 @@ class PremiumControlsAccessibilityTests(unittest.TestCase):
         self.assertEqual(
             activation.instructions_label.property("screenReaderStateText"),
             (
-                "Инструкция Premium: 1. Нажмите «Создать код» "
-                "2. Отправьте код боту @zapretvpns_bot в Telegram (сообщением) "
-                "3. Вернитесь сюда — приложение обновит статус автоматически"
+                "Инструкция Premium: 1. Купите любой тариф в боте @zapretvpns_bot (цены — в боте) "
+                "2. Нажмите «Создать код» — код действует 10 минут "
+                "3. Отправьте код боту сообщением в Telegram "
+                "4. Вернитесь сюда — статус обновится сам"
             ),
         )
         self.assertIn("как привязать Premium", activation.instructions_label.accessibleDescription())
@@ -166,14 +168,66 @@ class PremiumControlsAccessibilityTests(unittest.TestCase):
         self.assertTrue(dialog.exec_called)
         page._request_reset_storage.assert_not_called()
 
+    def test_premium_page_explains_what_premium_is_and_has_guide_button(self) -> None:
+        from app.ui_texts import tr as tr_catalog
+        from config.urls import PREMIUM_GUIDE_URL
+
+        activation = build_premium_activation_section(
+            tr=lambda _key, default: default,
+            on_create_pair_code=lambda: None,
+        )
+        opened: list[str] = []
+        device = build_premium_device_info_section(
+            tr=lambda _key, default: default,
+            on_open_bot=lambda: opened.append("bot"),
+            on_open_guide=lambda: opened.append("guide"),
+        )
+
+        self.assertIn("любой подпиской", activation.about_label.text())
+        self.assertIn("«Запретик»", activation.about_label.text())
+        self.assertIn("не ключ и не оплата", activation.about_label.text())
+        self.assertEqual(PREMIUM_GUIDE_URL, "https://wiki.zapret.moe/Zapret/premium")
+        self.assertEqual(device.open_guide_btn.text(), "Как это работает")
+        self.assertEqual(device.open_guide_btn.accessibleName(), "Как работает Premium")
+        self.assertIn("вики", device.open_guide_btn.accessibleDescription())
+        device.open_guide_btn.click()
+        device.open_bot_btn.click()
+        self.assertEqual(opened, ["guide", "bot"])
+
+        for language in ("ru", "en"):
+            about = tr_catalog("page.premium.about", language=language, default="")
+            instructions = tr_catalog("page.premium.instructions", language=language, default="")
+            self.assertIn("@zapretvpns_bot", about)
+            self.assertIn("10", instructions)
+            self.assertEqual(instructions.count("\n"), 3)
+            self.assertTrue(tr_catalog("page.premium.button.open_guide", language=language, default=""))
+            self.assertNotIn("₽", about + instructions)
+        self.assertNotEqual(
+            tr_catalog("page.premium.about", language="en", default=""),
+            tr_catalog("page.premium.about", language="ru", default=""),
+        )
+
+    def test_premium_guide_button_opens_wiki_through_shared_url_opener(self) -> None:
+        from app.feature_facades.premium import PremiumFeature
+        from config.urls import PREMIUM_GUIDE_URL
+
+        opener = Mock()
+        with patch("app.external_workers.ExternalOpenUrlWorker") as worker_cls, patch(
+            "app.external_actions.open_url", opener
+        ):
+            PremiumFeature().create_open_guide_worker(7, parent="page")
+
+        worker_cls.assert_called_once_with(7, url=PREMIUM_GUIDE_URL, open_url=opener, parent="page")
+
     def test_premium_device_info_labels_expose_state_text(self) -> None:
         device = build_premium_device_info_section(
             tr=lambda _key, default: default,
             on_open_bot=lambda: None,
+            on_open_guide=lambda: None,
         )
 
         self.assertEqual(device.device_id_label.accessibleName(), "ID устройства: загрузка...")
-        self.assertEqual(device.saved_key_label.accessibleName(), "Токен устройства: не найден")
+        self.assertEqual(device.saved_key_label.accessibleName(), "Привязка: нет")
         self.assertEqual(device.last_check_label.accessibleName(), "Последняя проверка Premium: —")
         self.assertEqual(device.server_status_label.accessibleName(), "Статус Premium-сервера: проверка...")
 
@@ -191,7 +245,7 @@ class PremiumControlsAccessibilityTests(unittest.TestCase):
         )
 
         self.assertEqual(device.device_id_label.accessibleName(), "ID устройства: abcdef0123456789...")
-        self.assertEqual(device.saved_key_label.accessibleName(), "Токен устройства: есть. Код привязки: ABCD12EF")
+        self.assertEqual(device.saved_key_label.accessibleName(), "Привязка: есть. Код привязки: ABCD12EF")
         self.assertEqual(device.last_check_label.accessibleName(), "Последняя проверка Premium: 10.06.2026 12:30")
 
     def test_premium_language_refresh_keeps_screen_reader_names(self) -> None:
@@ -203,6 +257,7 @@ class PremiumControlsAccessibilityTests(unittest.TestCase):
         device = build_premium_device_info_section(
             tr=lambda _key, default: default,
             on_open_bot=lambda: None,
+            on_open_guide=lambda: None,
         )
         actions = build_premium_actions_section(
             parent=parent,
@@ -217,9 +272,11 @@ class PremiumControlsAccessibilityTests(unittest.TestCase):
             tr_fn=lambda _key, default: default,
             activation_in_progress=True,
             connection_test_in_progress=True,
+            about_label=activation.about_label,
             instructions_label=activation.instructions_label,
             key_input=activation.key_input,
             activate_btn=activation.activate_btn,
+            open_guide_btn=device.open_guide_btn,
             open_bot_btn=device.open_bot_btn,
             refresh_btn=actions.refresh_btn,
             change_key_btn=actions.change_key_btn,
@@ -241,9 +298,10 @@ class PremiumControlsAccessibilityTests(unittest.TestCase):
         self.assertEqual(
             activation.instructions_label.property("screenReaderStateText"),
             (
-                "Инструкция Premium: 1. Нажмите «Создать код» "
-                "2. Отправьте код боту @zapretvpns_bot в Telegram (сообщением) "
-                "3. Вернитесь сюда — приложение обновит статус автоматически"
+                "Инструкция Premium: 1. Купите любой тариф в боте @zapretvpns_bot (цены — в боте) "
+                "2. Нажмите «Создать код» — код действует 10 минут "
+                "3. Отправьте код боту сообщением в Telegram "
+                "4. Вернитесь сюда — статус обновится сам"
             ),
         )
 
@@ -338,6 +396,7 @@ class PremiumControlsAccessibilityTests(unittest.TestCase):
         device = build_premium_device_info_section(
             tr=lambda _key, default, **kwargs: default.format(**kwargs),
             on_open_bot=lambda: None,
+            on_open_guide=lambda: None,
         )
 
         render_activation_status_label(

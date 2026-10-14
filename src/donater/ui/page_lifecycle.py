@@ -7,6 +7,7 @@ from donater.ui.accessibility import (
     apply_premium_instructions_accessibility,
     apply_premium_pair_code_accessibility,
 )
+from donater.ui.build import premium_about_text, premium_instructions_text
 from donater.premium_display import premium_display_from_ui_state
 from ui.accessibility import set_state_text
 from ui.fluent_widgets import set_tooltip
@@ -173,9 +174,11 @@ def apply_premium_language(
     tr_fn,
     activation_in_progress: bool,
     connection_test_in_progress: bool,
+    about_label,
     instructions_label,
     key_input,
     activate_btn,
+    open_guide_btn,
     open_bot_btn,
     refresh_btn,
     change_key_btn,
@@ -186,12 +189,8 @@ def apply_premium_language(
     render_status_badge_fn,
     render_activation_status_fn,
 ) -> None:
-    instructions_label.setText(
-        tr_fn(
-            "page.premium.instructions",
-            "1. Нажмите «Создать код»\n2. Отправьте код боту @zapretvpns_bot в Telegram (сообщением)\n3. Вернитесь сюда — приложение обновит статус автоматически",
-        )
-    )
+    about_label.setText(premium_about_text(tr_fn))
+    instructions_label.setText(premium_instructions_text(tr_fn))
     apply_premium_instructions_accessibility(tr_fn=tr_fn, instructions_label=instructions_label)
     key_input.setPlaceholderText(tr_fn("page.premium.placeholder.pair_code", "ABCD12EF"))
     apply_premium_pair_code_accessibility(tr_fn=tr_fn, key_input=key_input)
@@ -201,6 +200,7 @@ def apply_premium_language(
     else:
         activate_btn.setText(tr_fn("page.premium.button.create_code", "Создать код"))
 
+    open_guide_btn.setText(tr_fn("page.premium.button.open_guide", "Как это работает"))
     open_bot_btn.setText(tr_fn("page.premium.button.open_bot", "Открыть бота"))
     refresh_btn.setText(tr_fn("page.premium.button.refresh_status", "Обновить статус"))
     change_key_btn.setText(tr_fn("page.premium.button.reset_activation", "Сбросить активацию"))
@@ -242,6 +242,7 @@ def apply_premium_language(
         tr_fn=tr_fn,
         activate_btn=activate_btn,
         activate_loading=activation_in_progress,
+        open_guide_btn=open_guide_btn,
         open_bot_btn=open_bot_btn,
         refresh_btn=refresh_btn,
         change_key_btn=change_key_btn,

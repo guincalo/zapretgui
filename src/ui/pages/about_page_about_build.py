@@ -173,7 +173,7 @@ def build_about_page_about_content(
     sub_desc_label = CaptionLabel(
         tr_fn(
             "page.about.subscription.desc",
-            "Подписка Zapret Premium открывает доступ к дополнительным темам, приоритетной поддержке и VPN-сервису.",
+            "Подписка Zapret Premium открывает доступ к дополнительным темам и приоритетной поддержке. Она входит в любой тариф бота @zapretvpns_bot.",
         )
     )
     sub_desc_label.setWordWrap(True)

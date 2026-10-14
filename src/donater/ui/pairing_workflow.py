@@ -24,8 +24,8 @@ def apply_device_info_snapshot_labels(
         device_token=snapshot.get("device_token"),
         pair_code=snapshot.get("pair_code"),
         last_check=snapshot.get("last_check"),
-        token_present_text=tr("page.premium.label.device_token.present", "device token: ✅"),
-        token_absent_text=tr("page.premium.label.device_token.absent", "device token: ❌"),
+        token_present_text=tr("page.premium.label.binding.present", "Привязка: есть"),
+        token_absent_text=tr("page.premium.label.binding.absent", "Привязка: нет"),
         pair_template_text=tr("page.premium.label.pair_code.value", "pair: {pair_code}"),
     )
 
@@ -54,7 +54,7 @@ def apply_device_info_snapshot_labels(
 
 
 def _device_token_accessible_text(*, has_device_token: bool, pair_code: str) -> str:
-    parts = ["Токен устройства: есть" if has_device_token else "Токен устройства: не найден"]
+    parts = ["Привязка: есть" if has_device_token else "Привязка: нет"]
     if pair_code:
         parts.append(f"Код привязки: {pair_code}")
     return ". ".join(parts)

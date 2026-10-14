@@ -958,8 +958,8 @@ TEXTS: dict[str, dict[str, str]] = {
         "en": "Premium ({days} {unit} left)",
     },
     "page.about.subscription.desc": {
-        "ru": "Подписка Zapret Premium открывает доступ к дополнительным темам, приоритетной поддержке и VPN-сервису.",
-        "en": "Zapret Premium gives access to extra themes, priority support, and VPN service.",
+        "ru": "Подписка Zapret Premium открывает доступ к дополнительным темам и приоритетной поддержке. Она входит в любой тариф бота @zapretvpns_bot.",
+        "en": "Zapret Premium gives access to extra themes and priority support. It is included in any plan of the @zapretvpns_bot bot.",
     },
     "page.about.button.premium_vpn": {
         "ru": "Premium и VPN",
@@ -3061,9 +3061,13 @@ TEXTS: dict[str, dict[str, str]] = {
         "ru": "Действия",
         "en": "Actions",
     },
+    "page.premium.about": {
+        "ru": "Zapret Premium открывается любой подпиской в Telegram-боте @zapretvpns_bot — подойдёт даже самый недорогой тариф «Запретик». Код ниже — не ключ и не оплата: он один раз связывает этот компьютер с вашим Telegram-аккаунтом, и дальше программа сама проверяет, активна ли подписка. VPN — отдельная часть тарифов бота и в этой программе не настраивается.",
+        "en": "Zapret Premium is unlocked by any subscription in the Telegram bot @zapretvpns_bot — even the cheapest plan, \"Zapretik\", is enough. The code below is not a key and not a payment: it links this computer to your Telegram account once, and after that the app checks on its own whether the subscription is active. VPN is a separate part of the bot's plans and is not set up in this app.",
+    },
     "page.premium.instructions": {
-        "ru": "1. Нажмите «Создать код»\n2. Отправьте код боту @zapretvpns_bot в Telegram (сообщением)\n3. Вернитесь сюда — приложение обновит статус автоматически",
-        "en": "1. Click \"Create code\"\n2. Send the code to @zapretvpns_bot in Telegram (as a message)\n3. Return here — the app will refresh the status automatically",
+        "ru": "1. Купите любой тариф в боте @zapretvpns_bot (цены — в боте)\n2. Нажмите «Создать код» — код действует 10 минут\n3. Отправьте код боту сообщением в Telegram\n4. Вернитесь сюда — статус обновится сам",
+        "en": "1. Buy any plan in the bot @zapretvpns_bot (prices are in the bot)\n2. Click \"Create code\" — the code is valid for 10 minutes\n3. Send the code to the bot as a Telegram message\n4. Return here — the status will update by itself",
     },
     "page.premium.placeholder.pair_code": {
         "ru": "ABCD12EF",
@@ -3080,6 +3084,10 @@ TEXTS: dict[str, dict[str, str]] = {
     "page.premium.button.open_bot": {
         "ru": "Открыть бота",
         "en": "Open bot",
+    },
+    "page.premium.button.open_guide": {
+        "ru": "Как это работает",
+        "en": "How it works",
     },
     "page.premium.button.refresh_status": {
         "ru": "Обновить статус",
@@ -3109,17 +3117,17 @@ TEXTS: dict[str, dict[str, str]] = {
         "ru": "ID устройства: {device_id}...",
         "en": "Device ID: {device_id}...",
     },
-    "page.premium.label.device_token.none": {
-        "ru": "device token: —",
-        "en": "device token: -",
+    "page.premium.label.binding.none": {
+        "ru": "Привязка: —",
+        "en": "Linked: —",
     },
-    "page.premium.label.device_token.present": {
-        "ru": "device token: ✅",
-        "en": "device token: ✅",
+    "page.premium.label.binding.present": {
+        "ru": "Привязка: есть",
+        "en": "Linked: yes",
     },
-    "page.premium.label.device_token.absent": {
-        "ru": "device token: ❌",
-        "en": "device token: ❌",
+    "page.premium.label.binding.absent": {
+        "ru": "Привязка: нет",
+        "en": "Linked: no",
     },
     "page.premium.label.pair_code.value": {
         "ru": "pair: {pair_code}",
@@ -3256,6 +3264,10 @@ TEXTS: dict[str, dict[str, str]] = {
     "page.premium.error.open_telegram": {
         "ru": "Не удалось открыть Telegram: {error}",
         "en": "Failed to open Telegram: {error}",
+    },
+    "page.premium.error.open_guide": {
+        "ru": "Не удалось открыть страницу с описанием: {error}",
+        "en": "Failed to open the guide page: {error}",
     },
     "page.servers.title": {
         "ru": "Серверы",
