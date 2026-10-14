@@ -279,7 +279,11 @@ def _recover(plan: ApplyPlan, hooks: Hooks, files: FileSwap, details: list[str])
     if plan.exe_path.is_file():
         try:
             mark = hooks.before_start(plan)
-            process = processes.start_detached(hooks.start_command(plan), cwd=plan.exe_path.parent)
+            # С замком: прежняя версия, которая его понимает, не покажет окно
+            # поверх окна обновления; не понимает — просто стартует как обычно.
+            process = processes.start_detached(
+                hooks.start_command(plan), cwd=plan.exe_path.parent, env=handoff.arm(plan.hold_marker)
+            )
             restarted = _wait_until_started(plan, process, OLD_VERSION_READY_WAIT_S)
         except OSError:
             _log.exception("Не удалось запустить прежнюю версию")
