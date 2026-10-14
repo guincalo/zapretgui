@@ -121,7 +121,10 @@ class FileSwap:
 
     def prepare(self, progress: Callable[[float], None] | None = None) -> None:
         report = progress or (lambda fraction: None)
-        source = _scan(self._source_dir, frozenset())
+        # Папки данных человека новая версия не несёт, а если несёт (Zapret KVN
+        # кладёт в архив data/ с шаблонами), то не трогает: шаблоны программа
+        # переносит сама при запуске.
+        source = _scan(self._source_dir, self._preserve)
         if not source:
             raise InstallError("В новой версии нет файлов")
         skipped = set(self._preserve)
@@ -137,9 +140,6 @@ class FileSwap:
         to_stage: list[tuple[Path, Path]] = []
         replaced_keys: set[str] = set()
         for key, new_file in source.items():
-            top = Path(key).parts[0].casefold()
-            if top in self._preserve:
-                raise InstallError(f"Новая версия пишет в папку данных человека: {key}")
             current = installed.get(key)
             if current is not None and _same_content(new_file, current):
                 self.unchanged += 1

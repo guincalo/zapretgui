@@ -83,13 +83,15 @@ def test_swap_interrupted_by_power_loss_is_undone_on_next_start(tmp_path) -> Non
     assert swap.recover(app / ".update" / "2" / "swap") is None  # журнал убран
 
 
-def test_new_version_may_not_write_into_user_data(tmp_path) -> None:
+def test_new_version_never_overwrites_user_data(tmp_path) -> None:
     app = _tree(tmp_path / "app", OLD)
-    stage = _tree(tmp_path / "stage", {**NEW, "user/settings.sqlite3": b"overwritten"})
+    stage = _tree(tmp_path / "stage", {**NEW, "user/settings.sqlite3": b"packaged default"})
     files = swap.FileSwap(stage, app, app / ".update" / "x", preserve=("user",))
 
-    with pytest.raises(swap.InstallError):
-        files.prepare()
+    files.prepare()
+    files.commit()
+
+    assert (app / "user" / "settings.sqlite3").read_bytes() == b"mine"
 
 
 def test_hardlinked_stage_files_count_as_unchanged(tmp_path) -> None:

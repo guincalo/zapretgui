@@ -72,6 +72,7 @@ class ApplyPlan:
     remove: list[str] | None = None  # файлы прежней версии, которых нет в новой
     failure_file: str = ""  # сюда пишется код причины неудачи
     error_log: str = ""  # сюда — подробности для человека
+    hold_file: str = ""  # замок окна обновления (пусто — в рабочей папке)
     extra: dict = field(default_factory=dict)  # для окна обновления программы
 
     @property
@@ -84,7 +85,7 @@ class ApplyPlan:
 
     @property
     def hold_marker(self) -> Path:
-        return Path(self.work_dir) / "hold"
+        return Path(self.hold_file) if self.hold_file else Path(self.work_dir) / "hold"
 
     def save(self, path: Path) -> None:
         Path(path).write_text(json.dumps(asdict(self), ensure_ascii=False, indent=1), encoding="utf-8")
