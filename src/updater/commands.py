@@ -89,7 +89,13 @@ def load_release_history(version: str) -> tuple:
 
 def mark_update_app_ready(version: str) -> bool:
     from updater.install.splash import mark_update_app_ready as _mark
+    from zapret_update import handoff
 
+    # Новую версию запустила установка по файлам и ждёт отметку «открылась»:
+    # без неё через 20 секунд версия считалась бы молчащей.
+    hold = handoff.claim()
+    if hold is not None:
+        handoff.confirm_ready(hold)
     return bool(_mark(version))
 
 

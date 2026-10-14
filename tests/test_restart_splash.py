@@ -465,7 +465,9 @@ class PageSplashTests(unittest.TestCase):
         gone = script[script.index("# Запись исчезла."):script.index("# Запись исчезла.") + 800]
         # Новая версия в трее окна не показывает и убирает запись за собой:
         # после успешной установки это конец обновления, а не отмена.
-        self.assertIn("if ($S.InstallSucceeded) {", gone)
+        # Обновление по файлам журнала установщика не пишет: успехом считается
+        # и достигнутый этап «готово».
+        self.assertIn("if ($S.InstallSucceeded -or $S.Stage -ge 2) {", gone)
         self.assertIn("Start-Closing $false 'новая версия открылась и убрала запись'", gone)
         self.assertIn("Start-Closing $true 'обновление отменено'", gone)
         self.assertLess(gone.index("$S.InstallSucceeded"), gone.index("обновление отменено"))

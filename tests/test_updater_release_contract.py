@@ -60,11 +60,13 @@ class UpdateReleaseResolutionTests(unittest.TestCase):
         # здесь список подтверждает ровно то, что назвал источник.
         def signed_list(release, **_options):
             return SimpleNamespace(
-                installer=SimpleNamespace(sha256=release["sha256"], size=release["file_size"]), key="test"
+                manifest=SimpleNamespace(
+                    installer=SimpleNamespace(sha256=release["sha256"], size=release["file_size"]), key="test"
+                )
             )
 
         with (
-            patch("updater.download.flow.fetch_verified_manifest", signed_list),
+            patch("updater.download.flow.fetch_signed_release", signed_list),
             patch("updater.download.flow.lookup_latest_release", return_value=lookup),
             patch("updater.download.flow.APP_VERSION", "21.1.5.79"),
             patch("updater.release.forgejo.fetch_latest_release") as forgejo_refetch,

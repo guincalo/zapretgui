@@ -34,7 +34,8 @@ from ..release_contract import ReleaseArtifactMetadata
 from ..versions import compare_versions, normalize_version
 from zapret_update.manifest import ManifestError
 
-from ..release.signed import fetch_verified_manifest
+from ..install import file_update
+from ..release.signed import fetch_signed_release
 from .contracts import HandoffError, ReleaseLookupError, UpdateNotNeeded, UpdateSignatureError
 from .downloader import (
     CancellationToken,
@@ -72,7 +73,7 @@ def resolve_artifact(*, requested_version: str = "", allow_same_version: bool = 
     # Что именно качать, говорит только подписанный список выпуска: сумма и
     # размер от источника лишь сверяются с ним.
     try:
-        manifest = fetch_verified_manifest(
+        signed = fetch_signed_release(
             lookup.release or {},
             channel=CHANNEL,
             current_version=APP_VERSION,
@@ -80,6 +81,7 @@ def resolve_artifact(*, requested_version: str = "", allow_same_version: bool = 
         )
     except ManifestError as exc:
         raise UpdateSignatureError(f"Выпуск v{remote_version} не прошёл проверку подписи: {exc}", exc.code) from None
+    manifest = signed.manifest
     installer = manifest.installer
     if installer.sha256 != metadata.sha256 or installer.size != metadata.file_size:
         raise UpdateSignatureError(
@@ -93,6 +95,7 @@ def resolve_artifact(*, requested_version: str = "", allow_same_version: bool = 
         expected_size=installer.size,
         expected_sha256=installer.sha256,
         sources=build_download_sources(metadata),
+        signed=signed,
     )
 
 
@@ -156,9 +159,11 @@ def _resolve_and_download(
     token: CancellationToken,
     on_stage: Callable[[str], None],
     on_progress: Callable[[int, int, int], None] | None,
+    artifact: UpdateArtifact | None = None,
 ) -> InstallerHandoff:
-    on_stage("Проверка выпуска…")
-    artifact = resolve_artifact(requested_version=requested_version)
+    if artifact is None:
+        on_stage("Проверка выпуска…")
+        artifact = resolve_artifact(requested_version=requested_version)
     token.checkpoint()
     on_stage("Скачивание обновления…")
     return download_and_stage(artifact, token=token, on_progress=on_progress)
@@ -188,9 +193,27 @@ def run_update_install(
     """
     launched = False
     try:
+        # Сначала — по файлам: качается только изменившееся, новая версия
+        # ставит себя сама. Любой сбой до её запуска — установщик, как раньше.
+        artifact = None
+        try:
+            on_stage("Проверка выпуска…")
+            artifact = resolve_artifact(requested_version=requested_version)
+        except (UpdateCancelled, LocalWriteError, UpdateNotNeeded):
+            raise
+        except UpdatePipelineError:
+            # Ниже — тот же путь, что раньше: повтор с остановкой DPI (список
+            # выпуска мог не скачаться из-за него) и установщик целиком.
+            artifact = None
+        if artifact is not None and install_by_files(
+            artifact, token=token, dpi=dpi, on_stage=on_stage, on_progress=on_progress,
+            on_downloaded=on_downloaded, splash=splash, show_splash=show_splash, start_in_tray=start_in_tray,
+        ):
+            launched = True
+            return
         try:
             handoff = _resolve_and_download(
-                requested_version, token=token, on_stage=on_stage, on_progress=on_progress
+                requested_version, token=token, on_stage=on_stage, on_progress=on_progress, artifact=artifact
             )
         except (UpdateCancelled, LocalWriteError):
             raise
@@ -233,8 +256,69 @@ def run_update_install(
             dpi.restore()
 
 
+def install_by_files(
+    artifact: UpdateArtifact,
+    *,
+    token: CancellationToken,
+    dpi: DpiGuard,
+    on_stage: Callable[[str], None],
+    on_progress: Callable[[int, int, int], None] | None,
+    on_downloaded: Callable[[], None],
+    splash: RestartSplashSpec | None,
+    show_splash: Callable[[RestartSplashSpec | None], bool],
+    start_in_tray: bool,
+    prepare=file_update.prepare,
+    launch=file_update.launch,
+) -> bool:
+    """Обновление по файлам; True — новая версия взялась ставить себя.
+
+    False — этот путь не подошёл или сорвался до запуска новой версии:
+    вызывающий код ставит установщиком. Отмена пробрасывается как есть.
+    """
+    from zapret_update.fetch import FetchCancelled
+
+    if not file_update.is_available(artifact.signed):
+        return False
+    try:
+        plan_path = prepare(
+            artifact.signed,
+            channel=CHANNEL,
+            current_version=APP_VERSION,
+            start_in_tray=start_in_tray,
+            cancelled=lambda: token.is_cancelled,
+            on_stage=on_stage,
+            on_progress=on_progress,
+        )
+    except FetchCancelled:
+        raise UpdateCancelled("Обновление остановлено") from None
+    except Exception as exc:  # noqa: BLE001 — запасной путь есть всегда
+        log(f"Обновление по файлам не подготовлено, ставим установщиком: {exc}", UPDATE_LOG_LEVEL)
+        return False
+    on_downloaded()
+    token.checkpoint()
+    if dpi.is_running():
+        on_stage("Остановка DPI перед установкой…")
+        dpi.stop(reason="updater_installer_handoff", update_runtime_state=False)
+    token.checkpoint()
+    on_stage("Запуск новой версии…")
+    try:
+        started = launch(plan_path)
+    except Exception as exc:  # noqa: BLE001
+        log(f"Новая версия не запустилась для установки, ставим установщиком: {exc}", UPDATE_LOG_LEVEL)
+        started = False
+    if not started:
+        return False
+    if splash is not None:
+        try:
+            show_splash(splash)
+        except Exception as exc:
+            log(f"Окно-продолжение не показано: {exc}", UPDATE_LOG_LEVEL)
+    return True
+
+
 __all__ = [
     "download_and_stage",
+    "install_by_files",
     "resolve_artifact",
     "run_update_install",
 ]

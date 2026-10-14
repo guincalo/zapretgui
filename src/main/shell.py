@@ -77,6 +77,15 @@ def shell_bootstrap(argv: list[str] | None = None) -> bool:
         handle_update_mode(args)
         sys.exit(0)
 
+    if "--apply-update" in args:
+        # Новая версия из пробного дерева ставит себя сама (обновление по
+        # файлам). Права администратора у неё уже есть: её запустила
+        # работающая программа.
+        from updater.install.apply_mode import run_apply_mode
+
+        position = args.index("--apply-update")
+        sys.exit(run_apply_mode(args[position + 1] if len(args) > position + 1 else ""))
+
     start_in_tray = "--tray" in args
 
     # До запроса прав администратора: иначе человек увидел бы окно UAC от

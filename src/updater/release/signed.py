@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import base64
 from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Any
 
 from zapret_update.manifest import MAX_MANIFEST_BYTES, Manifest, ManifestError, load_signed
@@ -27,6 +28,20 @@ TRUSTED_KEYS: dict[str, bytes] = {
     "gui-reserve-1": base64.b64decode("c6fNXZOtY5he05hDoxEx9Y7Zkcej0F0MaeE9tekbn1s="),
 }
 MAX_SIGNATURE_BYTES = 1024
+
+
+@dataclass(frozen=True)
+class SignedRelease:
+    """Проверенный список выпуска вместе с исходными байтами и подписью.
+
+    Байты и подпись программа кладёт к себе после установки — это список
+    установленной версии: по нему следующее обновление знает, какие файлы
+    поставила сама программа.
+    """
+
+    manifest: Manifest
+    raw: bytes
+    signature: bytes
 
 
 def _download(session, url: str, *, verify: bool, limit: int) -> bytes:
@@ -53,6 +68,20 @@ def fetch_verified_manifest(
     session_factory=new_session,
 ) -> Manifest:
     """Проверенный список выпуска, который назвал источник; иначе ``ManifestError``."""
+    return fetch_signed_release(
+        release, channel=channel, current_version=current_version, allow_same=allow_same, session_factory=session_factory
+    ).manifest
+
+
+def fetch_signed_release(
+    release: Mapping[str, Any],
+    *,
+    channel: str,
+    current_version: str,
+    allow_same: bool = False,
+    session_factory=new_session,
+) -> SignedRelease:
+    """Как ``fetch_verified_manifest``, но вместе с байтами списка и подписью."""
     manifest_url = str(release.get("manifest_url") or "")
     signature_url = str(release.get("signature_url") or "")
     if not manifest_url or not signature_url:
@@ -84,7 +113,7 @@ def fetch_verified_manifest(
         )
     if manifest.installer is None:
         raise ManifestError("в подписанном списке выпуска нет установщика", "format")
-    return manifest
+    return SignedRelease(manifest, bytes(raw), bytes(signature))
 
 
-__all__ = ["PRODUCT", "TRUSTED_KEYS", "fetch_verified_manifest"]
+__all__ = ["PRODUCT", "TRUSTED_KEYS", "SignedRelease", "fetch_signed_release", "fetch_verified_manifest"]

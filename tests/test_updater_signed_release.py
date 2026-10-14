@@ -86,14 +86,14 @@ def _served(raw: bytes, seed: bytes = SEED):
 
 class SignedReleaseTests(unittest.TestCase):
     def _resolve(self, release: dict, session_factory, **kwargs):
-        real = signed.fetch_verified_manifest
+        real = signed.fetch_signed_release
 
         def fetch(*args, **options):
             return real(*args, session_factory=session_factory, **options)
 
         with (
             patch.object(signed, "TRUSTED_KEYS", KEYS),
-            patch("updater.download.flow.fetch_verified_manifest", fetch),
+            patch("updater.download.flow.fetch_signed_release", fetch),
             patch("updater.download.flow.lookup_latest_release", return_value=ReleaseLookup(release)),
             patch("updater.download.flow.APP_VERSION", "21.1.5.79"),
             patch("updater.download.flow.CHANNEL", "dev"),

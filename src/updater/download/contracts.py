@@ -99,6 +99,9 @@ class UpdateArtifact:
     expected_size: int
     expected_sha256: str
     sources: tuple[DownloadSource, ...]
+    # Проверенный подписанный список выпуска (``release.signed.SignedRelease``):
+    # по нему ставится обновление по файлам.
+    signed: object = None
 
 
 class CancellationToken:

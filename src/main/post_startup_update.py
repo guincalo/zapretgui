@@ -486,11 +486,15 @@ def install_update_check(
         GUI-потоке задерживали кадр на ~45 мс сразу после появления окна.
         """
         try:
+            from updater.install.file_update import housekeeping
             from updater.install.interrupted import (
                 describe_interrupted_update,
                 detect_interrupted_update,
             )
 
+            # Обновление по файлам: замену, оборванную выключением, вернуть
+            # назад до разбора записи, а старые рабочие папки убрать.
+            housekeeping()
             interrupted = detect_interrupted_update()
             if interrupted is None:
                 return
