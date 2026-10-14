@@ -37,4 +37,5 @@ def test_core_has_no_dependencies_beyond_the_standard_library() -> None:
                 names = [node.module or ""]
             for name in names:
                 top = name.split(".")[0]
-                assert top in sys.stdlib_module_names or top == "__future__", f"{path.name}: {name}"
+                # compression (zstd) — стандартная библиотека с Python 3.14.
+                assert top in sys.stdlib_module_names or top in {"__future__", "compression"}, f"{path.name}: {name}"
