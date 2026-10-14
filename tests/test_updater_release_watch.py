@@ -217,6 +217,17 @@ class ReleaseWatcherTests(unittest.TestCase):
         # Следующий вопрос — уже про новую версию: о ней разрешение больше не придёт.
         self.assertIn("known=21.1.7.119", harness.requests[2][0])
 
+    def test_revoked_installed_version_is_replaced_urgently(self) -> None:
+        """Выключатель: сервер отозвал установленную версию — срочный вызов, не обычный."""
+        revoked: list[str] = []
+        answer = _Response({"channel": "dev", "version": "21.1.7.119", "changed": True, "revoked": True})
+        harness = _Harness(self, [_quiet(), answer, _quiet("21.1.7.119")], on_revoked=revoked.append)
+
+        harness.run()
+
+        self.assertEqual(revoked, ["21.1.7.119"])
+        self.assertEqual(harness.released, [])
+
     def test_permission_may_come_right_in_the_probe(self) -> None:
         # Программу запустили, когда её очередь уже прошла.
         harness = _Harness(self, [_news("21.1.7.119")])

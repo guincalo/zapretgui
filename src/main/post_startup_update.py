@@ -18,6 +18,7 @@ class _UpdateCheckBridge(QObject):
     interrupted_update_found = pyqtSignal(str, str)
     # Сервер разрешил обновиться до версии новее установленной.
     release_signalled = pyqtSignal(str)
+    release_revoked = pyqtSignal(str)
     # Версия вышла, но очередь на скачивание до программы ещё не дошла.
     release_queued = pyqtSignal(str)
 
@@ -329,12 +330,13 @@ def install_update_check(
         )
         return True
 
-    def _on_release_signalled(version: str, attempt: int = 0) -> None:
+    def _on_release_signalled(version: str, attempt: int = 0, *, urgent: bool = False) -> None:
         """Сервер разрешил обновиться: проверяем и ставим сразу.
 
         Если человек занят, установка ждёт простоя: разрешение сервера не
         теряется, срок его действия отсчитывается с момента, когда программа
-        освободилась.
+        освободилась. ``urgent`` — сервер отозвал установленную версию
+        (выключатель): сломанную версию меняем, не дожидаясь простоя.
         """
         nonlocal signal_granted_until, signal_retries_left, deferred_version
         if not is_startup_host_alive(startup_host):
@@ -342,7 +344,7 @@ def install_update_check(
         if attempt == 0 and not updater_feature.is_auto_update_enabled():
             deferred_version = ""
             return
-        busy = _busy_reason() if attempt == 0 else ""
+        busy = _busy_reason() if attempt == 0 and not urgent else ""
         if busy:
             if deferred_version != version:
                 deferred_version = version
@@ -364,6 +366,7 @@ def install_update_check(
             )
 
     update_bridge.release_signalled.connect(_on_release_signalled)
+    update_bridge.release_revoked.connect(lambda version: _on_release_signalled(version, urgent=True))
 
     def _busy_reason() -> str:
         try:
@@ -445,6 +448,7 @@ def install_update_check(
             watcher = updater_feature.create_release_watcher(
                 on_release=lambda version: update_bridge.release_signalled.emit(str(version or "")),
                 on_queued=lambda version: update_bridge.release_queued.emit(str(version or "")),
+                on_revoked=lambda version: update_bridge.release_revoked.emit(str(version or "")),
                 is_bypass_running=_bypass_probe(),
             )
             watcher.start()

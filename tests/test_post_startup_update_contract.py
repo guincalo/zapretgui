@@ -163,10 +163,11 @@ class _Feature:
         self.signalled.append(bool(signalled))
         return dict(self.result)
 
-    def create_release_watcher(self, *, on_release, on_queued, is_bypass_running=None):
+    def create_release_watcher(self, *, on_release, on_queued, on_revoked=None, is_bypass_running=None):
         self.is_bypass_running = is_bypass_running
         self.on_release = on_release
         self.on_queued = on_queued
+        self.on_revoked = on_revoked
         self.watcher = Mock()
         type(self.watcher).reachable = property(lambda _watcher: self.queue_reachable)
         self.watcher.wait_until_probed.side_effect = lambda _timeout: self.queue_reachable
@@ -472,6 +473,31 @@ class BackgroundUpdateCheckTests(unittest.TestCase):
         # Освободился: разрешение сервера не пропало.
         self.assertEqual(feature.sources, ["startup", "background"])
         self.assertEqual(feature.signalled, [False, True])
+        host.ensure_page.assert_called_once_with(PageName.SERVERS)
+
+    def test_revoked_version_is_replaced_even_during_a_game(self) -> None:
+        """Выключатель версии: сломанную версию меняем, не дожидаясь простоя."""
+        from app.page_names import PageName
+        from main import post_startup_update
+
+        feature = _Feature(self._CLEAN)
+        waits: list = []
+
+        class _BusyTimers(_Timers):
+            def schedule(self, delay_ms, callback) -> None:
+                if int(delay_ms) == post_startup_update.BUSY_RECHECK_MS:
+                    waits.append(callback)
+                    return
+                super().schedule(delay_ms, callback)
+
+        host = self._run(feature, timers=_BusyTimers())
+        feature.result = dict(self._FOUND, auto_install=True)
+        feature.busy_reasons = ["fullscreen"]
+
+        feature.on_revoked("9.9.9")
+
+        self.assertEqual(waits, [])
+        self.assertEqual(feature.sources, ["startup", "background"])
         host.ensure_page.assert_called_once_with(PageName.SERVERS)
 
     def test_deferred_update_is_dropped_when_auto_update_is_switched_off(self) -> None:

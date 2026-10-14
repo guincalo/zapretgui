@@ -123,10 +123,13 @@ class UpdaterFeature:
     def run_startup_update_check(self, *, signalled: bool = False) -> dict:
         return self._commands().run_startup_update_check(signalled=bool(signalled))
 
-    def create_release_watcher(self, *, on_release, on_queued, is_bypass_running=None):
-        """Слушатель очереди обновлений на сервере; оба вызова приходят из фона."""
+    def create_release_watcher(self, *, on_release, on_queued, on_revoked=None, is_bypass_running=None):
+        """Слушатель очереди обновлений на сервере; все вызовы приходят из фона.
+
+        ``on_revoked`` — сервер отозвал установленную версию: ставить сразу.
+        """
         return self._commands().create_release_watcher(
-            on_release=on_release, on_queued=on_queued, is_bypass_running=is_bypass_running
+            on_release=on_release, on_queued=on_queued, on_revoked=on_revoked, is_bypass_running=is_bypass_running
         )
 
     def open_update_channel(self, channel: str):

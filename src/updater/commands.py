@@ -105,7 +105,7 @@ def run_startup_update_check(*, signalled: bool = False) -> dict:
     return check_for_update_sync(signalled=bool(signalled))
 
 
-def create_release_watcher(*, on_release, on_queued, is_bypass_running=None):
+def create_release_watcher(*, on_release, on_queued, on_revoked=None, is_bypass_running=None):
     """Слушатель сервера, который ведёт очередь обновлений своего канала.
 
     ``is_bypass_running`` — включён ли сейчас обход (читается из любого
@@ -122,11 +122,16 @@ def create_release_watcher(*, on_release, on_queued, is_bypass_running=None):
         outcome.note_granted(version)
         on_release(version)
 
+    def _revoked(version: str) -> None:
+        outcome.note_granted(version)
+        (on_revoked or on_release)(version)
+
     return ReleaseWatcher(
         channel=CHANNEL,
         current_version=APP_VERSION,
         on_release=_granted,
         on_queued=on_queued,
+        on_revoked=_revoked,
         is_enabled=is_auto_update_enabled,
         is_busy=lambda: bool(busy_reason()),
         activity=lambda: _told_activity(activity, is_bypass_running),
