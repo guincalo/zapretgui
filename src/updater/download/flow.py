@@ -32,7 +32,10 @@ from ..install.splash import RestartSplashSpec, show_restart_splash
 from ..release.resolver import lookup_latest_release
 from ..release_contract import ReleaseArtifactMetadata
 from ..versions import compare_versions, normalize_version
-from .contracts import HandoffError, ReleaseLookupError, UpdateNotNeeded
+from zapret_update.manifest import ManifestError
+
+from ..release.signed import fetch_verified_manifest
+from .contracts import HandoffError, ReleaseLookupError, UpdateNotNeeded, UpdateSignatureError
 from .downloader import (
     CancellationToken,
     LocalWriteError,
@@ -66,11 +69,29 @@ def resolve_artifact(*, requested_version: str = "", allow_same_version: bool = 
     if requested_version and compare_versions(remote_version, requested_version) < 0:
         raise ReleaseLookupError("Сервер вернул более старый выпуск")
 
+    # Что именно качать, говорит только подписанный список выпуска: сумма и
+    # размер от источника лишь сверяются с ним.
+    try:
+        manifest = fetch_verified_manifest(
+            lookup.release or {},
+            channel=CHANNEL,
+            current_version=APP_VERSION,
+            allow_same=allow_same_version,
+        )
+    except ManifestError as exc:
+        raise UpdateSignatureError(f"Выпуск v{remote_version} не прошёл проверку подписи: {exc}", exc.code) from None
+    installer = manifest.installer
+    if installer.sha256 != metadata.sha256 or installer.size != metadata.file_size:
+        raise UpdateSignatureError(
+            f"Источник описал установщик v{remote_version} иначе, чем подписанный список выпуска", "sign"
+        )
+    log(f"Выпуск v{remote_version} подтверждён подписью (ключ {manifest.key})", UPDATE_LOG_LEVEL)
+
     return UpdateArtifact(
         version=remote_version,
         file_name=metadata.file_name,
-        expected_size=metadata.file_size,
-        expected_sha256=metadata.sha256,
+        expected_size=installer.size,
+        expected_sha256=installer.sha256,
         sources=build_download_sources(metadata),
     )
 

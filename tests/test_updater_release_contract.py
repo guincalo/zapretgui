@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import inspect
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from updater.release_contract import (
@@ -55,7 +56,15 @@ class ReleaseArtifactMetadataTests(unittest.TestCase):
 
 class UpdateReleaseResolutionTests(unittest.TestCase):
     def _resolve(self, lookup: ReleaseLookup, **kwargs):
+        # Подпись списка выпуска проверяют свои тесты (test_updater_signed_release);
+        # здесь список подтверждает ровно то, что назвал источник.
+        def signed_list(release, **_options):
+            return SimpleNamespace(
+                installer=SimpleNamespace(sha256=release["sha256"], size=release["file_size"]), key="test"
+            )
+
         with (
+            patch("updater.download.flow.fetch_verified_manifest", signed_list),
             patch("updater.download.flow.lookup_latest_release", return_value=lookup),
             patch("updater.download.flow.APP_VERSION", "21.1.5.79"),
             patch("updater.release.forgejo.fetch_latest_release") as forgejo_refetch,

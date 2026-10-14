@@ -48,6 +48,18 @@ class DownloadFailedError(UpdatePipelineError):
     code = "net"
 
 
+class UpdateSignatureError(UpdatePipelineError):
+    """Установщик не подтверждён подписанным списком выпуска: ставить нельзя.
+
+    ``code`` берётся из причины отказа списка: ``sign`` (подпись или версия не
+    сошлись), ``nosig`` (источник не отдал список), ``stale`` (версия не новее)…
+    """
+
+    def __init__(self, message: str, code: str = "sign") -> None:
+        super().__init__(message)
+        self.code = code
+
+
 class UpdateNotNeeded(UpdatePipelineError):
     """Эта версия уже стоит или новее: ставить нечего, и это не неудача."""
 
@@ -119,5 +131,6 @@ __all__ = [
     "UpdateCancelled",
     "UpdateIntegrityError",
     "UpdateNotNeeded",
+    "UpdateSignatureError",
     "UpdatePipelineError",
 ]

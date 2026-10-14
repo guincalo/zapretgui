@@ -1,3 +1,10 @@
+"""Ed25519 на чистом Python: проверка подписи в программах и подпись на машине сборки.
+
+Сторонних библиотек нет ни у программ, ни у сборки. Подпись здесь не
+защищена от утечки по времени — она делается только на своей машине сборки,
+где измерять её некому; проверка открытых данных такой защиты не требует.
+"""
+
 from __future__ import annotations
 
 import hashlib
@@ -32,6 +39,35 @@ def verify_ed25519_signature(public_key: bytes, signature: bytes, message: bytes
         return _encode_point(left) == _encode_point(right)
     except Exception:
         return False
+
+
+def _clamped_scalar(seed: bytes) -> tuple[int, bytes]:
+    digest = hashlib.sha512(bytes(seed)).digest()
+    scalar = int.from_bytes(digest[:32], "little")
+    scalar &= (1 << 254) - 8
+    scalar |= 1 << 254
+    return scalar, digest[32:]
+
+
+def public_key_from_seed(seed: bytes) -> bytes:
+    """Открытый ключ (32 байта) по закрытому (32 байта)."""
+    if len(seed) != 32:
+        raise ValueError("закрытый ключ Ed25519 — 32 байта")
+    scalar, _prefix = _clamped_scalar(seed)
+    return _encode_point(_scalarmult(_BASE_POINT, scalar))
+
+
+def sign_ed25519(seed: bytes, message: bytes) -> bytes:
+    """Подпись Ed25519 (RFC 8032), 64 байта."""
+    if len(seed) != 32:
+        raise ValueError("закрытый ключ Ed25519 — 32 байта")
+    message = bytes(message)
+    scalar, prefix = _clamped_scalar(seed)
+    public_key = _encode_point(_scalarmult(_BASE_POINT, scalar))
+    r = int.from_bytes(hashlib.sha512(prefix + message).digest(), "little") % _Q
+    r_encoded = _encode_point(_scalarmult(_BASE_POINT, r))
+    h = int.from_bytes(hashlib.sha512(r_encoded + public_key + message).digest(), "little") % _Q
+    return r_encoded + ((r + h * scalar) % _Q).to_bytes(32, "little")
 
 
 def _inv(x: int) -> int:
@@ -98,4 +134,4 @@ def _scalarmult(point: tuple[int, int], scalar: int) -> tuple[int, int]:
 _BASE_POINT = (_recover_x(4 * _inv(5) % _P), 4 * _inv(5) % _P)
 
 
-__all__ = ["verify_ed25519_signature"]
+__all__ = ["public_key_from_seed", "sign_ed25519", "verify_ed25519_signature"]

@@ -55,7 +55,7 @@ class CryptoDependencyTrimTests(unittest.TestCase):
         self.assertEqual(aes_ctr_crypt(key, iv, ciphertext), plaintext)
 
     def test_ed25519_verifier_accepts_rfc_vector_and_rejects_tampering(self) -> None:
-        from donater.ed25519 import verify_ed25519_signature
+        from zapret_update.ed25519 import verify_ed25519_signature
 
         public_key = bytes.fromhex("d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a")
         signature = bytes.fromhex(

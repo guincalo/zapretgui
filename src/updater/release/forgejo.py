@@ -30,6 +30,7 @@ import requests
 
 from log.log import log
 from utils.https_dns_fallback import request_with_dns_fallback
+from zapret_update.manifest import MANIFEST_NAME, SIGNATURE_NAME
 
 from ..channel_utils import is_dev_release_asset_name, normalize_update_channel
 from ..network_hints import maybe_log_disable_dpi_for_update
@@ -141,6 +142,13 @@ def _candidate(release: object, channel: str) -> dict[str, Any] | None:
         return None
     if not _trusted_release_asset_url(sidecar_url, tag_name=tag_name, file_name=sidecar_name):
         return None
+    # Подписанный список выпуска: по нему программа проверяет установщик.
+    signed_urls = {}
+    for key, name in (("manifest_url", MANIFEST_NAME), ("signature_url", SIGNATURE_NAME)):
+        asset = next((item for item in assets if item.get("name") == name), None)
+        url = str((asset or {}).get("browser_download_url") or "")
+        if url and _trusted_release_asset_url(url, tag_name=tag_name, file_name=name):
+            signed_urls[key] = url
 
     return {
         "version": version,
@@ -154,6 +162,7 @@ def _candidate(release: object, channel: str) -> dict[str, Any] | None:
         "name": str(release.get("name") or ""),
         "published_at": str(release.get("published_at") or ""),
         "release_url": release_page_url(tag_name),
+        **signed_urls,
     }
 
 

@@ -6,7 +6,7 @@ import base64
 import json
 from typing import Dict, Optional
 
-from donater.ed25519 import verify_ed25519_signature
+from zapret_update.ed25519 import verify_ed25519_signature
 
 # kid -> base64(raw 32-byte Ed25519 public key)
 TRUSTED_PUBLIC_KEYS_B64: Dict[str, str] = {

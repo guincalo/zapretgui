@@ -24,6 +24,7 @@ from typing import Any
 import urllib3
 
 from log.log import log
+from zapret_update.manifest import MANIFEST_NAME, SIGNATURE_NAME
 
 from ..channel_utils import is_dev_update_channel, normalize_update_channel
 from ..network_hints import maybe_log_disable_dpi_for_update
@@ -118,6 +119,10 @@ def release_from_versions(
         "source": source,
         "verify_ssl": bool(verify_ssl),
     }
+    if entry.get("manifest") is True:
+        # Подписанный список выпуска лежит рядом с установщиком.
+        release["manifest_url"] = f"{base_url}/download/{file_name}.{MANIFEST_NAME}"
+        release["signature_url"] = f"{base_url}/download/{file_name}.{SIGNATURE_NAME}"
     # Неполный ответ — ошибка этого зеркала, а не повод дополнять его чужими полями.
     ReleaseArtifactMetadata.from_mapping(release)
     return release
