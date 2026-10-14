@@ -35,7 +35,10 @@ def test_core_has_no_dependencies_beyond_the_standard_library() -> None:
                 names = [alias.name for alias in node.names]
             elif isinstance(node, ast.ImportFrom) and not node.level:
                 names = [node.module or ""]
+            # compression (zstd) — стандартная библиотека с Python 3.14.
+            # zstandard — только запасной распаковщик в store.py для программ
+            # на старом Python (Zapret KVN на 3.12); ядро работает и без него.
+            allowed = {"__future__", "compression"} | ({"zstandard"} if path.name == "store.py" else set())
             for name in names:
                 top = name.split(".")[0]
-                # compression (zstd) — стандартная библиотека с Python 3.14.
-                assert top in sys.stdlib_module_names or top in {"__future__", "compression"}, f"{path.name}: {name}"
+                assert top in sys.stdlib_module_names or top in allowed, f"{path.name}: {name}"

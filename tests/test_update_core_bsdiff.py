@@ -211,3 +211,45 @@ def test_builder_drops_a_broken_bsdiff_maker_result(tmp_path, monkeypatch) -> No
     assert not any(item.get("kind") == "bsdiff" for item in built.patches)
     assert not list(cache.glob("*.bsdiff"))
     assert any("не прошла проверку" in message for message in messages)
+
+
+# ── что программа умеет распаковать ─────────────────────────────────────────
+
+
+def test_plan_refuses_before_download_without_zstd_and_skips_unknown_patch_kinds(tmp_path) -> None:
+    from zapret_update import plan
+
+    old = b"old content"
+    sha_old = hashlib.sha256(old).hexdigest()
+    listed = manifest.parse(manifest.build(
+        product="zapret-gui", channel="dev", version="1.0.0.2", key="k",
+        files=[{"path": "a.exe", "size": 10, "sha256": SHA_B, "zsize": 100}],
+        patches=[{"from": sha_old, "to": SHA_B, "size": 50}, {"from": sha_old, "to": SHA_B, "size": 5, "kind": "bsdiff"}],
+    ))
+    (tmp_path / "a.exe").write_bytes(old)
+
+    with pytest.raises(plan.PlanError, match="zstd"):
+        plan.make_plan(listed, tmp_path, codecs=frozenset({"bsdiff"}))
+    assert plan.make_plan(listed, tmp_path, codecs=frozenset({"zstd"})).want[0].patch.kind == "zstd"
+    assert plan.make_plan(listed, tmp_path, codecs=frozenset({"zstd", "bsdiff"})).want[0].patch.kind == "bsdiff"
+
+
+def test_zstandard_unpacks_store_files_where_python_has_no_compression_zstd(monkeypatch) -> None:
+    pytest.importorskip("compression.zstd", reason="сжатие zstd есть только в Python 3.14")
+    pytest.importorskip("zstandard")
+    from zapret_update import store
+
+    rng = random.Random(9)
+    old = rng.randbytes(300_000)
+    new = old[:1000] + b"changed" + old[1000:]
+    blob, patch = store.compress(new), store.make_patch(old, new)
+    sha = hashlib.sha256(new).hexdigest()
+
+    def no_module():
+        raise ImportError("compression.zstd")
+
+    monkeypatch.setattr(store, "_zstd", no_module)
+    assert store.unpack_blob(blob, sha256=sha, size=len(new)) == new
+    assert store.apply_patch(old, patch, sha256=sha, size=len(new)) == new
+    with pytest.raises(store.StoreError):
+        store.unpack_blob(blob[:-10] + bytes(10), sha256=sha, size=len(new))
