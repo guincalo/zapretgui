@@ -122,6 +122,13 @@ class Hooks:
     def start_command(self, plan: ApplyPlan) -> list[str]:
         return [str(plan.exe_path), *plan.restart_args]
 
+    def before_start(self, plan: ApplyPlan):
+        """Отметка перед запуском (например, длина журнала запуска программы)."""
+        return None
+
+    def failed_start(self, plan: ApplyPlan, mark, exit_code: int | None) -> None:
+        """Программа завершилась сразу после запуска: записать, что она успела сказать."""
+
     def show_fatal(self, plan: ApplyPlan, details: list[str]) -> None:
         if not processes.IS_WINDOWS:
             return
@@ -210,12 +217,28 @@ def run_apply(plan: ApplyPlan, hooks: Hooks | None = None, report: Report | None
     return True
 
 
+_STATUS_CONTROL_C_EXIT = 0xC000013A
+
+
+def exit_code_text(code: int | None) -> str:
+    """Код выхода для человека: обычные — числом, аварийные Windows — 0x…"""
+    if code is None:
+        return "код неизвестен"
+    code &= 0xFFFFFFFF
+    text = f"код {code}" if code < 0x10000 else f"код 0x{code:08X}"
+    if code == _STATUS_CONTROL_C_EXIT:
+        text += ", прерван Ctrl+C"
+    return text
+
+
 def _start_and_verify(plan: ApplyPlan, hooks: Hooks, progress: Callable[[float], None]) -> None:
+    mark = hooks.before_start(plan)
     process = processes.start_detached(
         hooks.start_command(plan), cwd=plan.exe_path.parent, env=handoff.arm(plan.hold_marker)
     )
     if not _wait_until_started(plan, process, NEW_VERSION_READY_WAIT_S, progress):
-        raise InstallError(f"Новая версия завершилась сразу после запуска (код {process.returncode})")
+        hooks.failed_start(plan, mark, process.returncode)
+        raise InstallError(f"Новая версия завершилась сразу после запуска ({exit_code_text(process.returncode)})")
 
 
 def _wait_until_started(plan: ApplyPlan, process, wait_s: float, progress=lambda fraction: None) -> bool:
@@ -254,10 +277,15 @@ def _recover(plan: ApplyPlan, hooks: Hooks, files: FileSwap, details: list[str])
     restarted = False
     if plan.exe_path.is_file():
         try:
+            mark = hooks.before_start(plan)
             process = processes.start_detached(hooks.start_command(plan), cwd=plan.exe_path.parent)
             restarted = _wait_until_started(plan, process, OLD_VERSION_READY_WAIT_S)
         except OSError:
             _log.exception("Не удалось запустить прежнюю версию")
+        else:
+            if not restarted:
+                _log.error("Прежняя версия завершилась сразу после запуска (%s)", exit_code_text(process.returncode))
+                hooks.failed_start(plan, mark, process.returncode)
     if restarted:
         _log.info("Прежняя версия запущена")
     else:
@@ -275,4 +303,4 @@ def _write(path: str, text: str) -> None:
         _log.exception("Не удалось записать %s", path)
 
 
-__all__ = ["ApplyPlan", "Hooks", "Stage", "failure_code", "run_apply"]
+__all__ = ["ApplyPlan", "Hooks", "Stage", "exit_code_text", "failure_code", "run_apply"]

@@ -116,3 +116,29 @@ def test_failure_codes_name_the_step() -> None:
     assert apply.failure_code(apply.Stage.START, RuntimeError()) == "crash"
     assert apply.failure_code(apply.Stage.SWAP, locked) == "lock"
     assert apply.failure_code(apply.Stage.PREPARE, RuntimeError()) == "prep"
+
+
+def test_exit_codes_are_readable() -> None:
+    assert apply.exit_code_text(3) == "код 3"
+    assert apply.exit_code_text(-1073741510) == "код 0xC000013A, прерван Ctrl+C"
+    assert apply.exit_code_text(None) == "код неизвестен"
+
+
+def test_failed_start_hook_hears_the_mark_and_the_exit_code(tmp_path) -> None:
+    plan = _plan(tmp_path)
+    heard = []
+
+    class Hooks(_Hooks):
+        def before_start(self, plan):
+            return "mark"
+
+        def failed_start(self, plan, mark, exit_code):
+            heard.append((mark, exit_code))
+
+    started = [_process(exits=True), _process(exits=False)]
+    with patch.object(apply.processes, "start_detached", side_effect=lambda *a, **k: started.pop(0)), patch.object(
+        apply, "OLD_VERSION_READY_WAIT_S", 0.2
+    ):
+        apply.run_apply(plan, Hooks())
+
+    assert heard == [("mark", 3)]
