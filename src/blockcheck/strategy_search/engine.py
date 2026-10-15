@@ -250,6 +250,7 @@ class StrategySearch:
         self._protocol = request.scan_protocol
         self._target = _Target()
         self._running_step = ""
+        self._strategies_started = 0.0
 
     # --- Управление -----------------------------------------------------------
 
@@ -332,6 +333,7 @@ class StrategySearch:
             from_catalog += len(batch)
             seen = {candidate.strategy_id for candidate in batch}
             index = 0
+            self._strategies_started = self._env.monotonic()
             while not self.cancelled:
                 if not queue:
                     # Пачка кончилась, а надёжной нет — берём следующую, пока есть куда.
@@ -356,7 +358,11 @@ class StrategySearch:
                 candidate, rechecked = queue.popleft()
                 self._events.strategy_started(candidate.name, index, len(batch), candidate.args)
                 self._events.phase(f"[{index + 1}/{len(batch)}] {candidate.name}")
-                self._stage(STEP_STRATEGIES, "running", f"Проверяем {index + 1} из {len(batch)}: {candidate.name}")
+                self._stage(
+                    STEP_STRATEGIES,
+                    "running",
+                    f"Проверяем {index + 1} из {len(batch)}: {candidate.name}{self._time_left(index, len(batch))}",
+                )
                 run = self._test_strategy(candidate)
                 if self.cancelled and run.verdict == rules.VERDICT_CANCELLED:
                     break
@@ -406,6 +412,16 @@ class StrategySearch:
             except Exception:
                 logger.exception("strategy search post-cleanup failed")
             self._save_history(key, confirmed_ids, failed_ids)
+
+    def _time_left(self, index: int, total: int) -> str:
+        """« · осталось ≈ N мин» по среднему времени уже проверенных стратегий."""
+        if index < 3 or total <= index:
+            return ""
+        spent = self._env.monotonic() - self._strategies_started
+        left = spent / index * (total - index)
+        if left < 60:
+            return " · осталось меньше минуты"
+        return f" · осталось ≈ {round(left / 60)} мин"
 
     def _save_history(self, key: str, confirmed_ids: list[str], failed_ids: list[str]) -> None:
         """Дописать накопленное в историю и начать копить заново."""

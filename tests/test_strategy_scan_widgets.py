@@ -143,6 +143,13 @@ class OutcomeTests(unittest.TestCase):
         self.assertEqual(not_found.kind, "not_found")
         self.assertIn("30 из 463", not_found.detail)
 
+    def test_everything_checked_and_nothing_found_names_the_next_step(self) -> None:
+        outcome = build_panel_outcome(self._report(total_tested=463), [{"success": False}])
+        self.assertEqual(outcome.kind, "not_found")
+        self.assertIn("все 463", outcome.detail)
+        self.assertIn("hosts", outcome.detail)
+        self.assertIn("Настройка DNS", outcome.detail)
+
 
 class FunTextsTests(unittest.TestCase):
     def test_technique_phrases(self) -> None:

@@ -617,18 +617,20 @@ TEXTS_TOUR: dict[str, dict[str, str]] = {
     "onboarding.step.strategy_scan_result.body": {
         "ru": (
             "Так выглядит законченный подбор — это пример. Сначала программа убеждается, что без обхода "
-            "сайт закрыт, потом перебирает стратегии, а каждую удачную перепроверяет трижды.\n\n"
-            "В «Надёжно работают» попадают только те, что открыли сайт три раза подряд. «Применить лучшую» "
-            "записывает самую быструю в выбранный пресет, «Применить» в строке — любую другую. Остальные "
-            "разложены по свёрнутым группам с причиной."
+            "сайт закрыт, потом перебирает стратегии, а каждую удачную перепроверяет.\n\n"
+            "В «Надёжно работают» попадают только те, что открыли сайт три раза на свежих соединениях и "
+            "выдержали объём — фильтр часто режет соединение после 16–20 КБ. «Применить лучшую» "
+            "записывает самую быструю в выбранный пресет и сама проверяет сайт уже через него, "
+            "«Применить» в строке — любую другую. Остальные разложены по свёрнутым группам с причиной."
         ),
         "en": (
             "This is what a finished search looks like — it is an example. First the app makes sure the "
             "site is closed without the bypass, then it goes through strategies and rechecks every "
-            "successful one three times.\n\n"
-            "Only those that opened the site three times in a row get into Reliably working. Apply the "
-            "best writes the fastest one to the selected preset, Apply in a row — any other. The rest "
-            "are sorted into collapsed groups with the reason."
+            "successful one.\n\n"
+            "Only those that opened the site three times on fresh connections and passed the volume "
+            "check get into Reliably working — filters often cut a connection after 16–20 KB. Apply the "
+            "best writes the fastest one to the selected preset and checks the site through it by itself, "
+            "Apply in a row — any other. The rest are sorted into collapsed groups with the reason."
         ),
     },
     "onboarding.step.domain_lookup.title": {"ru": "Проверка домена", "en": "Domain check"},

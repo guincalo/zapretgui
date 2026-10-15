@@ -498,7 +498,8 @@ class ScanProgressPanel(_HeightKeeper, SimpleCardWidget):
         self.status_label.setText(
             hint
             or "Выберите, что должно заработать, и нажмите «Найти рабочую стратегию». "
-            "Сначала проверим сайт без обхода, потом переберём стратегии и каждую удачную перепроверим трижды."
+            "Сначала проверим сайт без обхода, потом переберём стратегии и каждую удачную перепроверим. "
+            "Zapret на время подбора остановится и потом включится сам."
         )
         self.steps.setVisible(False)
         self.progress_bar.setVisible(False)

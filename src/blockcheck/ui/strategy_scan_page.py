@@ -568,7 +568,16 @@ class StrategyScanPage(BasePage):
     def prefill_target(self, target: str, *, protocol: str = PROTOCOL_TCP_HTTPS) -> None:
         """BlockCheck нашёл проблему: подставляет, что подбирать, но не запускает поиск."""
         if self._strategy_scan_run_runtime.is_running():
+            # Вкладка уже переключилась: сказать, почему цель не подставилась.
+            InfoBarHelper.info(
+                self.window(),
+                "Подбор уже идёт",
+                "Дождитесь конца или остановите его — потом подберите стратегию для нового сайта.",
+            )
             return
+        if self._scan_panel is not None and self._scan_panel.state not in ("", "idle"):
+            # Прошлый итог относится к другому сайту — не путать его с новой целью.
+            self._scan_panel.show_idle()
         index = self._protocol_combo.findData(protocol)
         if index >= 0 and index != self._protocol_combo.currentIndex():
             self._protocol_combo.setCurrentIndex(index)

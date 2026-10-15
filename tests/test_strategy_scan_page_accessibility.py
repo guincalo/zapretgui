@@ -346,3 +346,38 @@ class _FakeProgressBar:
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PrefillFromBlockcheckTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.app = QApplication.instance() or QApplication([])
+
+    def _page(self):
+        page = StrategyScanPage(
+            blockcheck_feature=_BlockcheckFeatureStub(),
+            create_strategy_scan_worker=lambda *_args, **_kwargs: None,
+        )
+        self.addCleanup(page.deleteLater)
+        return page
+
+    def test_new_target_drops_the_old_outcome(self) -> None:
+        page = self._page()
+        page._scan_panel.show_outcome(kind="found", title="Ура!", detail="старый сайт")
+
+        page.prefill_target("rutracker.org")
+
+        self.assertEqual(page._scan_panel.state, "idle")
+        self.assertEqual(page._target_input.text(), "rutracker.org")
+
+    def test_running_scan_says_why_the_target_was_not_set(self) -> None:
+        page = self._page()
+        with (
+            patch.object(page._strategy_scan_run_runtime, "is_running", return_value=True),
+            patch("blockcheck.ui.strategy_scan_page.InfoBarHelper.info") as info,
+        ):
+            page.prefill_target("rutracker.org")
+
+        info.assert_called_once()
+        self.assertIn("уже идёт", info.call_args.args[1])
+        self.assertNotEqual(page._target_input.text(), "rutracker.org")

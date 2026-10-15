@@ -204,6 +204,7 @@ class FakeEvents:
         self.cancel_after_results: int | None = None
         self.started_args: list[str] = []
         self.stages: list[tuple[str, str]] = []
+        self.stage_texts: list[str] = []
 
     def log(self, message):
         self.logs.append(message)
@@ -216,6 +217,7 @@ class FakeEvents:
 
     def stage(self, step, status, text=""):
         self.stages.append((step, status))
+        self.stage_texts.append(text)
 
     def strategy_result(self, result):
         self.results.append(result)
@@ -946,3 +948,20 @@ class StopDuringStartTests(unittest.TestCase):
         self.assertEqual(events.results, [])
         self.assertEqual(env.recovered, 0)
         self.assertEqual(env.history_saves, [])
+
+
+class TimeLeftTests(unittest.TestCase):
+    def test_progress_names_the_time_left(self) -> None:
+        env = FakeEnv(network=blocked_unless(), candidates=[cand(f"x{i}") for i in range(10)])
+        original = env.probe_https
+
+        def slow_probe(host, addresses):
+            env.clock += 20.0  # каждая стратегия — около 20 с
+            return original(host, addresses)
+
+        env.probe_https = slow_probe
+        _report, events = run(env)
+
+        texts = [text for text in events.stage_texts if text.startswith("Проверяем")]
+        self.assertNotIn("осталось", texts[0])
+        self.assertTrue(any("осталось ≈ 2 мин" in text for text in texts), texts)
