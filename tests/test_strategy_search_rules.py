@@ -151,6 +151,50 @@ class BaselineRuleTests(unittest.TestCase):
         self.assertEqual(rules.final_verdict([False]), rules.VERDICT_FAILED)
         self.assertEqual(rules.final_verdict([]), rules.VERDICT_FAILED)
 
+    def test_one_silence_is_forgiven_only_after_a_success(self) -> None:
+        ok, silent, explicit = rules.AttemptMark(True), rules.AttemptMark(False, True), rules.AttemptMark(False)
+
+        self.assertTrue(rules.attempts_done([silent]))
+        self.assertEqual(rules.final_verdict([silent]), rules.VERDICT_FAILED)
+        self.assertFalse(rules.attempts_done([ok, silent]))
+        self.assertTrue(rules.attempts_done([ok, silent, ok, ok]))
+        self.assertEqual(rules.final_verdict([ok, silent, ok, ok]), rules.VERDICT_WORKING)
+        self.assertTrue(rules.attempts_done([ok, silent, silent]))
+        self.assertEqual(rules.final_verdict([ok, silent, silent]), rules.VERDICT_UNSTABLE)
+        self.assertTrue(rules.attempts_done([ok, explicit]))
+        self.assertEqual(rules.final_verdict([ok, explicit]), rules.VERDICT_UNSTABLE)
+        self.assertTrue(rules.attempts_done([ok, ok, ok]))
+
+    def test_silent_attempt_has_no_explicit_dpi_trace(self) -> None:
+        timeout = ProbeOutcome(rules.PROBE_BLOCKED, "нет ответа (таймаут)", failure="timeout")
+        reset = ProbeOutcome(rules.PROBE_BLOCKED, "соединение сброшено", failure="reset")
+
+        self.assertTrue(rules.attempt_silent([timeout, self.OK]))
+        self.assertTrue(rules.attempt_silent([self.GONE]))
+        self.assertFalse(rules.attempt_silent([timeout, reset]))
+        self.assertFalse(rules.attempt_silent([self.OK]))
+
+    def test_addresses_are_spread_over_subnets(self) -> None:
+        picked = rules.spread_addresses(["1.1.1.1", "1.1.1.2", "1.1.2.1", "1.1.3.1", "2a00::1", "2a00::2"])
+        self.assertEqual(picked, ["1.1.1.1", "1.1.2.1", "2a00::1"])
+        self.assertEqual(rules.spread_addresses(["2a00::1"]), ["2a00::1"])
+
+    def test_short_answer_needs_volume_and_cut_is_blocked(self) -> None:
+        from diagnostics import volume_probe
+
+        short = ProbeOutcome(rules.PROBE_OK, "HTTP 200", 50.0, body_size=900)
+        long = ProbeOutcome(rules.PROBE_OK, "HTTP 200", 50.0, body_size=60_000)
+        self.assertTrue(rules.needs_volume(short))
+        self.assertFalse(rules.needs_volume(long))
+
+        cut = rules.judge_volume(short, volume_probe.VolumeVerdict(volume_probe.VOLUME_CUT, "", cut_kb=16))
+        self.assertEqual((cut.state, cut.volume), (rules.PROBE_BLOCKED, rules.VOLUME_CUT))
+        self.assertIn("16 КБ", cut.reason)
+        self.assertFalse(rules.attempt_silent([cut]))
+        unknown = rules.judge_volume(short, volume_probe.VolumeVerdict(volume_probe.VOLUME_UNKNOWN, ""))
+        self.assertTrue(unknown.ok)
+        self.assertFalse(rules.needs_volume(unknown))
+
 
 class UdpRuleTests(unittest.TestCase):
     primary = UdpProbeSpec("Цель", "stun", "stun.example", 3478, "9.9.9.9", primary=True)

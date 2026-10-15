@@ -54,6 +54,22 @@ def strategy_lines_from_args(strategy_args: str) -> tuple[str, ...]:
     return tuple(line.strip() for line in str(strategy_args or "").splitlines() if line.strip())
 
 
+# Функции, которые до конца соединения правят номера TCP в обе стороны: им нужен
+# перехват входящих пакетов и всё соединение, а не первые пакеты (описание
+# функции в ``lua/custom_funcs.lua``). С обычным профилем такая стратегия
+# проверялась бы нечестно и всегда «не работала».
+_FULL_FLOW_FUNCTIONS = frozenset({"tlsrec"})
+
+
+def _needs_full_flow(strategy: Sequence[str]) -> bool:
+    for line in strategy:
+        if line.startswith("--lua-desync="):
+            name = line.split("=", 1)[1].split(":", 1)[0].strip()
+            if name in _FULL_FLOW_FUNCTIONS:
+                return True
+    return False
+
+
 def build_probe_profile(
     scan_protocol: str,
     *,
@@ -67,7 +83,9 @@ def build_probe_profile(
 
     - Сайты: только TCP 443 и только домен цели (``--hostlist-domains``
       покрывает и поддомены). ``--out-range=-d8`` — стратегия работает на
-      первых пакетах соединения, как в обычных пресетах.
+      первых пакетах соединения, как в обычных пресетах. Стратегии, которые
+      ведут всё соединение (``tlsrec``), получают входящие пакеты и всё
+      соединение — так, как требует сама функция.
     - Голос: STUN и Discord IP discovery на любых UDP-портах.
     - Игры: UDP игровых портов и портов проверок на адресах из игровых
       ipset и на адресах, которыми подбор проверял стратегию.
@@ -88,6 +106,12 @@ def build_probe_profile(
             filters.append(f"--ipset-ip={','.join(dict.fromkeys(addresses))}")
         return ProbeProfile((f"--wf-udp-out={ports}",), tuple(filters), strategy)
     domain = str(match_domain or "").strip().lower()
+    if _needs_full_flow(strategy):
+        return ProbeProfile(
+            ("--wf-tcp-out=443", "--wf-tcp-in=443"),
+            ("--filter-tcp=443", f"--hostlist-domains={domain}", "--in-range=a", "--out-range=a", "--payload=all"),
+            strategy,
+        )
     return ProbeProfile(
         ("--wf-tcp-out=443",),
         ("--filter-tcp=443", f"--hostlist-domains={domain}", "--out-range=-d8"),

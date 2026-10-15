@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 import unittest
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from blockcheck.strategy_search import verdict as rules
 from blockcheck.strategy_search.engine import SearchRequest, StrategySearch
@@ -78,6 +78,8 @@ class FakeEnv:
     # Приветствие с именем до запуска winws2: (адрес, имя) -> True / False / None.
     # По умолчанию обычный фильтр: постороннее имя проходит, режут только цель.
     hello: object = None
+    # Объём по соединению: (running_id, адрес) -> VOLUME_*; по умолчанию набирается.
+    volume: object = None
 
     def __post_init__(self):
         self.running = None
@@ -92,6 +94,7 @@ class FakeEnv:
         self.history_saved = None
         self.slept = 0.0
         self.hellos: list = []
+        self.volume_calls: list = []
         self.clock = 0.0
         self.control = list(self.control or [])
 
@@ -147,6 +150,20 @@ class FakeEnv:
     def probe_https(self, host, addresses):
         outcome = self._answer()
         return [outcome for _address in addresses]
+
+    def probe_volume(self, host, address, answered):
+        self.volume_calls.append((self.running, address))
+        code = self.volume(self.running, address) if self.volume is not None else rules.VOLUME_OK
+        if code == rules.VOLUME_CUT:
+            return ProbeOutcome(
+                rules.PROBE_BLOCKED,
+                "соединение замирает после ~16 КБ (блокировка по объёму)",
+                answered.time_ms,
+                "reset",
+                answered.body_size,
+                rules.VOLUME_CUT,
+            )
+        return replace(answered, volume=code)
 
     def probe_hello(self, address, name):
         self.hellos.append((address, name))
@@ -651,3 +668,156 @@ class UdpTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class HonestCheckTests(unittest.TestCase):
+    """Честная проверка: объём, одна прощённая тишина, контроль двумя пробами."""
+
+    def test_volume_block_is_found_without_bypass_and_judges_every_strategy(self) -> None:
+        # Короткая страница открывается всегда, но без «good» соединение замирает на объёме.
+        env = FakeEnv(
+            network=lambda running, n: OK,
+            candidates=[cand("bad"), cand("good")],
+            volume=lambda running, address: rules.VOLUME_OK if running == "good" else rules.VOLUME_CUT,
+        )
+        report, events = run(env)
+
+        self.assertFalse(report.baseline_accessible)
+        self.assertEqual(events.questions, [])
+        by_id = {result.strategy_id: result for result in events.results}
+        self.assertEqual(by_id["bad"].verdict, rules.VERDICT_FAILED)
+        self.assertIn("объёму", by_id["bad"].error)
+        self.assertEqual(by_id["good"].verdict, rules.VERDICT_WORKING)
+        # Каждая попытка «good» и проверка без обхода после неё судятся объёмом.
+        self.assertGreaterEqual(sum(1 for running, _a in env.volume_calls if running == "good"), 3)
+        self.assertIn(None, [running for running, _a in env.volume_calls[-2:]])
+
+    def test_short_answer_under_strategy_is_topped_up_once(self) -> None:
+        env = FakeEnv(
+            network=blocked_unless("cut", "good"),
+            candidates=[cand("cut"), cand("good")],
+            volume=lambda running, address: rules.VOLUME_CUT if running == "cut" else rules.VOLUME_OK,
+        )
+        _report, events = run(env)
+
+        by_id = {result.strategy_id: result for result in events.results}
+        self.assertEqual(by_id["cut"].verdict, rules.VERDICT_FAILED)
+        self.assertEqual(by_id["good"].verdict, rules.VERDICT_WORKING)
+        self.assertEqual(by_id["good"].raw_data["volume"], rules.VOLUME_OK)
+        # Для обычной блокировки объём добирается один раз, а не в каждой попытке
+        # (адреса 1.1.1.10 и 1.1.1.11 — одна подсеть, проверяется один).
+        self.assertEqual(sum(1 for running, _a in env.volume_calls if running == "good"), 1)
+
+    def test_unknown_volume_is_named_in_the_log(self) -> None:
+        env = FakeEnv(
+            network=blocked_unless("good"),
+            candidates=[cand("good")],
+            volume=lambda running, address: rules.VOLUME_UNKNOWN,
+        )
+        _report, events = run(env)
+
+        self.assertEqual(events.results[0].verdict, rules.VERDICT_WORKING)
+        self.assertTrue(any("объём не проверен" in line for line in events.logs))
+
+    def test_one_silent_failure_after_success_is_forgiven(self) -> None:
+        def network(running, number):
+            if running == "good":
+                return TIMEOUT if number == 1 else OK
+            return RESET
+
+        env = FakeEnv(network=network, candidates=[cand("good")])
+        _report, events = run(env)
+
+        result = events.results[0]
+        self.assertEqual(result.verdict, rules.VERDICT_WORKING)
+        self.assertEqual((result.attempts_ok, result.attempts_total), (3, 4))
+
+    def test_explicit_failure_after_success_is_unstable(self) -> None:
+        def network(running, number):
+            if running == "flaky":
+                return RESET if number == 1 else OK
+            return RESET
+
+        env = FakeEnv(network=network, candidates=[cand("flaky")])
+        _report, events = run(env)
+
+        self.assertEqual(events.results[0].verdict, rules.VERDICT_UNSTABLE)
+        self.assertEqual(env.calls["flaky"], 2)
+
+    def test_first_silent_failure_is_final_and_cheap(self) -> None:
+        env = FakeEnv(network=lambda running, n: TIMEOUT if running == "a" else RESET, candidates=[cand("a")])
+        _report, events = run(env)
+
+        self.assertEqual(events.results[0].verdict, rules.VERDICT_FAILED)
+        self.assertEqual(env.calls["a"], 1)
+
+    def test_target_open_only_once_is_treated_as_blocked(self) -> None:
+        def network(running, number):
+            if running is None:
+                return OK if number == 0 else RESET
+            return OK if running == "good" else RESET
+
+        env = FakeEnv(network=network, candidates=[cand("good")])
+        report, events = run(env)
+
+        self.assertEqual(events.questions, [])
+        self.assertFalse(report.baseline_accessible)
+        self.assertTrue(any("через раз" in line for line in events.logs))
+        self.assertEqual(events.results[0].verdict, rules.VERDICT_WORKING)
+
+    def test_pass_control_tries_twice(self) -> None:
+        def network(running, number):
+            if running == "pass":
+                return RESET if number == 0 else OK
+            return RESET
+
+        env = FakeEnv(network=network, candidates=[cand("a")])
+        report, events = run(env, FakeEvents(answer=False))
+
+        self.assertEqual(env.calls["pass"], 2)
+        self.assertEqual(len(events.questions), 1)
+        self.assertTrue(report.baseline_accessible)
+
+    def test_recheck_without_bypass_tries_twice(self) -> None:
+        state = {"after": 0}
+
+        def network(running, number):
+            if running == "lucky":
+                state["after"] = 0
+                return OK
+            if running is None and number > 0:
+                state["after"] += 1
+                return OK if state["after"] == 2 else RESET
+            return RESET
+
+        env = FakeEnv(network=network, candidates=[cand("lucky")])
+        _report, events = run(env)
+
+        self.assertEqual(events.results[0].verdict, rules.VERDICT_NOT_COUNTED)
+
+    def test_network_lost_during_confirmation_rechecks_strategy(self) -> None:
+        state = {"down": True}
+
+        def network(running, number):
+            if running == "good" and number == 1 and state["down"]:
+                state["down"] = False
+                return TIMEOUT
+            return OK if running == "good" else RESET
+
+        # 1) перед подбором сеть есть; 2) после тишины на подтверждении — нет; 3) вернулась.
+        env = FakeEnv(network=network, candidates=[cand("good")], control=[True, False, True])
+        _report, events = run(env)
+
+        self.assertEqual(len(events.results), 1)
+        self.assertEqual(events.results[0].verdict, rules.VERDICT_WORKING)
+        self.assertGreater(env.slept, 0)
+
+    def test_full_flow_strategy_gets_incoming_packets(self) -> None:
+        env = FakeEnv(network=blocked_unless("rec"), candidates=[cand("rec", "tlsrec")])
+        _report, events = run(env)
+
+        result = events.results[0]
+        self.assertTrue(result.success)
+        self.assertIn("--wf-tcp-in=443", result.apply_lines)
+        self.assertIn("--in-range=a", result.apply_lines)
+        self.assertNotIn("--out-range=-d8", result.apply_lines)

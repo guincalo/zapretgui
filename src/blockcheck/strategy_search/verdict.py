@@ -8,6 +8,9 @@
 - стратегию проверяют, только если цель действительно закрыта без обхода;
 - стратегия «работает», только если помогла на тех же адресах, которые без
   обхода были закрыты, и помогла несколько раз подряд;
+- «открылось» значит «прошёл объём», а не только «ответил»: фильтр режет
+  соединение после 16–20 КБ, а короткая страница этот порог не пересекает;
+- одна случайная тишина не губит стратегию, явный след DPI губит сразу;
 - сбой сети или падение winws2 не записывается в провал стратегии.
 """
 
@@ -54,6 +57,10 @@ class ProbeOutcome:
     # Вид сбоя из ``utils.net_failure``; пусто, если адрес ответил. Правила опираются
     # на него, а ``reason`` — только текст для человека.
     failure: str = ""
+    # Сколько байт тела ответа пришло (для решения, нужна ли проверка объёма).
+    body_size: int = 0
+    # Проверка объёма по соединению: "" — не делалась, VOLUME_* — её итог.
+    volume: str = ""
 
     @property
     def ok(self) -> bool:
@@ -104,7 +111,42 @@ def judge_https(result) -> ProbeOutcome:
         return ProbeOutcome(PROBE_BLOCKED, f"ответ оборвался на ~{size_kb} КБ", elapsed, FAILURE_RESET)
     if status == 400:
         return ProbeOutcome(PROBE_BLOCKED, "сервер ответил 400: до него дошли фейковые пакеты", elapsed, FAILURE_HTTP)
-    return ProbeOutcome(PROBE_OK, f"HTTP {status}", elapsed)
+    return ProbeOutcome(PROBE_OK, f"HTTP {status}", elapsed, body_size=int(result.body_size or 0))
+
+
+# --- Объём: прошло ли соединение порог обрыва ---------------------------------------
+
+VOLUME_OK = "ok"
+VOLUME_CUT = "cut"
+# Набрать объём не удалось (сервер отвечает мало и закрывает соединение):
+# обрыв не проверен, но и не найден.
+VOLUME_UNKNOWN = "unknown"
+
+
+def needs_volume(outcome: ProbeOutcome) -> bool:
+    """Адрес ответил, но так коротко, что обрыв после 16 КБ не мог проявиться."""
+    return outcome.ok and not outcome.volume and outcome.body_size < FREEZE_MAX_BYTES
+
+
+def judge_volume(answered: ProbeOutcome, verdict) -> ProbeOutcome:
+    """Итог ``diagnostics.volume_probe.judge`` поверх ответа того же адреса.
+
+    Замирание в окне обрыва — явный след фильтра: такая стратегия не работает,
+    сколько бы раз ни открывалась короткая страница.
+    """
+    from diagnostics import volume_probe
+
+    if verdict.code == volume_probe.VOLUME_CUT:
+        return ProbeOutcome(
+            PROBE_BLOCKED,
+            f"соединение замирает после ~{max(1, verdict.cut_kb)} КБ (блокировка по объёму)",
+            answered.time_ms,
+            FAILURE_RESET,
+            answered.body_size,
+            VOLUME_CUT,
+        )
+    code = VOLUME_OK if verdict.code == volume_probe.VOLUME_OK else VOLUME_UNKNOWN
+    return ProbeOutcome(answered.state, answered.reason, answered.time_ms, answered.failure, answered.body_size, code)
 
 
 # --- Проверка «до подбора» ----------------------------------------------------
@@ -120,12 +162,14 @@ class BaselineDecision:
     # Адреса, на которых дальше проверяются все стратегии.
     probe_addresses: tuple[str, ...] = ()
     reason: str = ""
+    # Закрыто обрывом по объёму: цель отвечает, но соединение замирает.
+    volume_block: bool = False
 
 
 def decide_baseline(
     outcomes: Sequence[tuple[str, ProbeOutcome]],
     *,
-    max_probe_addresses: int = 2,
+    max_probe_addresses: int = 3,
 ) -> BaselineDecision:
     """Что делать дальше по проверке цели без обхода.
 
@@ -138,7 +182,7 @@ def decide_baseline(
     if blocked:
         return BaselineDecision(
             BASELINE_BLOCKED,
-            tuple(_one_per_family(blocked)[: max(1, int(max_probe_addresses))]),
+            tuple(spread_addresses(blocked, max(1, int(max_probe_addresses)))),
             _first_reason(outcomes, PROBE_BLOCKED),
         )
     opened = [address for address, outcome in outcomes if outcome.state == PROBE_OK]
@@ -150,17 +194,36 @@ def decide_baseline(
     return BaselineDecision(BASELINE_NOT_DPI, (), reason)
 
 
-def _one_per_family(addresses: Iterable[str]) -> list[str]:
-    """По одному адресу IPv4 и IPv6: этого хватает, а проверка вдвое быстрее."""
+def _subnet(address: str) -> str:
+    if ":" in address:
+        return ":".join(address.split(":")[:4])
+    return ".".join(address.split(".")[:3])
+
+
+def spread_addresses(addresses: Iterable[str], limit: int = 3) -> list[str]:
+    """Адреса из разных подсетей: два IPv4 и один IPv6.
+
+    Соседние адреса одного хостинга фильтр режет по-разному, поэтому стратегия,
+    проверенная на одном сервере, может не открыть другой. Адреса из одной
+    подсети почти всегда ведут себя одинаково — их второй раз не берём.
+    Адреса проверяются параллельно, так что время попытки почти не растёт.
+    """
+    items = list(dict.fromkeys(str(address) for address in addresses if address))
+    v4 = [address for address in items if ":" not in address]
+    v6 = [address for address in items if ":" in address]
     picked: list[str] = []
-    seen: set[bool] = set()
-    for address in addresses:
-        is_v6 = ":" in address
-        if is_v6 in seen:
-            continue
-        seen.add(is_v6)
-        picked.append(address)
-    return picked
+    subnets: set[str] = set()
+    for address in v4:
+        if len(picked) >= 2:
+            break
+        if _subnet(address) not in subnets:
+            subnets.add(_subnet(address))
+            picked.append(address)
+    if v6:
+        picked.append(v6[0])
+    if not picked:
+        picked = items[:1]
+    return picked[: max(1, int(limit))]
 
 
 def _first_reason(outcomes: Sequence[tuple[str, ProbeOutcome]], state: str) -> str:
@@ -205,6 +268,22 @@ def attempt_needs_network_check(outcomes: Sequence[ProbeOutcome]) -> bool:
         if outcome.failure in _SILENT_FAILURES:
             return True
     return False
+
+
+def attempt_silent(outcomes: Sequence[ProbeOutcome]) -> bool:
+    """Провал без единого явного следа DPI: только тишина или «не подключиться».
+
+    Такой провал бывает и от потерянного пакета, поэтому стратегии дают ещё
+    одну попытку. Сброс, чужой сертификат, ответ 400 или замирание на объёме
+    случайностью не объяснить — после них повтор не нужен.
+    """
+    failed = [outcome for outcome in outcomes if not outcome.ok]
+    if not failed:
+        return False
+    return all(
+        outcome.state == PROBE_UNREACHABLE or outcome.failure in _SILENT_FAILURES
+        for outcome in failed
+    )
 
 
 # Тишина и закрытое без ответа соединение: так выглядит и DPI, и пропавший интернет.
@@ -271,13 +350,57 @@ VERDICT_CRASH = "crash"
 VERDICT_NOT_COUNTED = "not_counted"
 VERDICT_CANCELLED = "cancelled"
 
+# Столько раз стратегия должна открыть цель на свежих соединениях.
 CONFIRM_ATTEMPTS = 3
+# Столько тихих провалов (молчание, потерянный пакет) прощается при
+# подтверждении: без этого одна потеря на линии делала открывшую цель
+# стратегию «нестабильной».
+SILENT_FAILURES_ALLOWED = 1
+MAX_ATTEMPTS = CONFIRM_ATTEMPTS + SILENT_FAILURES_ALLOWED
 
 
-def final_verdict(passed_attempts: Sequence[bool]) -> str:
-    """Итог по попыткам: первая — отбор, остальные — перепроверка победителя."""
-    if not passed_attempts or not passed_attempts[0]:
+@dataclass(frozen=True, slots=True)
+class AttemptMark:
+    passed: bool
+    # Провал без явного следа DPI (только для провала).
+    silent: bool = False
+
+
+def _marks(attempts: Sequence[AttemptMark | bool]) -> list[AttemptMark]:
+    return [item if isinstance(item, AttemptMark) else AttemptMark(bool(item)) for item in attempts]
+
+
+def attempts_done(attempts: Sequence[AttemptMark | bool]) -> bool:
+    """Хватит ли попыток для вывода.
+
+    Первая попытка — отбор: провал любого вида сразу «не работает», иначе
+    каждая нерабочая стратегия на «тихом» фильтре стоила бы два таймаута.
+    Дальше принимаем после трёх успехов; отвергаем после явного следа DPI или
+    второй тишины. Так случайная потеря у уже открывшей цель стратегии стоит
+    одну лишнюю попытку, а не отметку «нестабильно».
+    """
+    marks = _marks(attempts)
+    passed = sum(1 for mark in marks if mark.passed)
+    explicit = sum(1 for mark in marks if not mark.passed and not mark.silent)
+    silent = sum(1 for mark in marks if not mark.passed and mark.silent)
+    return (
+        (bool(marks) and not marks[0].passed)
+        or passed >= CONFIRM_ATTEMPTS
+        or explicit > 0
+        or silent > SILENT_FAILURES_ALLOWED
+        or len(marks) >= MAX_ATTEMPTS
+    )
+
+
+def final_verdict(attempts: Sequence[AttemptMark | bool]) -> str:
+    """Итог по попыткам: ни одного успеха — не работает; три успеха без явного
+    провала и не больше одной тишины — работает; иначе — нестабильно."""
+    marks = _marks(attempts)
+    passed = sum(1 for mark in marks if mark.passed)
+    explicit = sum(1 for mark in marks if not mark.passed and not mark.silent)
+    silent = sum(1 for mark in marks if not mark.passed and mark.silent)
+    if passed == 0:
         return VERDICT_FAILED
-    if len(passed_attempts) >= CONFIRM_ATTEMPTS and all(passed_attempts):
+    if passed >= CONFIRM_ATTEMPTS and explicit == 0 and silent <= SILENT_FAILURES_ALLOWED:
         return VERDICT_WORKING
     return VERDICT_UNSTABLE

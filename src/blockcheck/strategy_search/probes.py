@@ -141,6 +141,19 @@ def probe_https_addresses(host: str, addresses: Sequence[str], *, cancel=None) -
         return list(pool.map(lambda address: probe_https(host, address, cancel=cancel), addresses))
 
 
+def probe_volume(host: str, address: str, answered: ProbeOutcome, *, cancel) -> ProbeOutcome:
+    """Добрать объём по одному соединению к адресу, который ответил коротко.
+
+    Фильтр считает данные по соединению, поэтому подряд уходят запросы, пока
+    не наберётся больше окна обрыва (``diagnostics.volume_probe``). Замерло
+    в окне дважды — стратегия не работает, хотя главная страница открылась.
+    """
+    from diagnostics import volume_probe
+
+    facts = volume_probe.collect(host, address, "/", cancel=cancel)
+    return verdict.judge_volume(answered, volume_probe.judge(facts))
+
+
 def tcp_port_open(address: str, port: int, *, timeout: float = 3.0) -> bool:
     """Принимает ли сервер TCP-подключение к порту (без шифрования и запроса)."""
     family = socket.AF_INET6 if ":" in address else socket.AF_INET

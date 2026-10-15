@@ -265,6 +265,9 @@ class RealEnvironment:
     def probe_https(self, host: str, addresses: Sequence[str]):
         return probes.probe_https_addresses(host, addresses, cancel=self._cancel)
 
+    def probe_volume(self, host: str, address: str, answered):
+        return probes.probe_volume(host, address, answered, cancel=self._cancel)
+
     def probe_hello(self, address: str, name: str | None) -> bool | None:
         """Начало шифрования к адресу с именем ``name``: True — прошло, False — оборвали, None — нет соединения."""
         from diagnostics.block_cause import HELLO_CANCELLED, HELLO_CONNECT, tls_hello

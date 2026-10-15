@@ -350,7 +350,15 @@ def build_result_presentation(result, *, row_number: int) -> StrategyScanResultP
     if error_text:
         tip_parts.append(f"\n--- Причина ---\n{error_text}")
     if verdict == "working":
-        status_tooltip = f"Открылось {attempts_ok} раза подряд на свежих соединениях"
+        if attempts_total > attempts_ok:
+            status_tooltip = (
+                f"Открылось {attempts_ok} раза из {attempts_total} на свежих соединениях: "
+                "один раз сервер промолчал — так бывает при потере пакета"
+            )
+        else:
+            status_tooltip = f"Открылось {attempts_ok} раза подряд на свежих соединениях"
+        if (getattr(result, "raw_data", None) or {}).get("volume") == "unknown":
+            status_tooltip += ". Объём не проверен: сайт отвечает коротко"
     elif verdict == "unstable":
         status_tooltip = f"Открылось не каждый раз ({attempts_ok} из {attempts_total}): {error_text}"
     else:
