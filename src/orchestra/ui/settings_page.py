@@ -100,6 +100,9 @@ class OrchestraSettingsPage(QWidget):
     def restore_navigation_screen(self, screen: ScreenState) -> bool:
         return self._navigation_tabs.restore(screen)
 
+    def navigation_screen_title(self, screen: ScreenState) -> str:
+        return self._navigation_tabs.screen_title(screen)
+
     def showEvent(self, event):  # noqa: N802
         super().showEvent(event)
         # Первая вкладка собирается при первом показе, если до него не открыли другую

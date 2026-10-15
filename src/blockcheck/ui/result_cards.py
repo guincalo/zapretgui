@@ -1899,6 +1899,22 @@ class _SectionBlock(QWidget):
         painter.drawRoundedRect(self.rect(), CARD_RADIUS, CARD_RADIUS)
         painter.end()
 
+    def child_cards(self) -> list[Card]:
+        """Отчёты на уровень глубже, которые открываются из этого раздела: по ним журнал
+        окна открывает записанный шаг вглубь заново, без щелчка."""
+        section = self.section
+        cards: list[Card] = []
+        if self.grid is not None:
+            if section.tiles:
+                cards += [line.page for line in section.lines if line.page is not None]
+            else:
+                cards += [server_card(line, section) for line in section.lines]
+        elif self.findings_flow is not None:
+            cards += [finding_detail_card(line.name, line.state, line.parts) for line in section.lines]
+        if self.matrix is not None:
+            cards += [service_card(service, self.matrix.columns()) for service in self.matrix.services()]
+        return cards
+
 
 def is_narrow_section(section: Section) -> bool:
     """Раздел из коротких строк «что измеряли — что получилось» (пинг, порты одного сервера).
@@ -2097,6 +2113,8 @@ class ResultDetailView(QWidget):
     root_requested = pyqtSignal()
     # Просят открыть длинный текст раздела страницей-редактором: (название, текст).
     text_opened = pyqtSignal(str, str)
+    # Шаг внутри отчёта: True — вглубь (сервер из списка), False — назад к уровню выше.
+    level_changed = pyqtSignal(bool)
     ROOT_KEY = "blockcheck"
     PARENT_KEY = "parent"
     # Шаг строки пути внутри отчёта: «Зарубежные хостинги» над страницей одного сервера.
@@ -2164,12 +2182,34 @@ class ResultDetailView(QWidget):
             # Отчёт встроен в чужую страницу (прошлая проверка): шаг вглубь открывает она — своей страницей.
             self.child_handler(card)
             return
+        self._push_child(card)
+        self.level_changed.emit(True)
+
+    def _push_child(self, card: Card) -> None:
         area = self._scroll_area()
         scroll = area.verticalScrollBar().value() if area is not None else 0
         self._ancestors.append((self._card, scroll))
         self._render(card)
         if area is not None:
             area.verticalScrollBar().setValue(0)
+
+    def path_keys(self) -> tuple[str, ...]:
+        """Ключи отчётов от открытого с карточки до текущего: экран журнала окна."""
+        if self._card is None:
+            return ()
+        return (*(card.key for card, _scroll in self._ancestors), self._card.key)
+
+    def open_path(self, keys) -> bool:
+        """Повторяет шаги вглубь по ключам (журнал окна). False — такого отчёта уже нет."""
+        for key in keys:
+            child = next(
+                (card for block in self.blocks for card in block.child_cards() if card.key == key),
+                None,
+            )
+            if child is None:
+                return False
+            self._push_child(child)
+        return True
 
     def go_back(self) -> bool:
         """Шаг назад внутри отчёта. ``False`` — возвращаться некуда: отчёт пора закрывать."""
@@ -2186,6 +2226,7 @@ class ResultDetailView(QWidget):
         if area is not None:
             # К тому же месту списка, с которого уходили; раскладка к этому мигу ещё досчитывается.
             QTimer.singleShot(0, lambda: area.verticalScrollBar().setValue(scroll))
+        self.level_changed.emit(False)
 
     def _scroll_area(self) -> QAbstractScrollArea | None:
         parent = self.parentWidget()

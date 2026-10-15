@@ -1597,6 +1597,14 @@ class ProfileSetupPageBase(BasePage):
             self._list_file_server_text_snapshot = None
         # Другой профиль, а не новая ссылка на этот: мимо сеттера _profile_key.
         self.__dict__["_profile_key"] = next_key
+        if next_key != current_key and self.__dict__.get("_strategy_stack") is not None:
+            # Другой профиль открывается с начала — со стратегий, а не на разделе
+            # прежнего («Текст профиля», «Список сайтов»). Журнал, если открывает
+            # записанный раздел, закажет его сразу после.
+            set_current_index_if_changed(self._strategy_stack, 0)
+            strategy_list = self.__dict__.get("_strategy_list")
+            if strategy_list is not None and strategy_list.details_open():
+                strategy_list.close_details()
         if next_key != current_key:
             # Другой профиль — другой экран журнала, даже пока его данные грузятся.
             try:

@@ -106,8 +106,8 @@ def update_blockcheck_tabs_accessibility(pivot, *, current: object | None = None
 PARTIAL_REDRAW_MS = 400
 
 
-# Подробный отчёт текущей проверки: из журнала он открывается заново, со свежим текстом.
-_LIVE_REPORT_TITLE = "Подробный отчёт BlockCheck"
+# Между ключами шагов вглубь отчёта карточки в ключе экрана: «hostings>server:DE.AWS-01».
+_CARD_LEVEL_SEPARATOR = ">"
 
 class BlockcheckPage(BasePage):
     """BlockCheck — какие сайты открываются и что делать с остальными."""
@@ -185,6 +185,8 @@ class BlockcheckPage(BasePage):
         self._past_cards_view = None
         # Страница прошлой проверки, из которой открыт отчёт карточки: «назад» ведёт в неё.
         self._detail_past_view = None
+        # Откуда открыт отчёт карточки: (экран прошлой проверки или None, карточка).
+        self._card_screen_origin = (None, None)
         # Отчёт карточки открыт из прошлой проверки — и где в ней стояла прокрутка.
         self._detail_from_past = False
         self._past_return_scroll = 0
@@ -918,6 +920,7 @@ class BlockcheckPage(BasePage):
             self._detail_view.closed.connect(self._close_card_detail)
             self._detail_view.root_requested.connect(self._close_card_detail_to_tab)
             self._detail_view.text_opened.connect(self._open_section_text)
+            self._detail_view.level_changed.connect(self._on_detail_level_changed)
             self._detail_view.setVisible(False)
             self.add_widget(self._detail_view)
         # Отчёт открыт из прошлой проверки: «назад» ведёт в неё же, к тому же месту.
@@ -933,11 +936,34 @@ class BlockcheckPage(BasePage):
         self._show_over_tabs(self._detail_view, remember_scroll=not self._detail_from_past)
         self._detail_view.show_card(card, parent_title=past.title() if self._detail_from_past else "")
         self._detail_view.setFocus()
+        # Карточка прошлой проверки: её отчёт не меняется, а «назад» из неё — в ту проверку.
+        self._card_screen_origin = (past_screen, card)
+        self._note_card_screen()
+
+    def _note_card_screen(self, *, returned: bool = False) -> None:
+        """Экран отчёта карточки вместе с шагами вглубь: «карточка>сервер»."""
+        past_screen, card = self._card_screen_origin
+        path = _CARD_LEVEL_SEPARATOR.join(self._detail_view.path_keys())
+        title = (self._detail_view.card() or card).title
         if past_screen is not None:
-            # Карточка прошлой проверки: её отчёт не меняется, а «назад» из неё — в ту проверку.
-            self._note_over_tabs_screen("pastcard", f"{past_screen.key}/{card.key}", card.title, (past_screen, card))
+            self._note_over_tabs_screen("pastcard", f"{past_screen.key}/{path}", title, (past_screen, card), returned=returned)
         else:
-            self._note_over_tabs_screen("card", card.key, card.title, card)
+            self._note_over_tabs_screen("card", path, title, card, returned=returned)
+
+    def _reopen_card_levels(self, levels) -> bool:
+        """Повторяет записанные шаги вглубь отчёта карточки; False — такого уровня уже нет."""
+        if not levels:
+            return True
+        if not self._detail_view.open_path(levels):
+            return False
+        self._note_card_screen()
+        return True
+
+    def _on_detail_level_changed(self, deeper: bool) -> None:
+        """Шаг вглубь отчёта — новый шаг журнала, возврат к уровню выше — шаг «назад»."""
+        if self._detail_view is None or self._detail_view.isHidden():
+            return
+        self._note_card_screen(returned=not deeper)
 
     def _open_card_by_key(self, key: str) -> None:
         """Нажатие на строку итога: открывает полный отчёт той же карточки, что стоит ниже."""
@@ -1055,11 +1081,13 @@ class BlockcheckPage(BasePage):
     # ------------------------------------------------------------------
     # Журнал экранов окна: кнопки «назад» и «вперёд»
     # ------------------------------------------------------------------
-    def _note_over_tabs_screen(self, kind: str, name: str, title: str, data: object) -> None:
-        """Запоминает экран поверх вкладок вместе с вкладкой, с которой его открыли."""
+    def _note_over_tabs_screen(self, kind: str, name: str, title: str, data: object, *, returned: bool = False) -> None:
+        """Запоминает экран поверх вкладок вместе с вкладкой, с которой его открыли.
+
+        ``returned`` — человек вернулся сюда с экрана глубже (Esc в отчёте карточки)."""
         tab_key = self.TAB_ORDER[self._active_tab_index]
         self._over_tabs_screen = ScreenState(key=f"{kind}:{name}", title=str(title or ""), payload=(tab_key, data))
-        self.navigation_screen_changed.emit()
+        (self.navigation_screen_returned if returned else self.navigation_screen_changed).emit()
 
     def navigation_screen(self) -> ScreenState:
         if self._over_tabs_screen is not None:
@@ -1071,6 +1099,14 @@ class BlockcheckPage(BasePage):
             item = self._tabs_pivot.items.get(tab_key)
             title = item.text() if item is not None else ""
         return ScreenState(key=f"tab:{tab_key}", title=title)
+
+    def navigation_screen_title(self, screen: ScreenState) -> str:
+        """Подпись вкладки — на текущем языке программы; у остальных экранов — записанная."""
+        kind, _, name = screen.key.partition(":")
+        if kind != "tab" or name == self.TAB_BLOCKCHECK or self._tabs_pivot is None:
+            return ""
+        item = self._tabs_pivot.items.get(name)
+        return item.text() if item is not None else ""
 
     def restore_navigation_screen(self, screen: ScreenState) -> bool:
         kind, _, name = screen.key.partition(":")
@@ -1099,13 +1135,27 @@ class BlockcheckPage(BasePage):
         выпадает из журнала. Прошлые проверки не меняются — их данные открываются
         как есть."""
         if kind == "card":
-            widget = self._result_cards.card(name) if self._result_cards is not None else None
-            return None if widget is None else (lambda: self._open_card_detail(widget.card))
-        if kind == "report" and name == _LIVE_REPORT_TITLE:
-            return self._open_report
-        if kind in {"server", "report"}:
-            opener = self._open_server_detail if kind == "server" else self._open_log_report
-            return lambda: opener(data)
+            root, *levels = name.split(_CARD_LEVEL_SEPARATOR)
+            widget = self._result_cards.card(root) if self._result_cards is not None else None
+            if widget is None:
+                return None
+
+            def reopen_card():
+                self._open_card_detail(widget.card)
+                return self._reopen_card_levels(levels)
+
+            return reopen_card
+        if kind == "tabreport":
+            report = self._tab_live_report(name)
+            return None if report is None else (lambda: self._open_log_report(report))
+        if kind == "server":
+            details, live = data
+            if live:
+                # Подробности сервера текущей проверки — по её свежим данным.
+                details = self._dns_servers_tab_page.live_details(name) if self._dns_servers_tab_page is not None else None
+            return None if details is None else (lambda: self._open_server_detail(details))
+        if kind == "report":
+            return lambda: self._open_log_report(data)
         if kind == "past":
             run, report = data
             return lambda: self._show_past_check(run, report)
@@ -1121,10 +1171,12 @@ class BlockcheckPage(BasePage):
             reopen_past = self._screen_opener(past_kind, past_name, past_data)
             if reopen_past is None:
                 return None
+            _root, *levels = name[len(past_screen.key) + 1:].split(_CARD_LEVEL_SEPARATOR)
 
-            def reopen() -> None:
+            def reopen():
                 reopen_past()
                 self._open_card_detail(card)
+                return self._reopen_card_levels(levels)
 
             return reopen
         return None
@@ -1141,11 +1193,13 @@ class BlockcheckPage(BasePage):
             self._server_detail_view.closed.connect(self._close_over_tabs)
             self._server_detail_view.setVisible(False)
             self.add_widget(self._server_detail_view)
+        # С вкладки — сервер текущей проверки; из прошлой проверки — её неизменный снимок.
+        live = not self._any_over_tabs_view_open()
         self._show_over_tabs(self._server_detail_view)
         self._server_detail_view.show_details(details)
         self._server_detail_view.setFocus()
         server = details.card.server
-        self._note_over_tabs_screen("server", server, server, details)
+        self._note_over_tabs_screen("server", server, server, (details, live))
 
     def _open_log_report(self, report) -> None:
         """«Отчёт» и «Лог» любой вкладки: текст открывается страницей-редактором с подсветкой."""
@@ -1157,13 +1211,20 @@ class BlockcheckPage(BasePage):
             self._log_report_view.setVisible(False)
             self.add_widget(self._log_report_view)
         # Строка пути ведёт на вкладку, с которой отчёт открыли, — под её названием на языке программы.
-        tab_item = self._tabs_pivot.items.get(self.TAB_ORDER[self._active_tab_index])
+        tab_key = self.TAB_ORDER[self._active_tab_index]
+        tab_item = self._tabs_pivot.items.get(tab_key)
         if tab_item is not None and tab_item.text():
             report = replace(report, root_title=tab_item.text())
+        # Отчёт, открытый прямо с вкладки, — её текущий отчёт: из журнала он строится
+        # заново по свежим данным. Отчёт прошлой проверки или раздела карточки не меняется.
+        from_tab = not self._any_over_tabs_view_open()
         self._show_over_tabs(self._log_report_view)
         self._log_report_view.show_report(report)
         self._log_report_view.editor.setFocus()
-        self._note_over_tabs_screen("report", report.title, report.title, report)
+        if from_tab:
+            self._note_over_tabs_screen("tabreport", tab_key, report.title, None)
+        else:
+            self._note_over_tabs_screen("report", report.title, report.title, report)
 
     def _scroll_to_top(self) -> None:
         try:
@@ -1172,15 +1233,30 @@ class BlockcheckPage(BasePage):
             pass
 
     def _open_report(self) -> None:
-        self._open_log_report(
-            LogReport(
-                title=_LIVE_REPORT_TITLE,
-                text=self._report_text(),
-                root_title="BlockCheck",
-                empty_text="Проверка ещё не запускалась.",
-                description="Технические подробности проверки: адреса, ответы DNS и время ответа серверов.",
-            )
+        self._open_log_report(self.live_report())
+
+    def live_report(self) -> LogReport:
+        """Подробный отчёт текущей проверки BlockCheck."""
+        return LogReport(
+            title="Подробный отчёт BlockCheck",
+            text=self._report_text(),
+            root_title="BlockCheck",
+            empty_text="Проверка ещё не запускалась.",
+            description="Технические подробности проверки: адреса, ответы DNS и время ответа серверов.",
         )
+
+    def _tab_live_report(self, tab_key: str):
+        """Текущий отчёт вкладки (кнопка «Отчёт»/«Лог» на ней); None — отчёта пока нет."""
+        if tab_key == self.TAB_BLOCKCHECK:
+            return self.live_report()
+        page = {
+            self.TAB_STRATEGY_SCAN: self._strategy_tab_page,
+            self.TAB_DOMAIN_LOOKUP: self._domain_lookup_tab_page,
+            self.TAB_DNS_SERVERS: self._dns_servers_tab_page,
+            self.TAB_DNS_SPOOFING: self._dns_spoofing_tab_page,
+        }.get(tab_key)
+        live = getattr(page, "live_report", None)
+        return live() if callable(live) else None
 
     def _report_text(self) -> str:
         """Текст отчёта: из самого отчёта (он же лежит в файле проверки), иначе — что успели записать по ходу."""

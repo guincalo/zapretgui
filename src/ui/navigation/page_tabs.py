@@ -43,13 +43,21 @@ class NavigationTabs:
 
     def screen(self) -> ScreenState:
         key = self.current_key()
-        title = ""
-        if self._title is not None:
-            try:
-                title = str(self._title(self.keys.index(key)) or "")
-            except Exception:
-                title = ""
-        return ScreenState(key=f"{TAB_PREFIX}{key}", title=title)
+        return ScreenState(key=f"{TAB_PREFIX}{key}", title=self.title_for(key))
+
+    def title_for(self, key: str) -> str:
+        """Подпись вкладки на текущем языке программы (для списка истории)."""
+        if self._title is None or key not in self.keys:
+            return ""
+        try:
+            return str(self._title(self.keys.index(key)) or "")
+        except Exception:
+            return ""
+
+    def screen_title(self, screen: ScreenState) -> str:
+        if not screen.key.startswith(TAB_PREFIX):
+            return ""
+        return self.title_for(screen.key[len(TAB_PREFIX):])
 
     def restore(self, screen: ScreenState) -> bool:
         if not screen.key.startswith(TAB_PREFIX):

@@ -335,26 +335,34 @@ class ServerCheckPage(BasePage):
             )
 
     def _open_details(self, server: str) -> None:
-        if self._report is None:
-            return
-        details = plans.build_details(self._report, server)
+        details = self.live_details(server)
         if details is not None:
             self.details_requested.emit(details)
 
     def _open_report(self) -> None:
+        report = self.live_report()
+        if report is not None:
+            self.report_requested.emit(report)
+
+    def live_report(self) -> LogReport | None:
+        """Отчёт вкладки по её текущему состоянию: его же журнал окна открывает при возврате."""
         if self._report is None:
-            return
-        self.report_requested.emit(
-            LogReport(
-                title=self._t("report.title", "Отчёт проверки DNS-серверов"),
-                text=plans.build_text_report(self._report),
-                root_title=self._t("title", "DNS-серверы"),
-                empty_text=self._t("report.empty", "Проверка ещё не запускалась."),
-                description=self._t(
-                    "report.description", "Полный текст проверки: таблица по адресам, итог и подробности."
-                ),
-            )
+            return None
+        return LogReport(
+            title=self._t("report.title", "Отчёт проверки DNS-серверов"),
+            text=plans.build_text_report(self._report),
+            root_title=self._t("title", "DNS-серверы"),
+            empty_text=self._t("report.empty", "Проверка ещё не запускалась."),
+            description=self._t(
+                "report.description", "Полный текст проверки: таблица по адресам, итог и подробности."
+            ),
         )
+
+    def live_details(self, server: str):
+        """Подробности сервера по текущей проверке; None — в ней такого сервера нет."""
+        if self._report is None:
+            return None
+        return plans.build_details(self._report, server)
 
     # ── жизненный цикл ──────────────────────────────────────
 

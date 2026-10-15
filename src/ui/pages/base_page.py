@@ -92,6 +92,9 @@ class BasePage(_FluentScrollArea):
     # раздел недоступен, предмет исчез): журнал заменяет текущую запись, а не
     # добавляет шаг — «вперёд» не теряется.
     navigation_screen_corrected = pyqtSignal()
+    # Человек вернулся на экран выше внутри страницы (Esc в отчёте, шаг строки
+    # пути): если журнал помнит этот экран прямо позади, это шаг «назад».
+    navigation_screen_returned = pyqtSignal()
     # Открытого экрана больше нет (профиль удалён): журнал выбрасывает запись
     # и ведёт на соседний экран.
     navigation_screen_unavailable = pyqtSignal()
@@ -314,6 +317,11 @@ class BasePage(_FluentScrollArea):
         if tabs is not None:
             return tabs.restore(screen)
         return not screen.key
+
+    def navigation_screen_title(self, screen: ScreenState) -> str:
+        """Подпись записанного экрана на текущем языке; пусто — годится записанная."""
+        tabs = self.__dict__.get("_navigation_tabs")
+        return tabs.screen_title(screen) if tabs is not None else ""
 
     def rename_navigation_screen(self, screen: ScreenState, old: str, new: str) -> ScreenState:
         """Тот же экран под новым ключом предмета; чужие экраны возвращаются как есть."""

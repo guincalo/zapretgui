@@ -272,8 +272,15 @@ class CustomDnsServerPage(BasePage):
         return True
 
     def open_server(self, server: dict | None) -> None:
-        """Показывает запись сервера в полях; None — чистая форма нового сервера."""
-        self._show_server(server)
+        """Показывает запись сервера в полях; None — форма нового сервера.
+
+        Если форма нового сервера уже открыта, недописанный черновик остаётся:
+        плитка «Добавить» или шаг экскурсии не стирают то, что человек начал вводить."""
+        if server is None and not self.is_editing():
+            self._abandon_save()
+            self._render()
+        else:
+            self._show_server(server)
         # Другой сервер — другой экран журнала: «назад» вернёт к прежнему.
         self.navigation_screen_changed.emit()
 

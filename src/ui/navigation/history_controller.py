@@ -12,6 +12,9 @@
     человек уже стоит (пришли данные, раздел оказался недоступен, подробности
     закрылись, потому что предмета больше нет): текущая запись заменяется,
     «вперёд» не теряется;
+  - ``navigation_screen_returned`` — человек вернулся на экран выше внутри
+    страницы (Esc в отчёте, шаг строки пути): если этот экран стоит в журнале
+    прямо позади, указатель сдвигается назад, и «вперёд» вернёт обратно;
   - ``navigation_screen_unavailable`` — открытого экрана больше нет (профиль
     удалён): запись выбрасывается, шаг продолжается к соседней;
   - ``navigation_screens_renamed(old, new)`` + ``rename_navigation_screen`` —
@@ -44,6 +47,10 @@ from ui.block_build import ensure_page_blocks
 from ui.navigation.history import HistoryEntry, NavigationHistory, ScreenState
 
 
+# Виды изменения экрана по возрастанию веса (см. _schedule_commit).
+_CORRECTION, _RETURN, _STEP = 0, 1, 2
+
+
 def read_page_screen(page) -> ScreenState:
     reader = getattr(page, "navigation_screen", None)
     if not callable(reader):
@@ -63,10 +70,11 @@ class WindowNavigationHistory:
         self.history = NavigationHistory()
         self._restoring = False
         self._commit_pending = False
-        # Хоть одно изменение в этом витке — новый шаг; иначе только поправка.
-        self._commit_as_step = False
+        # Чем считать изменения этого витка: новый шаг важнее возврата, возврат — поправки.
+        self._commit_kind = _CORRECTION
         # Экскурсия по программе водит человека по страницам сама: это не его шаги.
         self._suspended = 0
+        self._resume_index = -1
         # Куда шёл последний переход по журналу: туда же продолжать, если
         # открытый экран оказался недоступен.
         self._last_step = -1
@@ -86,6 +94,7 @@ class WindowNavigationHistory:
         for name, slot in (
             ("navigation_screen_changed", self.note_screen_changed),
             ("navigation_screen_corrected", self.note_screen_corrected),
+            ("navigation_screen_returned", self.note_screen_returned),
             ("navigation_screen_unavailable", lambda page=page: self.screen_unavailable(page)),
             ("navigation_screens_renamed", lambda old, new, page=page: self.rename_screens(page, old, new)),
         ):
@@ -104,30 +113,48 @@ class WindowNavigationHistory:
 
     def suspend(self) -> None:
         """Пока идёт экскурсия, переходы не пишутся в журнал и кнопки истории молчат."""
+        if not self._suspended:
+            # Экран, с которого экскурсия началась: после неё человек вернётся сюда.
+            self.commit()
+            self._resume_index = self.history.index
         self._suspended += 1
 
     def resume(self) -> None:
-        """Экскурсия закончилась: в журнал попадает один шаг — экран, где человек остался."""
+        """Экскурсия закончилась: человек возвращается на экран, с которого её начал.
+        Журнал при этом не меняется — экскурсия в нём следов не оставляет."""
+        if not self._suspended:
+            return
+        self._suspended -= 1
         if self._suspended:
-            self._suspended -= 1
-            if not self._suspended:
-                self.note_screen_changed()
+            return
+        index, self._resume_index = self._resume_index, -1
+        entry = self.history.current()
+        if entry is None or index != self.history.index:
+            self.note_screen_changed()
+            return
+        if self._current_entry() != entry and not self._open(index):
+            # Тот экран больше не открыть: остаёмся, где экскурсия закончилась.
+            self.note_screen_changed()
 
     # ------------------------------------------------------------------
     # Запись
     # ------------------------------------------------------------------
     def note_screen_changed(self) -> None:
         """Человек открыл другой экран: новый шаг."""
-        self._schedule_commit(as_step=True)
+        self._schedule_commit(_STEP)
+
+    def note_screen_returned(self) -> None:
+        """Человек вернулся на экран выше внутри страницы."""
+        self._schedule_commit(_RETURN)
 
     def note_screen_corrected(self) -> None:
         """Страница уточнила экран, на котором человек уже стоит: та же запись."""
-        self._schedule_commit(as_step=False)
+        self._schedule_commit(_CORRECTION)
 
-    def _schedule_commit(self, *, as_step: bool) -> None:
+    def _schedule_commit(self, kind: int) -> None:
         if self._restoring or self._suspended:
             return
-        self._commit_as_step = self._commit_as_step or as_step
+        self._commit_kind = max(self._commit_kind, kind)
         if self._commit_pending:
             return
         self._commit_pending = True
@@ -139,19 +166,27 @@ class WindowNavigationHistory:
 
     def commit(self) -> None:
         """Записывает экран, который открыт прямо сейчас."""
-        as_step = self._commit_as_step
+        kind = self._commit_kind
         self._commit_pending = False
-        self._commit_as_step = False
+        self._commit_kind = _CORRECTION
         if self._suspended:
             return
         entry = self._current_entry()
         if entry is None:
             return
-        current = self.history.current()
-        if not as_step and current is not None and current.page == entry.page:
-            self.history.replace_current(entry)
+        history = self.history
+        current = history.current()
+        if kind == _RETURN:
+            previous_index = history.index - 1
+            entries = history.entries()
+            if 0 <= previous_index < len(entries) and entries[previous_index].same_screen(entry):
+                history.move_to(previous_index)
+                history.replace_current(entry)
+                return
+        if kind == _CORRECTION and current is not None and current.page == entry.page:
+            history.replace_current(entry)
         else:
-            self.history.visit(entry)
+            history.visit(entry)
 
     def _current_entry(self) -> HistoryEntry | None:
         try:
@@ -323,7 +358,7 @@ class WindowNavigationHistory:
         finally:
             self._restoring = False
             self._commit_pending = False
-            self._commit_as_step = False
+            self._commit_kind = _CORRECTION
         self.history.move_to(index)
         return True
 
@@ -332,10 +367,21 @@ class WindowNavigationHistory:
     # ------------------------------------------------------------------
     def describe(self, entry: HistoryEntry) -> str:
         label = self._page_label(entry.page)
-        title = str(entry.screen.title or "").strip()
+        title = self._screen_title(entry) or str(entry.screen.title or "").strip()
         if label and title and title != label:
             return f"{label} — {title}"
         return title or label or entry.page.name
+
+    def _screen_title(self, entry: HistoryEntry) -> str:
+        """Подпись экрана на текущем языке: её даёт страница (вкладки); пусто — записанная."""
+        page = self._page_host.get_loaded_page(entry.page)
+        titled = getattr(page, "navigation_screen_title", None)
+        if not callable(titled):
+            return ""
+        try:
+            return str(titled(entry.screen) or "").strip()
+        except Exception:
+            return ""
 
     def _page_label(self, page_name: PageName) -> str:
         from ui.navigation.text_sync import get_nav_label

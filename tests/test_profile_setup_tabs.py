@@ -343,6 +343,16 @@ class WindowHistoryScreenTests(_TabsCase):
         self.assertEqual(steps, ["uid:discord|strategies|"])
         self.assertEqual(corrections, ["uid:discord|strategies|"])
 
+    def test_another_profile_opens_on_strategies_not_on_the_previous_section(self) -> None:
+        page = self._loaded_page()
+        page.reload_current_profile = Mock()
+        page._open_section("raw")
+
+        page.show_profile("uid:discord")
+
+        self.assertEqual(page._current_section(), "strategies")
+        self.assertEqual(page.navigation_screen().key, "uid:discord|strategies|")
+
     def test_missing_profile_leaves_the_window_history(self) -> None:
         from profile.ui.profile_setup_payload_controller import ProfileSetupPayloadController
 

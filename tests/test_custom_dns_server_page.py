@@ -155,6 +155,8 @@ class CustomDnsServerPageTests(unittest.TestCase):
         self.assertEqual(page.doh_edit.text(), "https://dns.example.com/dns-query")
         self.assertEqual(page.addresses_edit.text(), "203.0.113.5 2001:db8::5")
 
+        # Новая форма с нуля: черновик прежней формы «Добавить» не стирает.
+        page = self._page()
         page.open_server(None)
         self._type(page.addresses_edit, "dns.example.com/dns-query 203.0.113.5")
         self.assertEqual((page.doh_edit.text(), page.addresses_edit.text()), ("dns.example.com/dns-query", "203.0.113.5"))
@@ -389,6 +391,24 @@ class CustomDnsServerPageTests(unittest.TestCase):
         self.feature.find_custom_server = Mock(return_value=None)
 
         self.assertFalse(page.restore_navigation_screen(page_screen("server:gone")))
+
+    def test_add_tile_keeps_an_unfinished_draft_of_a_new_server(self) -> None:
+        page = self._page()
+        page.open_server(None)
+        page.doh_edit.setText("https://draft.example/dns-query")
+
+        page.handle_page_command("edit_custom_server", {"server": None})
+
+        self.assertEqual(page.doh_edit.text(), "https://draft.example/dns-query")
+
+    def test_add_tile_after_editing_a_server_gives_an_empty_form(self) -> None:
+        page = self._page()
+        page.open_server(SECURE)
+
+        page.open_server(None)
+
+        self.assertEqual((page.doh_edit.text(), page.name_edit.text()), ("", ""))
+        self.assertFalse(page.is_editing())
 
     def test_back_to_the_new_form_keeps_the_draft(self) -> None:
         page = self._page()

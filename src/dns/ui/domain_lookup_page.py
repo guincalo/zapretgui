@@ -477,18 +477,22 @@ class DomainLookupPage(BasePage):
         return list(self._cards_shown)
 
     def _open_report(self) -> None:
+        report = self.live_report()
+        if report is not None:
+            self.report_requested.emit(report)
+
+    def live_report(self) -> LogReport | None:
+        """Отчёт вкладки по её текущему состоянию: его же журнал окна открывает при возврате."""
         if self._report is None:
-            return
-        self.report_requested.emit(
-            LogReport(
-                title=self._t("report.title", "Отчёт проверки домена"),
-                text=plans.build_text_report(self._report),
-                root_title=self._t("title", "Проверка домена"),
-                empty_text=self._t("report.empty", "Проверка ещё не запускалась."),
-                description=self._t(
-                    "report.description", "Полный текст проверки: пинг, ответы DNS-серверов и домены на адресе."
-                ),
-            )
+            return None
+        return LogReport(
+            title=self._t("report.title", "Отчёт проверки домена"),
+            text=plans.build_text_report(self._report),
+            root_title=self._t("title", "Проверка домена"),
+            empty_text=self._t("report.empty", "Проверка ещё не запускалась."),
+            description=self._t(
+                "report.description", "Полный текст проверки: пинг, ответы DNS-серверов и домены на адресе."
+            ),
         )
 
     def _open_past(self, row: int) -> None:

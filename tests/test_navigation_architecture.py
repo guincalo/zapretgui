@@ -13,6 +13,7 @@ import ast
 import os
 import sys
 import unittest
+import unittest.mock
 from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -42,6 +43,7 @@ class _Page(QObject):
 
     navigation_screen_changed = pyqtSignal()
     navigation_screen_corrected = pyqtSignal()
+    navigation_screen_returned = pyqtSignal()
     navigation_screen_unavailable = pyqtSignal()
 
     def __init__(self, *known: str) -> None:
@@ -270,6 +272,37 @@ class NavigatorTests(_Case):
         self.assertEqual(host.keys()[-2:], [("BLOCKCHECK", "tab"), ("BLOCKCHECK", "card")])
         self.assertTrue(nav.can_go_forward())
 
+    def test_return_to_the_screen_just_behind_moves_the_pointer_back(self) -> None:
+        host = _Host()
+        nav = host.navigation_history
+        host.open(B)
+        host.open_inside("tab")
+        host.open_inside("card")
+
+        # Esc внутри отчёта: страница сама вернулась на уровень выше.
+        page = host.pages[B]
+        page.key = "tab"
+        page.navigation_screen_returned.emit()
+        host.settle()
+
+        self.assertEqual(host.keys()[-2:], [("BLOCKCHECK", "tab"), ("BLOCKCHECK", "card")])
+        self.assertEqual(nav.history.index, 2)
+        self.assertTrue(nav.can_go_forward())
+
+    def test_return_to_a_screen_not_behind_is_a_new_step(self) -> None:
+        host = _Host()
+        nav = host.navigation_history
+        host.open(B)
+        host.open_inside("card")
+
+        page = host.pages[B]
+        page.key = "tab"
+        page.navigation_screen_returned.emit()
+        host.settle()
+
+        self.assertEqual(host.keys()[-1], ("BLOCKCHECK", "tab"))
+        self.assertFalse(nav.can_go_forward())
+
     def test_tour_steps_are_not_recorded(self) -> None:
         host = _Host()
         nav = host.navigation_history
@@ -281,7 +314,24 @@ class NavigatorTests(_Case):
         nav.resume()
         host.settle()
 
-        self.assertEqual(host.keys(), [("ZAPRET2_MODE_CONTROL", ""), ("NETWORK", "")])
+        # Экскурсия не оставила следов, а человек вернулся туда, откуда её начал.
+        self.assertEqual(host.keys(), [("ZAPRET2_MODE_CONTROL", "")])
+        self.assertEqual(host.where(), (A, ""))
+
+    def test_after_the_tour_the_inner_screen_it_started_from_is_reopened(self) -> None:
+        host = _Host()
+        nav = host.navigation_history
+        host.open(B)
+        host.open_inside("card")
+        nav.suspend()
+        host.open(C)
+        host.pages[B].key = ""
+        nav.resume()
+        host.settle()
+
+        self.assertEqual(host.where(), (B, "card"))
+        self.assertEqual(host.keys()[-1], ("BLOCKCHECK", "card"))
+        self.assertFalse(nav.can_go_forward())
 
     def test_mode_change_forgets_pages_of_the_old_mode_at_once(self) -> None:
         host = _Host()
@@ -337,6 +387,25 @@ class NavigationTabsTests(_Case):
         self.assertTrue(page.restore_navigation_screen(ScreenState(key="tab:two")))
         self.assertEqual(page.stack.currentIndex(), 1)
         self.assertFalse(page.restore_navigation_screen(ScreenState(key="tab:gone")))
+
+    def test_history_list_names_a_tab_in_the_current_language(self) -> None:
+        labels = {"one": "Логи"}
+        tabs = NavigationTabs(("one",), current_index=lambda: 0, open_index=lambda _i: None, title=lambda i: labels["one"])
+        recorded = tabs.screen()
+
+        labels["one"] = "Logs"
+
+        self.assertEqual(recorded.title, "Логи")
+        self.assertEqual(tabs.screen_title(recorded), "Logs")
+
+    def test_describe_asks_the_page_for_the_title(self) -> None:
+        host = _Host()
+        page = host.pages[B]
+        page.navigation_screen_title = lambda screen: "Logs" if screen.key == "tab" else ""
+        nav = host.navigation_history
+        with unittest.mock.patch("ui.navigation.text_sync.get_nav_label", return_value="BlockCheck"):
+            self.assertEqual(nav.describe(HistoryEntry(B, ScreenState(key="tab", title="Логи"))), "BlockCheck — Logs")
+            self.assertEqual(nav.describe(HistoryEntry(B, ScreenState(key="card", title="Карточка"))), "BlockCheck — Карточка")
 
     def test_pending_tab_is_the_current_screen(self) -> None:
         tabs = NavigationTabs(("a", "b"), current_index=lambda: 0, open_index=lambda _i: None, pending_key=lambda: "b")

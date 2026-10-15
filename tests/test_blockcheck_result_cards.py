@@ -2,6 +2,7 @@ import os
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
+from types import SimpleNamespace
 from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -1003,6 +1004,60 @@ class PageCardsTests(unittest.TestCase):
         # Карточки больше нет в отчёте — экран честно недоступен.
         page._escape_shortcut.activated.emit()
         self.assertFalse(page.restore_navigation_screen(type(card_screen)(key="card:нет такой", payload=("blockcheck", None))))
+
+    def test_step_inside_a_card_report_is_a_screen_of_the_window_history(self) -> None:
+        page = self._page()
+        page._report_lines = ["x"]
+        page._on_finished({**_REPORT, "problems": [], "working": []})
+        page.show()
+        QApplication.processEvents()
+        page._open_card_by_key("hostings")
+        detail = page._detail_view
+        child = next(card for block in detail.blocks for card in block.child_cards())
+        steps, returns = [], []
+        page.navigation_screen_changed.connect(lambda: steps.append(page.navigation_screen().key))
+        page.navigation_screen_returned.connect(lambda: returns.append(page.navigation_screen().key))
+
+        # Шаг вглубь: сервер из списка хостингов — новый экран журнала.
+        detail.open_child(child)
+        deep = page.navigation_screen()
+        self.assertEqual(deep.key, f"card:hostings>{child.key}")
+        self.assertEqual(steps, [deep.key])
+
+        # Esc возвращает к списку — для журнала это шаг «назад», а не новый.
+        page._escape_shortcut.activated.emit()
+        self.assertEqual(returns, ["card:hostings"])
+        self.assertFalse(detail.isHidden())
+
+        # Из журнала шаг вглубь открывается заново, даже с другой вкладки.
+        page.switch_to_tab(page.TAB_DNS_SPOOFING)
+        self.assertTrue(page.restore_navigation_screen(deep))
+        self.assertEqual(detail.card().key, child.key)
+        self.assertEqual(page.navigation_screen().key, deep.key)
+        # Такого сервера в отчёте нет — экран недоступен.
+        gone = type(deep)(key="card:hostings>нет такого", payload=deep.payload)
+        self.assertFalse(page.restore_navigation_screen(gone))
+
+    def test_report_opened_from_a_tab_is_rebuilt_from_fresh_data(self) -> None:
+        page = self._page()
+        page._report_lines = ["первый запуск"]
+        page.show()
+        QApplication.processEvents()
+        page._open_report()
+        screen = page.navigation_screen()
+        self.assertEqual(screen.key, "tabreport:blockcheck")
+        page._escape_shortcut.activated.emit()
+
+        page._report_lines = ["второй запуск"]
+        self.assertTrue(page.restore_navigation_screen(screen))
+
+        self.assertIn("второй запуск", page._log_report_view.report().text)
+
+    def test_live_server_details_that_are_gone_are_not_reopened(self) -> None:
+        page = self._page()
+        page._dns_servers_tab_page = SimpleNamespace(live_details=lambda _server: None)
+
+        self.assertIsNone(page._screen_opener("server", "9.9.9.9", (object(), True)))
 
     def test_escape_on_a_tab_is_the_window_back_step(self) -> None:
         page = self._page()

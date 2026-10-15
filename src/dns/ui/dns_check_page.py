@@ -251,14 +251,16 @@ class DNSCheckPage(BasePage):
         return host
 
     def _open_log(self) -> None:
-        self.report_requested.emit(
-            LogReport(
-                title="Подробный лог проверки DNS",
-                text=self._resolve_save_results_text(None),
-                root_title="DNS подмена",
-                empty_text="Проверка ещё не запускалась.",
-                description="Текстовый отчёт проверки: какие адреса пришли и почему решено именно так.",
-            )
+        self.report_requested.emit(self.live_report())
+
+    def live_report(self) -> LogReport:
+        """Отчёт вкладки по её текущему состоянию: его же журнал окна открывает при возврате."""
+        return LogReport(
+            title="Подробный лог проверки DNS",
+            text=self._resolve_save_results_text(None),
+            root_title="DNS подмена",
+            empty_text="Проверка ещё не запускалась.",
+            description="Текстовый отчёт проверки: какие адреса пришли и почему решено именно так.",
         )
 
     def _set_log_available(self, available: bool) -> None:

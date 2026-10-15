@@ -373,15 +373,17 @@ class StrategyScanPage(BasePage):
 
     def _open_log(self) -> None:
         """Подробный лог открывается страницей; во время подбора — снимок на момент открытия."""
-        self.report_requested.emit(
-            LogReport(
-                title="Подробный лог подбора стратегии",
-                text="\n".join(self._log_lines),
-                root_title="Подбор стратегии",
-                empty_text="Подбор ещё не запускался.",
-                description="Технический лог подбора стратегии — он нужен для обращения в поддержку.",
-                scroll_to_end=True,
-            )
+        self.report_requested.emit(self.live_report())
+
+    def live_report(self) -> LogReport:
+        """Отчёт вкладки по её текущему состоянию: его же журнал окна открывает при возврате."""
+        return LogReport(
+            title="Подробный лог подбора стратегии",
+            text="\n".join(self._log_lines),
+            root_title="Подбор стратегии",
+            empty_text="Подбор ещё не запускался.",
+            description="Технический лог подбора стратегии — он нужен для обращения в поддержку.",
+            scroll_to_end=True,
         )
 
     # ------------------------------------------------------------------
