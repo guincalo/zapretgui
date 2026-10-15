@@ -232,7 +232,9 @@ def build_about_page_kwargs(
             "source_code": lambda: about_commands.open_github("https://git.zapret.moe/zapretdiscordyoutube/zapretgui"),
             # Zapret KVN
             "kvn_channel": lambda: about_commands.open_telegram("vpndiscordyooutube"),
-            "kvn_bot": lambda: about_commands.open_telegram("zapretvpns_bot"),
+            "kvn_bot": lambda: about_commands.open_telegram(
+                "zapretvpns_bot", start="gui_about_kvn"
+            ),
             "kvn_github": lambda: about_commands.open_github("https://git.zapret.moe/zapretkvn/zapret-kvn"),
         }
         return external_actions_feature.create_external_action_worker(

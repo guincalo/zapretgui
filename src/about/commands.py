@@ -34,11 +34,13 @@ def open_docs_home() -> AboutActionResult:
         return AboutActionResult(False, str(e))
 
 
-def open_telegram(domain: str, *, post: int | None = None) -> AboutActionResult:
+def open_telegram(
+    domain: str, *, post: int | None = None, start: str | None = None
+) -> AboutActionResult:
     try:
         from config.telegram_links import open_telegram_link
 
-        open_telegram_link(domain, post=post)
+        open_telegram_link(domain, post=post, start=start)
         log(f"Открыт Telegram: {domain}", "INFO")
         return AboutActionResult(True, domain)
     except Exception as e:
