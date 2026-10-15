@@ -294,8 +294,10 @@ class TelegramProxyWorkerArchitectureTests(unittest.TestCase):
         source = inspect.getsource(TelegramProxyAdvancedPage._connect_signals)
         cleanup_source = inspect.getsource(TelegramProxyAdvancedPage.cleanup)
 
-        self.assertIn("upstream_state_changed.connect(self._on_upstream_state_changed)", source)
-        self.assertIn("upstream_state_changed.disconnect(self._on_upstream_state_changed)", cleanup_source)
+        self.assertIn("self._upstream_state_link = ", source)
+        self.assertIn("upstream_state_changed.connect(", source)
+        # Снимается по квитанции: отписка по методу в сборке Nuitka не срабатывает.
+        self.assertIn('disconnect_link(self.__dict__.pop("_upstream_state_link", None))', cleanup_source)
         self.assertNotIn(".cleanup()", cleanup_source.replace("def cleanup(self)", ""))
         self.assertNotIn("upstream_state", inspect.getsource(TelegramProxyPage))
 

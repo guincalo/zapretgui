@@ -18,6 +18,7 @@ from qfluentwidgets.common.router import qrouter
 from qfluentwidgets.components.navigation.navigation_widget import NavigationToolButton
 
 from app.ui_texts import tr as tr_catalog
+from log.log import log
 from ui.accessibility import set_control_accessibility
 from ui.fluent_widgets import set_tooltip
 from ui.navigation.history import HistoryEntry
@@ -97,6 +98,23 @@ class HistoryButtonGesture(QObject):
         self._show_menu()
 
 
+def _ignore_route(*_args, **_kwargs) -> None:
+    return None
+
+
+def retire_library_router() -> None:
+    """Выключает библиотечный список страниц: шагать по нему больше нечем.
+
+    Окно само записывает страницы в qrouter при каждом переключении. Если
+    какая-то подписка библиотеки на него уцелела (см. _take_over_back_button),
+    пустой список делает её шаг пустым: ``qrouter.pop`` без записей ничего не
+    переключает.
+    """
+    qrouter.push = _ignore_route
+    qrouter.history.clear()
+    qrouter.stackHistories.clear()
+
+
 class HistoryButtons(QObject):
     def __init__(self, window, navigation_history) -> None:
         super().__init__(window)
@@ -119,14 +137,24 @@ class HistoryButtons(QObject):
         self.sync()
 
     def _take_over_back_button(self) -> None:
-        # Библиотека вела свой список страниц (qrouter) и сама решала, активна ли стрелка.
-        # Теперь это делает журнал экранов окна; библиотечный список ни на что не влияет.
-        for signal, slot in ((self.back_button.clicked, qrouter.pop), (qrouter.emptyChanged, self.back_button.setDisabled)):
+        # У окна один журнал экранов. Библиотека вела свой список страниц (qrouter),
+        # сама шагала по нему этой стрелкой и сама решала, активна ли она.
+        #
+        # Отвязываем всё разом, а не по имени функции: в сборке Nuitka отписка
+        # по методу не находит подписку библиотеки (тот же метод там — другой
+        # объект), ошибка глоталась, и у стрелки оставалось два обработчика.
+        # Библиотечный шаг переключал страницу, журнал тут же возвращал её
+        # обратно — «назад» ничего не делал, а Alt+← (только журнал) работал.
+        for signal in (self.back_button.clicked, qrouter.emptyChanged):
             try:
-                signal.disconnect(slot)
-            except (TypeError, RuntimeError):
-                pass
+                signal.disconnect()
+            except TypeError:
+                pass  # подписок нет
         self.back_button.clicked.connect(lambda _by_user=True: self._navigation.go_back())
+        retire_library_router()
+        receivers = self.back_button.receivers(self.back_button.clicked)
+        if receivers != 1:
+            log(f"[NAV_HISTORY] у стрелки «назад» {receivers} обработчиков вместо одного", "ERROR")
 
     def _build_forward_button(self) -> None:
         title_bar = getattr(self._window, "titleBar", None)
@@ -210,4 +238,10 @@ def install_history_buttons(window) -> HistoryButtons | None:
     return buttons
 
 
-__all__ = ["HistoryButtons", "HistoryButtonGesture", "TitleBarHistoryButton", "install_history_buttons"]
+__all__ = [
+    "HistoryButtons",
+    "HistoryButtonGesture",
+    "TitleBarHistoryButton",
+    "install_history_buttons",
+    "retire_library_router",
+]

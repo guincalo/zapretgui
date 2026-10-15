@@ -20,6 +20,7 @@ from ui.accessibility import set_breadcrumb_accessibility
 from ui.fluent_widgets import enable_setting_card_group_auto_height
 from ui.one_shot_worker_runtime import OneShotWorkerRuntime
 from ui.pages.base_page import BasePage
+from utils.qt_signal_links import disconnect_link
 
 
 _BREADCRUMB_ROOT = "Telegram Proxy"
@@ -199,7 +200,9 @@ class TelegramProxyAdvancedPage(BasePage):
             self._apply_network_state(state)
 
     def _connect_signals(self) -> None:
-        self._telegram_proxy.get_proxy_manager().upstream_state_changed.connect(self._on_upstream_state_changed)
+        self._upstream_state_link = self._telegram_proxy.get_proxy_manager().upstream_state_changed.connect(
+            self._on_upstream_state_changed
+        )
 
     def _rebuild_breadcrumb(self) -> None:
         breadcrumb = self._breadcrumb
@@ -648,10 +651,7 @@ class TelegramProxyAdvancedPage(BasePage):
         self._cleanup_in_progress = True
         self._reload_after_flush = False
         self._telegram_proxy.remove_settings_flushed_listener(self._on_settings_flushed)
-        try:
-            self._telegram_proxy.get_proxy_manager().upstream_state_changed.disconnect(self._on_upstream_state_changed)
-        except (TypeError, RuntimeError):
-            pass
+        disconnect_link(self.__dict__.pop("_upstream_state_link", None))
         for runtime, name in (
             (self._state_runtime, "state"),
             (self._cloudflare_check_runtime, "cloudflare check"),

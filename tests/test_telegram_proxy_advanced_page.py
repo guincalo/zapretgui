@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 import unittest
-from unittest.mock import MagicMock, Mock
+from unittest.mock import MagicMock, Mock, patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -218,10 +218,15 @@ class TelegramProxyAdvancedPageTests(unittest.TestCase):
         page = self._page(feature)
         manager = feature.get_proxy_manager.return_value
 
-        page.cleanup()
+        link = manager.upstream_state_changed.connect.return_value
+
+        with patch("telegram_proxy.ui.advanced_page.disconnect_link") as disconnect_link:
+            page.cleanup()
 
         feature.remove_settings_flushed_listener.assert_called_once_with(page._on_settings_flushed)
-        manager.upstream_state_changed.disconnect.assert_called_once_with(page._on_upstream_state_changed)
+        # Подписка снимается по квитанции connect(), а не по обработчику.
+        disconnect_link.assert_called_once_with(link)
+        manager.upstream_state_changed.disconnect.assert_not_called()
         manager.cleanup.assert_not_called()
 
 

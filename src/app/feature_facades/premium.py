@@ -66,21 +66,13 @@ class PremiumFeature:
 
     def subscribe_status_checks(self, on_checked, on_failed):
         """Подписывает страницу на итог каждой проверки. Возвращает отписку."""
+        from utils.qt_signal_links import SignalLinks
+
         runtime = self._ensure_status_runtime()
-        runtime.status_checked.connect(on_checked)
-        runtime.status_failed.connect(on_failed)
-
-        def _unsubscribe() -> None:
-            for signal, handler in (
-                (runtime.status_checked, on_checked),
-                (runtime.status_failed, on_failed),
-            ):
-                try:
-                    signal.disconnect(handler)
-                except (TypeError, RuntimeError):
-                    pass
-
-        return _unsubscribe
+        links = SignalLinks()
+        links.connect(runtime.status_checked, on_checked)
+        links.connect(runtime.status_failed, on_failed)
+        return links.disconnect_all
 
     def apply_local_reset(self) -> None:
         """Привязка сброшена на этом устройстве: статус становится Free."""

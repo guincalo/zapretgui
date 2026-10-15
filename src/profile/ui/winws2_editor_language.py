@@ -30,6 +30,7 @@ from profile.winws2_language import (
     quick_actions_winws2,
 )
 from ui.one_shot_worker_runtime import OneShotWorkerRuntime
+from utils.qt_signal_links import disconnect_link
 
 FILE_FACTS_DELAY_MS = 1000
 LANGUAGE_SHORTCUTS_HINT = (
@@ -155,7 +156,7 @@ class Winws2EditorLanguageController(QObject):
         self._scan_timer = QTimer(self)
         self._scan_timer.setSingleShot(True)
         self._scan_timer.timeout.connect(self._start_scan)
-        editor.contentEdited.connect(self.schedule_scan)
+        self._content_edited_link = editor.contentEdited.connect(self.schedule_scan)
         editor.set_language_support(self.language)
         description = str(editor.accessibleDescription() or "").strip()
         if LANGUAGE_SHORTCUTS_HINT not in description:
@@ -215,10 +216,7 @@ class Winws2EditorLanguageController(QObject):
         self._scan_timer.stop()
         self._scan_pending = False
         self._runtime.next_request_id()
-        try:
-            self._editor.contentEdited.disconnect(self.schedule_scan)
-        except (TypeError, RuntimeError):
-            pass
+        disconnect_link(self.__dict__.pop("_content_edited_link", None))
 
 
 __all__ = [

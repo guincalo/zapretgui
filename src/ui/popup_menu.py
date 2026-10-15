@@ -8,6 +8,7 @@ from PyQt6.QtCore import QEvent, QEventLoop, QObject, QPoint, QTimer, Qt
 from PyQt6.QtGui import QCursor
 from PyQt6.QtWidgets import QApplication, QWidget
 
+from utils.qt_signal_links import disconnect_link
 
 if sys.platform == "win32":
     user32 = ctypes.windll.user32
@@ -142,7 +143,7 @@ def exec_popup_menu(
     if owner_window is not None and owner_window is not menu:
         owner_window.installEventFilter(lifecycle_filter)
 
-    state_handler = None
+    state_link = None
     mouse_watch_timer = None
     if app is not None:
         app.installEventFilter(lifecycle_filter)
@@ -151,8 +152,7 @@ def exec_popup_menu(
             if state != Qt.ApplicationState.ApplicationActive:
                 _finish()
 
-        state_handler = _on_ui_state_changed
-        app.applicationStateChanged.connect(state_handler)
+        state_link = app.applicationStateChanged.connect(_on_ui_state_changed)
 
     if monitor_global_mouse and sys.platform == "win32":
         mouse_watch_timer = QTimer(menu)
@@ -216,11 +216,7 @@ def exec_popup_menu(
                 app.removeEventFilter(lifecycle_filter)
             except Exception:
                 pass
-        if app is not None and state_handler is not None:
-            try:
-                app.applicationStateChanged.disconnect(state_handler)
-            except Exception:
-                pass
+        disconnect_link(state_link)
         if mouse_watch_timer is not None:
             try:
                 mouse_watch_timer.stop()

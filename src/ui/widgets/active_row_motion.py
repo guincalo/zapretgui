@@ -22,6 +22,7 @@ from PyQt6.QtGui import QBrush, QColor, QLinearGradient, QPainter
 from PyQt6.QtWidgets import QWidget
 
 from ui.animation_policy import are_live_animations_enabled
+from utils.qt_signal_links import SignalLinks
 
 
 SLIDE_DURATION_MS = 380
@@ -89,6 +90,7 @@ class ActiveRowMotion(QObject):
         self._t = 0.0
         self._check_scheduled = False
         self._model = None
+        self._model_links = SignalLinks()
 
         self._overlay = _MotionOverlay(self, view.viewport())
         view.viewport().installEventFilter(self)
@@ -107,17 +109,12 @@ class ActiveRowMotion(QObject):
     def _bind_model(self, model) -> None:
         if model is self._model:
             return
-        if self._model is not None:
-            for signal, slot in self._model_connections():
-                try:
-                    signal.disconnect(slot)
-                except (TypeError, RuntimeError):
-                    pass
+        self._model_links.disconnect_all()
         self._model = model
         if model is None:
             return
         for signal, slot in self._model_connections():
-            signal.connect(slot)
+            self._model_links.connect(signal, slot)
         self._rescan_without_animation()
 
     def _model_connections(self):

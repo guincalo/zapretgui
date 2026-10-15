@@ -16,6 +16,7 @@ from log.log import log
 
 from ui.animation_policy import register_managed_animation, start_managed_animation
 from ui.theme import get_cached_qta_pixmap, get_theme_tokens
+from utils.qt_signal_links import disconnect_link
 
 
 class StrategiesListTooltip(QWidget):
@@ -269,14 +270,11 @@ class StrategiesListTooltip(QWidget):
             self._fade_animation.finished.disconnect()
         except:
             pass
-        self._fade_animation.finished.connect(self._on_hide_finished)
+        self._hide_finished_link = self._fade_animation.finished.connect(self._on_hide_finished)
         start_managed_animation(self._fade_animation)
     
     def _on_hide_finished(self):
-        try:
-            self._fade_animation.finished.disconnect(self._on_hide_finished)
-        except:
-            pass
+        disconnect_link(self.__dict__.pop("_hide_finished_link", None))
         self.hide()
     
     def hide_immediately(self):

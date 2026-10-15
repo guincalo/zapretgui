@@ -42,6 +42,7 @@ from log.log import log
 
 from orchestra.ignored_targets import is_orchestra_ignored_target
 from orchestra.ui.rows_window import RowsWindow, matching_items
+from utils.qt_signal_links import SignalLinks
 
 
 class LockedDomainRow(QFrame):
@@ -488,16 +489,12 @@ class OrchestraLockedPage(BasePage):
         )
         _set_named_state(self.unlock_all_btn, "Разлочить все стратегии")
         self._update_accessibility_state()
-        try:
-            self.proto_combo.currentIndexChanged.disconnect(self._update_accessibility_state)
-        except Exception:
-            pass
-        try:
-            self.strat_spin.valueChanged.disconnect(self._update_accessibility_state)
-        except Exception:
-            pass
-        self.proto_combo.currentIndexChanged.connect(self._update_accessibility_state)
-        self.strat_spin.valueChanged.connect(self._update_accessibility_state)
+        # Подписки снимаются по квитанциям (utils.qt_signal_links): иначе в
+        # сборке каждый вызов добавлял бы ещё по обработчику.
+        links = self.__dict__.setdefault("_accessibility_links", SignalLinks())
+        links.disconnect_all()
+        links.connect(self.proto_combo.currentIndexChanged, self._update_accessibility_state)
+        links.connect(self.strat_spin.valueChanged, self._update_accessibility_state)
 
     def eventFilter(self, watched, event):  # noqa: N802
         if watched is getattr(self, "search_input", None) and event.type() == QEvent.Type.KeyPress:

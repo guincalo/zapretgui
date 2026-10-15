@@ -154,6 +154,21 @@ class OrchestraAccessibilityTests(unittest.TestCase):
             "Номер стратегии для залочки, выбрано: 7",
         )
 
+    def test_repeated_accessibility_setup_does_not_add_handlers(self) -> None:
+        """Подписки снимаются по квитанции: в сборке Nuitka отписка по методу не
+        срабатывала, и каждая настройка добавляла ещё по обработчику."""
+        for page_class in (OrchestraLockedPage, OrchestraBlockedPage):
+            page = page_class(orchestra_feature=_OrchestraFeatureStub())
+            self.addCleanup(page.deleteLater)
+            combo_before = page.proto_combo.receivers(page.proto_combo.currentIndexChanged)
+            spin_before = page.strat_spin.receivers(page.strat_spin.valueChanged)
+
+            page._install_accessibility()
+            page._install_accessibility()
+
+            self.assertEqual(page.proto_combo.receivers(page.proto_combo.currentIndexChanged), combo_before)
+            self.assertEqual(page.strat_spin.receivers(page.strat_spin.valueChanged), spin_before)
+
     def test_locked_search_arrow_down_moves_focus_to_first_visible_row(self) -> None:
         page = OrchestraLockedPage(orchestra_feature=_OrchestraFeatureStub())
         self.addCleanup(page.deleteLater)

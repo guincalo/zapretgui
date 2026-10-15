@@ -3,6 +3,8 @@ from __future__ import annotations
 from PyQt6.QtCore import QObject, Qt
 from PyQt6.QtWidgets import QApplication, QComboBox
 
+from utils.qt_signal_links import disconnect_link
+
 
 class GlobalComboPopupCloser(QObject):
     """Закрывает открытые выпадающие списки, когда программа теряет активность.
@@ -17,7 +19,7 @@ class GlobalComboPopupCloser(QObject):
         super().__init__(app)
         self._app = app
         self._cleanup_in_progress = False
-        app.applicationStateChanged.connect(self._on_application_state_changed)
+        self._state_link = app.applicationStateChanged.connect(self._on_application_state_changed)
 
     def _on_application_state_changed(self, state) -> None:
         if self._cleanup_in_progress:
@@ -55,10 +57,8 @@ class GlobalComboPopupCloser(QObject):
         self._app = None
         if app is None:
             return
-        try:
-            app.applicationStateChanged.disconnect(self._on_application_state_changed)
-        except Exception:
-            pass
+        link, self._state_link = self._state_link, None
+        disconnect_link(link)
         try:
             if getattr(app, "_zapret_global_combo_popup_closer", None) is self:
                 setattr(app, "_zapret_global_combo_popup_closer", None)

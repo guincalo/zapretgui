@@ -422,6 +422,17 @@ def check_tray_uses_window_port() -> list[Problem]:
     )
 
 
+def check_signals_are_disconnected_by_link(files: list[Path]) -> list[Problem]:
+    """Отписка по обработчику в сборке Nuitka не работает (utils/qt_signal_links.py)."""
+    return _scan_lines(
+        files,
+        re.compile(r"(?<!QObject)\.disconnect\(\s*[^)\s]"),
+        "подписку снимают по квитанции connect() (utils.qt_signal_links), а не по обработчику: "
+        "в сборке Nuitka такая отписка молча не срабатывает",
+        allowed_paths={"src/utils/qt_signal_links.py"},
+    )
+
+
 def check_application_icon_has_single_owner(files: list[Path]) -> list[Problem]:
     scopes = [
         path
@@ -1735,6 +1746,7 @@ def run_checks() -> list[Problem]:
     problems.extend(check_window_hidden_dependency_bags_not_used(files))
     problems.extend(check_tray_uses_window_port())
     problems.extend(check_application_icon_has_single_owner(files))
+    problems.extend(check_signals_are_disconnected_by_link(files))
     problems.extend(check_window_runtime_setup_is_thin())
     problems.extend(check_window_feature_deps_use_explicit_port())
     problems.extend(check_application_controller_uses_port_builders())

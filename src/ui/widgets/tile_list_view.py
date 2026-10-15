@@ -15,6 +15,7 @@ from PyQt6.QtWidgets import QAbstractItemView, QStyle, QStyleOptionViewItem
 
 from ui.theme import get_theme_tokens, to_qcolor
 from ui.widgets.tile_layout import TILE_ROW_ITEM, TileGeometry, TileMetrics, build_tile_geometry
+from utils.qt_signal_links import SignalLinks
 
 
 TILE_CARD_RADIUS = 10
@@ -68,12 +69,11 @@ class TileListViewMixin:
 
     def setModel(self, model) -> None:  # noqa: N802
         previous = self._tile_model
+        links = self.__dict__.get("_tile_model_links")
+        if links is None:
+            links = self.__dict__["_tile_model_links"] = SignalLinks()
         if previous is not None and previous is not model:
-            for name, handler in self._tile_model_handlers():
-                try:
-                    getattr(previous, name).disconnect(handler)
-                except (TypeError, RuntimeError):
-                    pass
+            links.disconnect_all()
         self._tile_model = model
         self._tile_model_changing = False
         if model is not None and previous is not model:
@@ -81,7 +81,7 @@ class TileListViewMixin:
             # и наш обработчик «строки сейчас изменятся» должен сработать
             # раньше, чем она переставит текущую строку.
             for name, handler in self._tile_model_handlers():
-                getattr(model, name).connect(handler)
+                links.connect(getattr(model, name), handler)
         super().setModel(model)
         self._invalidate_tile_geometry()
 

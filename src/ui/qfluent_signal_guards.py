@@ -81,6 +81,24 @@ class _ThemeSubscriberRegistry:
                 log(f"Ошибка theme-обновления {self._name}: {exc}", "DEBUG")
 
 
+class _ThemeChangedWithoutConnect:
+    def connect(self, *_args, **_kwargs) -> None:
+        return None
+
+
+class _QConfigWithoutThemeSubscription:
+    """qconfig библиотеки на время конструктора карточки: подписка на смену
+    темы не создаётся, всё остальное — настоящий qconfig."""
+
+    themeChanged = _ThemeChangedWithoutConnect()
+
+    def __init__(self, library_qconfig) -> None:
+        self.__dict__["_library_qconfig"] = library_qconfig
+
+    def __getattr__(self, name):
+        return getattr(self.__dict__["_library_qconfig"], name)
+
+
 _card_registry: _ThemeSubscriberRegistry | None = None
 _label_registry: _ThemeSubscriberRegistry | None = None
 
@@ -96,22 +114,27 @@ def _patch_background_animation_widget(qconfig) -> None:
     )
     qconfig.themeChanged.connect(_card_registry.on_theme_changed)
 
+    import qfluentwidgets.common.animation as animation_module
+
     original_init = BackgroundAnimationWidget.__init__
 
     def _guarded_init(self, *args, **kwargs) -> None:
-        original_init(self, *args, **kwargs)
+        # Свою подписку библиотека в конструкторе не создаёт вовсе: снять её
+        # потом по методу нельзя — в сборке Nuitka отписка по методу не
+        # находит подписку (см. utils.qt_signal_links), и у каждой карточки
+        # оставалась вторая подписка на смену темы.
+        library_qconfig = animation_module.qconfig
+        animation_module.qconfig = _QConfigWithoutThemeSubscription(library_qconfig)
         try:
-            qconfig.themeChanged.disconnect(self._updateBackgroundColor)
-        except (TypeError, RuntimeError):
-            # Будущая версия библиотеки может убрать собственную подписку —
-            # тогда снимать нечего, диспетчер всё равно берёт виджет на себя.
-            pass
+            original_init(self, *args, **kwargs)
+        finally:
+            animation_module.qconfig = library_qconfig
         _card_registry.register(self)
 
     BackgroundAnimationWidget.__init__ = _guarded_init
 
-    # Страховка: если родная подписка каким-то путём уцелела (не совпал
-    # compiled-method при disconnect), мёртвый виджет не должен ронять
+    # Страховка: если родная подписка каким-то путём всё же появилась (другая
+    # версия библиотеки подписывается иначе), мёртвый виджет не должен ронять
     # смену темы.
     original_update = BackgroundAnimationWidget._updateBackgroundColor
 

@@ -371,6 +371,47 @@ class HistoryButtonsTests(unittest.TestCase):
         qrouter.emptyChanged.emit(True)
         self.assertTrue(buttons.back_button.isEnabled())
 
+    def test_back_button_has_one_handler_even_if_the_library_one_is_not_recognized(self) -> None:
+        """Сборка Nuitka: отписка по методу не находила подписку библиотеки, у
+        стрелки оставалось два обработчика, и «назад» ничего не делал (жалоба
+        15.10.2026: Alt+← работает, стрелка — нет)."""
+        from qfluentwidgets import FluentWindow
+        from qfluentwidgets.common.router import qrouter
+
+        from ui.navigation.history_buttons import HistoryButtons
+
+        window = FluentWindow()
+        self.addCleanup(window.deleteLater)
+        back = window.navigationInterface.panel.returnButton
+        # Так подписка выглядит в сборке: тот же шаг библиотеки, но не тот объект метода.
+        library_steps = []
+        back.clicked.connect(lambda *_args: library_steps.append(qrouter.pop()))
+        host = _FakeHost()
+        host.pages = {A: _FakePage(), B: _FakePage("card"), C: _FakePage()}
+        with patch("ui.navigation.history_buttons.get_window_ui_session", return_value=None):
+            buttons = HistoryButtons(window, host.navigation_history)
+
+        self.assertEqual(back.receivers(back.clicked), 1)
+        host.user_opens(A)
+        host.user_opens(B)
+        host.user_opens_inside("card")
+        buttons.back_button.click()
+        self.assertEqual(library_steps, [])
+        self.assertEqual(host.where(), (B, ""))
+
+    def test_library_page_list_is_retired(self) -> None:
+        """Окно пишет страницы в библиотечный список при каждом переключении; он
+        выключен, поэтому уцелевшему шагу библиотеки нечего переключать."""
+        from PyQt6.QtWidgets import QStackedWidget
+        from qfluentwidgets.common.router import qrouter
+
+        window, host, buttons, _qrouter = self._window()
+        stacked = QStackedWidget()
+        self.addCleanup(stacked.deleteLater)
+        qrouter.push(stacked, "page-a")
+        qrouter.push(stacked, "page-b")
+        self.assertEqual(qrouter.history, [])
+
     def test_forward_button_appears_only_after_back(self) -> None:
         window, host, buttons, _qrouter = self._window()
         host.user_opens(A)
