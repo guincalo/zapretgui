@@ -6,7 +6,12 @@
 
 from __future__ import annotations
 
-from blockcheck.strategy_search.probe_profile import PROTOCOL_HTTP80, PROTOCOL_STUN_VOICE, PROTOCOL_UDP_GAMES
+from blockcheck.strategy_search.probe_profile import (
+    PROTOCOL_HTTP80,
+    PROTOCOL_QUIC,
+    PROTOCOL_STUN_VOICE,
+    PROTOCOL_UDP_GAMES,
+)
 import logging
 import os
 import time
@@ -78,9 +83,12 @@ class RealEnvironment:
         from profile.strategy_usage import load_builtin_strategy_usage
         from settings.mode import ENGINE_WINWS2
 
-        catalog_name = {PROTOCOL_STUN_VOICE: "voice", PROTOCOL_UDP_GAMES: "udp", PROTOCOL_HTTP80: "http80"}.get(
-            scan_protocol, "tcp"
-        )
+        catalog_name = {
+            PROTOCOL_STUN_VOICE: "voice",
+            PROTOCOL_UDP_GAMES: "udp",
+            PROTOCOL_HTTP80: "http80",
+            PROTOCOL_QUIC: "udp",
+        }.get(scan_protocol, "tcp")
         app_paths = AppPaths(user_root=APPLICATION_PATHS.root, local_root=APPLICATION_PATHS.root)
         signature, catalogs = load_strategy_catalogs_with_signature(app_paths, ENGINE_WINWS2)
         entries = catalogs.get(catalog_name, {})
@@ -269,6 +277,12 @@ class RealEnvironment:
 
     def probe_https(self, host: str, addresses: Sequence[str]):
         return probes.probe_https_addresses(host, addresses, cancel=self._cancel)
+
+    def probe_quic(self, host: str, addresses: Sequence[str]):
+        return probes.probe_quic_addresses(host, addresses, cancel=self._cancel)
+
+    def quic_blocked_by_name(self, host: str, address: str) -> bool:
+        return probes.quic_blocked_by_name(host, address, cancel=self._cancel)
 
     def probe_http(self, host: str, addresses: Sequence[str]):
         return probes.probe_http_addresses(host, addresses, cancel=self._cancel)

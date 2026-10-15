@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from blockcheck.strategy_search.probe_profile import (
     PROTOCOL_HTTP80,
+    PROTOCOL_QUIC,
     PROTOCOL_STUN_VOICE,
     PROTOCOL_TCP_HTTPS,
     PROTOCOL_UDP_GAMES,
@@ -55,6 +56,7 @@ _WINDIVERT_PORT_FILTER_OPTIONS = ("--wf-tcp-out", "--wf-tcp-in", "--wf-udp-out",
 _SCANNED_PAYLOADS = {
     PROTOCOL_TCP_HTTPS: ("tls_client_hello",),
     PROTOCOL_HTTP80: ("http_req",),
+    PROTOCOL_QUIC: ("quic_initial",),
     PROTOCOL_STUN_VOICE: ("stun", "discord_ip_discovery"),
 }
 

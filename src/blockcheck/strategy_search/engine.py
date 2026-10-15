@@ -49,6 +49,7 @@ from blockcheck.strategy_search.ordering import (
 )
 from blockcheck.strategy_search.probe_profile import (
     PROTOCOL_HTTP80,
+    PROTOCOL_QUIC,
     PROTOCOL_STUN_VOICE,
     PROTOCOL_TCP_HTTPS,
     PROTOCOL_UDP_GAMES,
@@ -182,6 +183,8 @@ class SearchEnvironment(Protocol):
     def probe_https(self, host: str, addresses: Sequence[str]) -> list[ProbeOutcome]: ...
     def probe_volume(self, host: str, address: str, answered: ProbeOutcome) -> ProbeOutcome: ...
     def probe_http(self, host: str, addresses: Sequence[str]) -> list[ProbeOutcome]: ...
+    def probe_quic(self, host: str, addresses: Sequence[str]) -> list[ProbeOutcome]: ...
+    def quic_blocked_by_name(self, host: str, address: str) -> bool: ...
     def probe_hello(self, address: str, name: str | None) -> bool | None: ...
     def probe_udp(self, specs: Sequence[UdpProbeSpec]) -> list[tuple[UdpProbeSpec, ProbeOutcome]]: ...
     def tcp_port_open(self, address: str, port: int) -> bool: ...
@@ -547,6 +550,8 @@ class StrategySearch:
             raise ScanFatal(self._not_dpi_reason(host, addresses, decision.reason), STOP_ADDRESS_BLOCK)
         if decision.state == rules.BASELINE_OPEN:
             decision = self._recheck_open_baseline(host, addresses, outcomes, decision)
+        if decision.state == rules.BASELINE_OPEN and self._baseline_quic(host, decision.probe_addresses):
+            return True
         if decision.state == rules.BASELINE_OPEN:
             report.baseline_accessible = True
             self._stage(STEP_BASELINE, "skipped", "Открывается и без обхода")
@@ -606,6 +611,30 @@ class StrategySearch:
                 flaky[0][1].reason,
             )
         return decision
+
+    def _baseline_quic(self, host: str, addresses: Sequence[str]) -> bool:
+        """Сайт по TCP открыт — а QUIC? True — его режут по имени, подбор идёт для QUIC.
+
+        Браузер открывает YouTube и многие сайты быстрым QUIC (UDP 443) и,
+        если он молчит, переходит на обычное соединение — с задержкой при
+        открытии и в начале видео. Подбирать для QUIC есть смысл, только если
+        фильтр режет именно имя сайта: с посторонним именем тот же сервер
+        отвечает. Если сервер QUIC не знает вовсе — подбирать нечего.
+        """
+        address = next((item for item in addresses if ":" not in item), addresses[0] if addresses else "")
+        if not address or self.cancelled:
+            return False
+        self._events.log(f"  По TCP открыт — проверяем быстрый протокол QUIC (UDP 443) на {address}")
+        if not self._env.quic_blocked_by_name(host, address):
+            self._events.log("  QUIC не режут по имени — подбирать нечего")
+            return False
+        self._protocol = PROTOCOL_QUIC
+        self._events.log(
+            f"  QUIC режут по имени: с именем {host} пакет пропадает, с другим именем сервер отвечает — "
+            "подбираем стратегию для QUIC"
+        )
+        self._target = _Target(host=host, addresses=(address,))
+        return True
 
     def _baseline_http(self, report: StrategyScanReport, host: str, addresses: Sequence[str]) -> bool | None:
         """Порт 443 молчит — может, это сайт без HTTPS.
@@ -787,7 +816,7 @@ class StrategySearch:
             games_paths = self._env.games_ipset_paths(self._request.udp_games_scope)
         from blockcheck.strategy_scan_targeting import profile_domain
 
-        site = self._protocol in (PROTOCOL_TCP_HTTPS, PROTOCOL_HTTP80)
+        site = self._protocol in (PROTOCOL_TCP_HTTPS, PROTOCOL_HTTP80, PROTOCOL_QUIC)
         return build_probe_profile(
             self._protocol,
             strategy_args=strategy_args,
@@ -799,6 +828,12 @@ class StrategySearch:
 
     def _probe_once(self, *, volume: bool = False) -> _Attempt:
         """Одна попытка. ``volume`` — короткие ответы добрать объёмом по соединению."""
+        if self._protocol == PROTOCOL_QUIC:
+            outcomes = self._env.probe_quic(self._target.host, self._target.addresses)
+            passed = rules.attempt_passed(outcomes)
+            # Молчание UDP не отличить от пропавшей сети: провал сверяется с
+            # обычными сайтами; повтор уже был внутри пробы.
+            return _Attempt(passed, rules.attempt_reason(outcomes), rules.attempt_time_ms(outcomes), not passed)
         if self._protocol == PROTOCOL_HTTP80:
             outcomes = self._env.probe_http(self._target.host, self._target.addresses)
             passed = rules.attempt_passed(outcomes)
@@ -991,6 +1026,7 @@ class StrategySearch:
         return {
             PROTOCOL_TCP_HTTPS: "сайты (TCP/HTTPS)",
             PROTOCOL_HTTP80: "сайт без HTTPS (HTTP, порт 80)",
+            PROTOCOL_QUIC: "быстрый протокол QUIC (UDP 443)",
             PROTOCOL_STUN_VOICE: "голосовые звонки (STUN)",
             PROTOCOL_UDP_GAMES: "игры (UDP)",
         }.get(self._protocol, self._protocol)

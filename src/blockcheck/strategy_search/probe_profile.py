@@ -15,6 +15,10 @@ PROTOCOL_TCP_HTTPS = "tcp_https"
 # обычный HTTP на порту 80 закрыт фильтром (заглушка, сброс). Отдельной плитки
 # у этого режима нет — его выбирает сама плитка «Сайты и приложения».
 PROTOCOL_HTTP80 = "tcp_http"
+# QUIC (UDP 443) сайта: подбор переходит сюда сам, когда сайт по TCP открывается
+# без обхода, а первый пакет QUIC с его именем пропадает, хотя с посторонним
+# именем тот же сервер отвечает. Тоже без своей плитки.
+PROTOCOL_QUIC = "udp_quic"
 PROTOCOL_STUN_VOICE = "stun_voice"
 PROTOCOL_UDP_GAMES = "udp_games"
 
@@ -110,6 +114,12 @@ def build_probe_profile(
             filters.append(f"--ipset-ip={','.join(dict.fromkeys(addresses))}")
         return ProbeProfile((f"--wf-udp-out={ports}",), tuple(filters), strategy)
     domain = str(match_domain or "").strip().lower()
+    if scan_protocol == PROTOCOL_QUIC:
+        return ProbeProfile(
+            ("--wf-udp-out=443",),
+            ("--filter-udp=443", f"--hostlist-domains={domain}", "--payload=quic_initial"),
+            strategy,
+        )
     if scan_protocol == PROTOCOL_HTTP80:
         return ProbeProfile(
             ("--wf-tcp-out=80",),

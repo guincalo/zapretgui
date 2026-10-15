@@ -82,6 +82,9 @@ class FakeEnv:
     volume: object = None
     # Обычный HTTP на порту 80: (running_id, номер вызова) -> ProbeOutcome.
     http: object = None
+    # QUIC: режут ли по имени (до подбора) и ответ на пакет с именем при стратегии.
+    quic_cut_by_name: bool = False
+    quic: object = None
 
     def __post_init__(self):
         self.running = None
@@ -158,6 +161,15 @@ class FakeEnv:
     def probe_http(self, host, addresses):
         outcome = (self.http or (lambda running, n: RESET))(self.running, self.calls.setdefault(("http", self.running), 0))
         self.calls[("http", self.running)] += 1
+        return [outcome for _address in addresses]
+
+    def quic_blocked_by_name(self, host, address):
+        return self.quic_cut_by_name
+
+    def probe_quic(self, host, addresses):
+        number = self.calls.setdefault(("quic", self.running), 0)
+        self.calls[("quic", self.running)] += 1
+        outcome = (self.quic or (lambda running, n: TIMEOUT))(self.running, number)
         return [outcome for _address in addresses]
 
     def probe_volume(self, host, address, answered):
@@ -1020,3 +1032,34 @@ class HttpOnlySiteTests(unittest.TestCase):
         report, _events = run(env)
 
         self.assertIn("не отвечает", report.fatal_error)
+
+
+class QuicSearchTests(unittest.TestCase):
+    """Сайт по TCP открыт, а QUIC режут по имени — подбор сам идёт для QUIC."""
+
+    def test_quic_cut_by_name_is_searched_without_a_question(self) -> None:
+        env = FakeEnv(
+            network=lambda running, n: OK,
+            candidates=[cand("tls")],
+            quic_cut_by_name=True,
+            quic=lambda running, n: OK if running == "qfake" else TIMEOUT,
+        )
+        env.load_candidates = lambda protocol: [cand("qfake")] if protocol == "udp_quic" else [cand("tls")]
+        report, events = run(env, target="www.youtube.com")
+
+        self.assertEqual(events.questions, [])
+        self.assertEqual(report.scan_protocol, "udp_quic")
+        self.assertFalse(report.baseline_accessible)
+        result = events.results[0]
+        self.assertEqual((result.strategy_id, result.verdict), ("qfake", rules.VERDICT_WORKING))
+        self.assertIn("--filter-udp=443", result.apply_lines)
+        self.assertIn("--payload=quic_initial", result.apply_lines)
+        self.assertIn("--hostlist-domains=youtube.com", result.apply_lines)
+
+    def test_quic_that_works_leaves_the_usual_question(self) -> None:
+        env = FakeEnv(network=lambda running, n: OK, candidates=[cand("tls")], quic_cut_by_name=False)
+        report, events = run(env, FakeEvents(answer=False))
+
+        self.assertEqual(len(events.questions), 1)
+        self.assertTrue(report.baseline_accessible)
+        self.assertEqual(report.scan_protocol, "tcp_https")

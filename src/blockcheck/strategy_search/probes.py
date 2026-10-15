@@ -217,6 +217,42 @@ def probe_http(host: str, address: str, *, cancel=None) -> ProbeOutcome:
     )
 
 
+def probe_quic(host: str, address: str, *, cancel=None) -> ProbeOutcome:
+    """Первый пакет QUIC с именем сайта: ответил ли сервер (``diagnostics.quic_probe``)."""
+    from diagnostics.quic_probe import quic_hello
+    from utils.net_failure import FAILURE_CANCELLED
+
+    started = time.perf_counter()
+    answered_ms = quic_hello(address, host, cancel=cancel)
+    if answered_ms is not None:
+        return ProbeOutcome(verdict.PROBE_OK, "сервер ответил на QUIC", answered_ms)
+    if cancel is not None and cancel.cancelled:
+        return ProbeOutcome(verdict.PROBE_CANCELLED, "отменено", 0.0, FAILURE_CANCELLED)
+    return ProbeOutcome(
+        verdict.PROBE_BLOCKED,
+        "пакет QUIC с именем сайта пропадает",
+        (time.perf_counter() - started) * 1000,
+        FAILURE_TIMEOUT,
+    )
+
+
+def probe_quic_addresses(host: str, addresses: Sequence[str], *, cancel=None) -> list[ProbeOutcome]:
+    if len(addresses) <= 1:
+        return [probe_quic(host, address, cancel=cancel) for address in addresses]
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(addresses)) as pool:
+        return list(pool.map(lambda address: probe_quic(host, address, cancel=cancel), addresses))
+
+
+def quic_blocked_by_name(host: str, address: str, *, cancel) -> bool:
+    """QUIC сайта режут по имени: с его именем молчит (дважды), с посторонним или без имени — отвечает."""
+    from diagnostics import quic_probe
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
+        facts = quic_probe.collect(host, address, submit=pool.submit, cancel=cancel)
+    found = quic_probe.judge(facts)
+    return found is not None and found.code == quic_probe.QUIC_BLOCKED_BY_NAME
+
+
 def probe_http_addresses(host: str, addresses: Sequence[str], *, cancel=None) -> list[ProbeOutcome]:
     if len(addresses) <= 1:
         return [probe_http(host, address, cancel=cancel) for address in addresses]
