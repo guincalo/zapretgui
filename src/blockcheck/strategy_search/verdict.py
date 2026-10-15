@@ -114,6 +114,40 @@ def judge_https(result) -> ProbeOutcome:
     return ProbeOutcome(PROBE_OK, f"HTTP {status}", elapsed, body_size=int(result.body_size or 0))
 
 
+def judge_http(
+    *,
+    host: str,
+    status: int | None,
+    location: str = "",
+    body: bytes = b"",
+    failure: str = "",
+    connected: bool = True,
+    elapsed_ms: float = 0.0,
+) -> ProbeOutcome:
+    """Итог обычного HTTP-запроса к порту 80.
+
+    Без шифрования провайдер может подменить ответ, поэтому, кроме обрыва,
+    блокировкой считается и страница-заглушка (перенаправление на страницу о
+    блокировке, код 451, текст о реестре — ``diagnostics.block_cause.stub_reason``),
+    а 400 — как и в HTTPS: до сервера дошли фейковые пакеты стратегии.
+    """
+    from diagnostics.block_cause import HttpFacts, stub_reason
+
+    if failure == FAILURE_CANCELLED:
+        return ProbeOutcome(PROBE_CANCELLED, "отменено", elapsed_ms, FAILURE_CANCELLED)
+    if not connected:
+        return ProbeOutcome(PROBE_UNREACHABLE, "сервер не отвечает на подключение", elapsed_ms, failure)
+    if status is None:
+        reasons = {FAILURE_RESET: "соединение сброшено", FAILURE_TIMEOUT: "нет ответа (таймаут)"}
+        return ProbeOutcome(PROBE_BLOCKED, reasons.get(failure, "нет ответа HTTP"), elapsed_ms, failure or FAILURE_CLOSED)
+    stub = stub_reason(host, HttpFacts(status=status, location=location, body=body))
+    if stub:
+        return ProbeOutcome(PROBE_BLOCKED, f"заглушка провайдера: {stub}", elapsed_ms, FAILURE_HTTP)
+    if status == 400:
+        return ProbeOutcome(PROBE_BLOCKED, "сервер ответил 400: до него дошли фейковые пакеты", elapsed_ms, FAILURE_HTTP)
+    return ProbeOutcome(PROBE_OK, f"HTTP {status}", elapsed_ms)
+
+
 # --- Объём: прошло ли соединение порог обрыва ---------------------------------------
 
 VOLUME_OK = "ok"

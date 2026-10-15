@@ -154,6 +154,76 @@ def probe_volume(host: str, address: str, answered: ProbeOutcome, *, cancel) -> 
     return verdict.judge_volume(answered, volume_probe.judge(facts))
 
 
+HTTP_READ_LIMIT = 16 * 1024
+
+
+def probe_http(host: str, address: str, *, cancel=None) -> ProbeOutcome:
+    """``GET http://host/`` по адресу: ответ, заглушка или обрыв (``verdict.judge_http``)."""
+    from utils.net_failure import FAILURE_CANCELLED, FAILURE_CLOSED
+    from utils.socket_cancel import SocketCancel, close_quietly
+
+    token = cancel or SocketCancel()
+    started = time.perf_counter()
+    sock = None
+    data = bytearray()
+    connected = False
+    failure = ""
+    try:
+        sock = socket.socket(socket.AF_INET6 if ":" in address else socket.AF_INET, socket.SOCK_STREAM)
+        if not token.track(sock):
+            return verdict.judge_http(host=host, status=None, failure=FAILURE_CANCELLED)
+        sock.settimeout(HTTPS_TIMEOUT)
+        sock.connect((address, 80))
+        connected = True
+        request = (
+            f"GET / HTTP/1.1\r\nHost: {host}\r\nUser-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64)\r\n"
+            "Accept: */*\r\nConnection: close\r\n\r\n"
+        )
+        sock.sendall(request.encode("ascii", errors="ignore"))
+        sock.settimeout(HTTPS_READ_TIMEOUT)
+        while len(data) < HTTP_READ_LIMIT:
+            chunk = sock.recv(HTTP_READ_LIMIT - len(data))
+            if not chunk:
+                break
+            data.extend(chunk)
+    except OSError as error:
+        failure = classify(error)
+    finally:
+        if sock is not None:
+            token.release(sock)
+            close_quietly(sock)
+    elapsed = (time.perf_counter() - started) * 1000
+    if token.cancelled:
+        failure = FAILURE_CANCELLED
+    head, _sep, body = bytes(data).partition(b"\r\n\r\n")
+    lines = head.split(b"\r\n")
+    parts = lines[0].split(None, 2) if lines and lines[0] else []
+    status = int(parts[1]) if len(parts) >= 2 and parts[0].startswith(b"HTTP/") and parts[1].isdigit() else None
+    if status is None and connected and not failure:
+        failure = FAILURE_CLOSED
+    location = ""
+    for line in lines[1:]:
+        name, _colon, value = line.partition(b":")
+        if name.strip().lower() == b"location":
+            location = value.strip().decode("latin-1", errors="replace")
+    return verdict.judge_http(
+        host=host,
+        status=status,
+        location=location,
+        body=body,
+        failure=failure,
+        connected=connected,
+        elapsed_ms=elapsed,
+    )
+
+
+def probe_http_addresses(host: str, addresses: Sequence[str], *, cancel=None) -> list[ProbeOutcome]:
+    if len(addresses) <= 1:
+        return [probe_http(host, address, cancel=cancel) for address in addresses]
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(addresses)) as pool:
+        return list(pool.map(lambda address: probe_http(host, address, cancel=cancel), addresses))
+
+
 def tcp_port_open(address: str, port: int, *, timeout: float = 3.0) -> bool:
     """Принимает ли сервер TCP-подключение к порту (без шифрования и запроса)."""
     family = socket.AF_INET6 if ":" in address else socket.AF_INET

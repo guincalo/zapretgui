@@ -448,3 +448,21 @@ class BestStrategyTests(unittest.TestCase):
         rows = [{"success": False, "time_ms": 5}, {"success": True, "time_ms": 300}, {"success": True, "time_ms": 120}]
         self.assertEqual(best_working_index(rows), 2)
         self.assertEqual(best_working_index([{"success": False}]), -1)
+
+
+class HttpRuleTests(unittest.TestCase):
+    def test_stub_and_400_are_blocks_honest_answer_is_ok(self) -> None:
+        stub = rules.judge_http(host="site.ru", status=302, location="http://warning.rt.ru/?id=1")
+        self.assertEqual(stub.state, rules.PROBE_BLOCKED)
+        self.assertIn("заглушка", stub.reason)
+        self.assertEqual(rules.judge_http(host="site.ru", status=451).state, rules.PROBE_BLOCKED)
+        self.assertEqual(rules.judge_http(host="site.ru", status=400).state, rules.PROBE_BLOCKED)
+        self.assertTrue(rules.judge_http(host="site.ru", status=301, location="https://site.ru/").ok)
+        self.assertTrue(rules.judge_http(host="site.ru", status=200, body=b"<html>hello</html>").ok)
+
+    def test_silence_and_reset_are_blocks_no_connect_is_unreachable(self) -> None:
+        self.assertEqual(rules.judge_http(host="s.ru", status=None, failure="reset").state, rules.PROBE_BLOCKED)
+        self.assertTrue(rules.attempt_silent([rules.judge_http(host="s.ru", status=None, failure="timeout")]))
+        self.assertEqual(
+            rules.judge_http(host="s.ru", status=None, failure="timeout", connected=False).state, rules.PROBE_UNREACHABLE
+        )

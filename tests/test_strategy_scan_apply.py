@@ -240,6 +240,19 @@ class StrategyScanApplyTests(unittest.TestCase):
         self.assertEqual((first.operation, second.operation), ("created", "updated"))
         self.assertEqual(second.applied_profile, "youtube.com")
 
+    def test_http_only_site_gets_its_own_port_80_profile_and_updates_it(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            feature = _PresetFeature("--new\n--name=Общий\n--filter-tcp=80,443\n--hostlist-domains=vimeo.com\n--lua-desync=pass\n")
+            first = _apply(feature, temp_dir, scan_target="old-site.ru", scan_protocol="tcp_http",
+                           strategy_args="--lua-desync=fake:blob=fake_default_http")
+            second = _apply(feature, temp_dir, scan_target="old-site.ru", scan_protocol="tcp_http",
+                            strategy_args="--lua-desync=multisplit:pos=host+1")
+
+        self.assertEqual((first.operation, second.operation), ("created", "updated"))
+        self.assertIn("--filter-tcp=80\n--hostlist-domains=old-site.ru", feature.saved_text)
+        self.assertIn("--lua-desync=multisplit:pos=host+1", feature.saved_text)
+        self.assertNotIn("fake_default_http", feature.saved_text.split("--name=Общий")[0])
+
     def test_apply_to_composite_profile_writes_one_union_payload_and_resolves(self) -> None:
         from core.paths import AppPaths
         from profile.derived_cache import basic_strategy_entries, resolve_strategy

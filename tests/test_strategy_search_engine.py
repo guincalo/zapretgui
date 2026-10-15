@@ -80,6 +80,8 @@ class FakeEnv:
     hello: object = None
     # Объём по соединению: (running_id, адрес) -> VOLUME_*; по умолчанию набирается.
     volume: object = None
+    # Обычный HTTP на порту 80: (running_id, номер вызова) -> ProbeOutcome.
+    http: object = None
 
     def __post_init__(self):
         self.running = None
@@ -151,6 +153,11 @@ class FakeEnv:
 
     def probe_https(self, host, addresses):
         outcome = self._answer()
+        return [outcome for _address in addresses]
+
+    def probe_http(self, host, addresses):
+        outcome = (self.http or (lambda running, n: RESET))(self.running, self.calls.setdefault(("http", self.running), 0))
+        self.calls[("http", self.running)] += 1
         return [outcome for _address in addresses]
 
     def probe_volume(self, host, address, answered):
@@ -298,7 +305,9 @@ class BaselineTests(unittest.TestCase):
         self.assertTrue(all(result.raw_data.get("forced") for result in events.results))
 
     def test_connect_refused_everywhere_is_not_a_dpi_block(self) -> None:
-        env = FakeEnv(network=lambda running, n: NO_CONNECT, candidates=[cand("a")], port80_open=True)
+        env = FakeEnv(
+            network=lambda running, n: NO_CONNECT, candidates=[cand("a")], port80_open=True, http=lambda r, n: NO_CONNECT
+        )
         report, _events = run(env)
 
         self.assertIn("порт 80 открыт", report.fatal_error)
@@ -505,7 +514,9 @@ class StageEventTests(unittest.TestCase):
         self.assertIn("--lua-desync=fake:id=good", events.started_args)
 
     def test_stop_marks_running_step_failed_and_reports_kind(self) -> None:
-        env = FakeEnv(network=lambda running, n: NO_CONNECT, candidates=[cand("a")], port80_open=True)
+        env = FakeEnv(
+            network=lambda running, n: NO_CONNECT, candidates=[cand("a")], port80_open=True, http=lambda r, n: NO_CONNECT
+        )
         report, events = run(env)
 
         self.assertEqual(report.stop_kind, "address_block")
@@ -965,3 +976,47 @@ class TimeLeftTests(unittest.TestCase):
         texts = [text for text in events.stage_texts if text.startswith("Проверяем")]
         self.assertNotIn("осталось", texts[0])
         self.assertTrue(any("осталось ≈ 2 мин" in text for text in texts), texts)
+
+
+class HttpOnlySiteTests(unittest.TestCase):
+    """Сайт без HTTPS: порт 443 молчит, обычный HTTP закрыт фильтром — подбор сам идёт по HTTP."""
+
+    STUB = ProbeOutcome(rules.PROBE_BLOCKED, "заглушка провайдера: код 451", 40.0, "http")
+
+    def test_http_only_site_is_searched_over_port_80(self) -> None:
+        env = FakeEnv(
+            network=lambda running, n: NO_CONNECT,
+            candidates=[cand("tls")],
+            port80_open=True,
+            http=lambda running, n: OK if running == "web" else self.STUB,
+        )
+        env.load_candidates = lambda protocol: [cand("web")] if protocol == "tcp_http" else [cand("tls")]
+        report, events = run(env, target="old-site.ru")
+
+        self.assertEqual(report.fatal_error, "")
+        self.assertEqual(report.scan_protocol, "tcp_http")
+        result = events.results[0]
+        self.assertEqual((result.strategy_id, result.verdict), ("web", rules.VERDICT_WORKING))
+        self.assertIn("--filter-tcp=80", result.apply_lines)
+        self.assertIn("--wf-tcp-out=80", result.apply_lines)
+        self.assertIn("--hostlist-domains=old-site.ru", result.apply_lines)
+        self.assertTrue(env.history_saves[-1][0].startswith("tcp_http|"))
+
+    def test_port_80_answering_honestly_is_not_a_block(self) -> None:
+        env = FakeEnv(
+            network=lambda running, n: NO_CONNECT,
+            candidates=[cand("tls")],
+            port80_open=True,
+            http=lambda running, n: OK,
+        )
+        report, events = run(env, FakeEvents(answer=False), target="old-site.ru")
+
+        self.assertTrue(report.baseline_accessible)
+        self.assertEqual(report.fatal_error, "")
+        self.assertIn("без HTTPS", events.questions[0])
+
+    def test_closed_port_80_keeps_the_address_block_explanation(self) -> None:
+        env = FakeEnv(network=lambda running, n: NO_CONNECT, candidates=[cand("tls")], port80_open=False)
+        report, _events = run(env)
+
+        self.assertIn("не отвечает", report.fatal_error)

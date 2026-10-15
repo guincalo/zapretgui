@@ -1,7 +1,12 @@
 from __future__ import annotations
 
 
-from blockcheck.strategy_search.probe_profile import PROTOCOL_STUN_VOICE, PROTOCOL_TCP_HTTPS, PROTOCOL_UDP_GAMES
+from blockcheck.strategy_search.probe_profile import (
+    PROTOCOL_HTTP80,
+    PROTOCOL_STUN_VOICE,
+    PROTOCOL_TCP_HTTPS,
+    PROTOCOL_UDP_GAMES,
+)
 from blockcheck.strategy_scan_state import StrategyApplyResult
 from blockcheck.strategy_scan_targeting import (
     default_target_for_protocol,
@@ -28,7 +33,7 @@ def _accepts_port(filter_lines, wanted: int) -> bool:
     return False
 
 
-def _is_targets_own_profile(profile, target: str) -> bool:
+def _is_targets_own_profile(profile, target: str, port: int = 443) -> bool:
     """Profile только этого сайта: имена заданы прямо в нём и это ровно цель, порт 443 пропускает.
 
     Такой profile обновляется, а не дублируется. Profile со списком-файлом или с
@@ -43,12 +48,13 @@ def _is_targets_own_profile(profile, target: str) -> bool:
         for value in _option_values(line)
     }
     wanted = profile_domain(target) or ""
-    return bool(wanted) and names == {wanted} and _accepts_port(getattr(match, "filter_lines", ()), 443)
+    return bool(wanted) and names == {wanted} and _accepts_port(getattr(match, "filter_lines", ()), port)
 
 
 _WINDIVERT_PORT_FILTER_OPTIONS = ("--wf-tcp-out", "--wf-tcp-in", "--wf-udp-out", "--wf-udp-in")
 _SCANNED_PAYLOADS = {
     PROTOCOL_TCP_HTTPS: ("tls_client_hello",),
+    PROTOCOL_HTTP80: ("http_req",),
     PROTOCOL_STUN_VOICE: ("stun", "discord_ip_discovery"),
 }
 
@@ -255,9 +261,11 @@ def plan_selected_preset_strategy_apply(
         ),
         None,
     )
-    if existing_profile is None and str(scan_protocol or "").strip() == PROTOCOL_TCP_HTTPS:
+    site_port = {PROTOCOL_TCP_HTTPS: 443, PROTOCOL_HTTP80: 80}.get(str(scan_protocol or "").strip())
+    if existing_profile is None and site_port:
         existing_profile = next(
-            (profile for profile in updated.profiles if _is_targets_own_profile(profile, match_target)), None
+            (profile for profile in updated.profiles if _is_targets_own_profile(profile, match_target, site_port)),
+            None,
         )
     if existing_profile is not None:
         planned, expect = _with_strategy_in_existing_profile(
