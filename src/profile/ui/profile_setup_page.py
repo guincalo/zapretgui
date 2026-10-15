@@ -331,6 +331,28 @@ class ProfileSetupPageBase(BasePage):
     profiles_key = "page.winws2_pages.title"
     profiles_default = "Настройка пресета"
 
+    @property
+    def _profile_key(self) -> str:
+        return str(self.__dict__.get("_profile_key", "") or "")
+
+    @_profile_key.setter
+    def _profile_key(self, value) -> None:
+        """Новая ссылка на ТОТ ЖЕ профиль: данные пришли со стабильным ключом,
+        правка имени или условий выдала профилю другой. Журнал экранов окна
+        переписывает записи на новую ссылку, иначе «назад» вёл бы на этот же
+        профиль под старым ключом. Переход к другому профилю — show_profile,
+        он ставит ключ мимо этого сеттера."""
+        old = self._profile_key
+        new = str(value or "").strip()
+        self.__dict__["_profile_key"] = new
+        if not (old and new and old != new):
+            return
+        try:
+            self.navigation_screens_renamed.emit(old, new)
+        except RuntimeError:
+            # Страница без Qt-части (собрана в обход __init__): журнала у неё нет.
+            pass
+
     def __init__(
         self,
         parent=None,
@@ -1223,8 +1245,15 @@ class ProfileSetupPageBase(BasePage):
     # ------------------------------------------------------------------
     # Журнал экранов окна: кнопки «назад» и «вперёд»
     # ------------------------------------------------------------------
+    @staticmethod
+    def _profile_navigation_screen(profile_key: str, section: str, details_id: str, title: str) -> ScreenState:
+        return ScreenState(
+            key=f"{profile_key}|{section}|{details_id}",
+            title=title,
+            payload=(profile_key, section, details_id),
+        )
+
     def navigation_screen(self) -> ScreenState:
-        profile_key = str(self._profile_key or "")
         pending = self._pending_navigation_screen
         if pending is not None:
             section, details_id = pending
@@ -1235,11 +1264,19 @@ class ProfileSetupPageBase(BasePage):
             details_id = strategy_list.details_strategy_id() if strategy_list is not None else ""
             part = self._section_title() or str(self.__dict__.get("_strategy_details_name") or "")
         profile_title = str(getattr(getattr(self._payload, "item", None), "display_name", "") or "")
-        return ScreenState(
-            key=f"{profile_key}|{section}|{details_id}",
-            title=" → ".join(text for text in (profile_title, part) if text),
-            payload=(profile_key, section, details_id),
+        return self._profile_navigation_screen(
+            self._profile_key,
+            section,
+            details_id,
+            " → ".join(text for text in (profile_title, part) if text),
         )
+
+    def rename_navigation_screen(self, screen: ScreenState, old: str, new: str) -> ScreenState:
+        payload = screen.payload
+        if not isinstance(payload, tuple) or len(payload) != 3 or payload[0] != old:
+            return screen
+        _old_key, section, details_id = payload
+        return self._profile_navigation_screen(new, section, details_id, screen.title)
 
     def restore_navigation_screen(self, screen: ScreenState) -> bool:
         payload = screen.payload
@@ -1554,7 +1591,8 @@ class ProfileSetupPageBase(BasePage):
             # в «незнание», чтобы первое состояние применилось. Снапшот НЕ
             # трогаем: он обязан зеркалить редактор для инкрементальных патчей.
             self._list_file_server_text_snapshot = None
-        self._profile_key = next_key
+        # Другой профиль, а не новая ссылка на этот: мимо сеттера _profile_key.
+        self.__dict__["_profile_key"] = next_key
         self.reload_current_profile()
 
     def onboarding_target(self, name: str):

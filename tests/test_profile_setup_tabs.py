@@ -21,6 +21,7 @@ from profile.strategy_state import ProfileStrategyState
 from profile.ui.profile_list_file_tab import SIDE_BY_SIDE_MIN_WIDTH, ProfileListFileTab
 from profile.ui.profile_raw_text_tab import ProfileRawTextTab
 from profile.ui.profile_setup_page import ProfileSetupPageBase
+from ui.navigation.history import ScreenState
 
 
 def _worker_stub(*_args, **_kwargs):
@@ -295,6 +296,35 @@ class WindowHistoryScreenTests(_TabsCase):
         self.assertTrue(page._strategy_list.details_open())
         self.assertIsNone(page._pending_navigation_screen)
         self.assertEqual(page.navigation_screen().key, details.key)
+
+    def test_new_reference_of_the_same_profile_renames_its_screens(self) -> None:
+        page = self._loaded_page()
+        page._open_section("raw")
+        before = page.navigation_screen()
+        renamed = []
+        page.navigation_screens_renamed.connect(lambda old, new: renamed.append((old, new)))
+
+        # Правка имени или условий выдала профилю новую ссылку.
+        page._profile_key = "uid:youtube-2"
+
+        self.assertEqual(renamed, [("uid:youtube", "uid:youtube-2")])
+        after = page.rename_navigation_screen(before, "uid:youtube", "uid:youtube-2")
+        self.assertEqual(after, page.navigation_screen())
+        self.assertEqual(after.payload, ("uid:youtube-2", "raw", ""))
+        # Экран другого профиля переименование не трогает.
+        other = ScreenState(key="uid:discord|raw|", payload=("uid:discord", "raw", ""))
+        self.assertIs(page.rename_navigation_screen(other, "uid:youtube", "uid:youtube-2"), other)
+
+    def test_opening_another_profile_is_not_a_rename(self) -> None:
+        page = self._loaded_page()
+        renamed = []
+        page.navigation_screens_renamed.connect(lambda old, new: renamed.append((old, new)))
+        page.reload_current_profile = Mock()
+
+        page.show_profile("uid:discord")
+
+        self.assertEqual(page._profile_key, "uid:discord")
+        self.assertEqual(renamed, [])
 
     def test_user_choice_while_loading_cancels_the_pending_screen(self) -> None:
         page = self._loaded_page()

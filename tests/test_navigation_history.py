@@ -15,7 +15,7 @@ PROJECT_SRC = Path(__file__).resolve().parent.parent / "src"
 if str(PROJECT_SRC) not in sys.path:
     sys.path.insert(0, str(PROJECT_SRC))
 
-from PyQt6.QtCore import QEvent, QPointF, Qt
+from PyQt6.QtCore import QEvent, QObject, QPointF, Qt, pyqtSignal
 from PyQt6.QtGui import QMouseEvent
 from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication, QWidget
@@ -87,6 +87,18 @@ class NavigationHistoryModelTests(unittest.TestCase):
         self.assertEqual(history.index, 0)
         self.assertFalse(history.can_go_back())
 
+    def test_renamed_screen_keeps_its_place_and_merges_with_its_new_name(self) -> None:
+        history = NavigationHistory()
+        for entry in (_entry(A), _entry(B, "old|raw"), _entry(B, "new|raw")):
+            history.visit(entry)
+
+        history.rewrite(lambda e: _entry(B, "new|raw") if e.screen.key == "old|raw" else e)
+
+        # Один экран под двумя именами — одна запись: «назад» ведёт на A, а не на «тот же» экран.
+        self.assertEqual(history.entries(), (_entry(A), _entry(B, "new|raw")))
+        self.assertEqual(history.index, 1)
+        self.assertFalse(history.can_go_forward())
+
     def test_listeners_hear_every_change(self) -> None:
         history = NavigationHistory()
         heard = []
@@ -117,6 +129,29 @@ class _FakePage:
             return False
         self.screen = screen
         return True
+
+    def rename_navigation_screen(self, screen: ScreenState, old: str, new: str) -> ScreenState:
+        return ScreenState(key=new, title=new) if screen.key == old else screen
+
+    def rename(self, old: str, new: str) -> None:
+        """Открытый предмет сменил ключ, оставшись тем же (как профиль после правки)."""
+        self.known = {new if key == old else key for key in self.known}
+        if self.screen.key == old:
+            self.screen = ScreenState(key=new, title=new)
+
+
+class _SignalPage(QObject, _FakePage):
+    """Страница, которая сама сообщает журналу о смене ключа своего предмета."""
+
+    navigation_screens_renamed = pyqtSignal(str, str)
+
+    def __init__(self, *known: str) -> None:
+        QObject.__init__(self)
+        _FakePage.__init__(self, *known)
+
+    def rename(self, old: str, new: str) -> None:
+        super().rename(old, new)
+        self.navigation_screens_renamed.emit(old, new)
 
 
 class _FakeHost:
@@ -241,6 +276,25 @@ class WindowNavigationHistoryTests(unittest.TestCase):
         self.assertEqual(host.where(), (B, ""))
         self.assertEqual([e.screen.key for e in nav.history.entries()], ["", "", ""])
         self.assertEqual(nav.history.index, 1)
+
+    def test_back_after_the_open_item_was_renamed_leaves_the_screen(self) -> None:
+        host = self._host()
+        host.pages[B] = _SignalPage("tab", "card")
+        nav = host.navigation_history
+        nav.attach_page(host.pages[B])
+        host.user_opens(A)
+        host.user_opens(B)
+        host.user_opens_inside("tab")
+        host.user_opens_inside("card")
+
+        # Правка выдала предмету новый ключ: страница сама сообщает журналу old → new.
+        host.pages[B].rename("card", "card-2")
+        nav.note_screen_changed()
+        nav.commit()
+
+        self.assertEqual([e.screen.key for e in nav.history.entries()], ["", "", "tab", "card-2"])
+        self.assertTrue(nav.go_back())
+        self.assertEqual(host.where(), (B, "tab"))
 
     def test_page_unavailable_in_this_mode_is_skipped(self) -> None:
         host = self._host()

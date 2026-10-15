@@ -84,6 +84,10 @@ class BasePage(_FluentScrollArea):
     # Внутри страницы открылся другой экран (вкладка, отчёт, подробности):
     # журнал экранов окна запишет его как шаг для кнопки «назад».
     navigation_screen_changed = pyqtSignal()
+    # Открытый на странице предмет сменил ключ, оставшись тем же (профиль после
+    # правки получил новую ссылку): журнал переписывает записи old → new
+    # через rename_navigation_screen.
+    navigation_screens_renamed = pyqtSignal(str, str)
 
     def set_navigation_back(self, go_back) -> None:
         """Журнал экранов окна даёт странице свой шаг «назад»: им отвечает Esc."""
@@ -256,6 +260,10 @@ class BasePage(_FluentScrollArea):
     def restore_navigation_screen(self, screen: ScreenState) -> bool:
         """Открывает записанный экран заново; False — такого экрана больше нет."""
         return not screen.key
+
+    def rename_navigation_screen(self, screen: ScreenState, old: str, new: str) -> ScreenState:
+        """Тот же экран под новым ключом предмета; чужие экраны возвращаются как есть."""
+        return screen
 
     def on_page_activated(self) -> None:
         pass

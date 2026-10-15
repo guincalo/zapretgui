@@ -6,10 +6,12 @@
 записывает это. Кнопки «назад» и «вперёд» зовут ``go_back`` / ``go_forward``:
 журнал показывает нужную страницу и просит её открыть записанный экран.
 
-Страница участвует тремя вещами (все есть в ``BasePage``):
+Страница участвует такими вещами (все есть в ``BasePage``):
 ``navigation_screen()`` — что открыто сейчас,
 ``restore_navigation_screen(screen)`` — открыть это заново,
-сигнал ``navigation_screen_changed`` — вложенный экран сменился.
+сигнал ``navigation_screen_changed`` — вложенный экран сменился,
+сигнал ``navigation_screens_renamed(old, new)`` и ``rename_navigation_screen`` —
+открытый предмет сменил ключ, оставшись тем же: журнал переписывает свои записи.
 """
 
 from __future__ import annotations
@@ -50,6 +52,10 @@ class WindowNavigationHistory:
         connect = getattr(signal, "connect", None)
         if callable(connect):
             connect(self.note_screen_changed)
+        renamed = getattr(page, "navigation_screens_renamed", None)
+        connect_renamed = getattr(renamed, "connect", None)
+        if callable(connect_renamed):
+            connect_renamed(lambda old, new, page=page: self.rename_screens(page, old, new))
         # Esc на странице — тот же шаг «назад», что и кнопка в шапке окна.
         give_back = getattr(page, "set_navigation_back", None)
         if callable(give_back):
@@ -73,6 +79,26 @@ class WindowNavigationHistory:
         entry = self._current_entry()
         if entry is not None:
             self.history.visit(entry)
+
+    def rename_screens(self, page, old: str, new: str) -> None:
+        """Предмет на странице сменил ключ: записи этой страницы переходят на новый."""
+        rename = getattr(page, "rename_navigation_screen", None)
+        if not callable(rename):
+            return
+        try:
+            page_name = self._page_host.page_name_of(page)
+        except Exception:
+            return
+        if page_name is None:
+            return
+
+        def transform(entry: HistoryEntry) -> HistoryEntry:
+            if entry.page != page_name:
+                return entry
+            screen = rename(entry.screen, old, new)
+            return entry if screen == entry.screen else HistoryEntry(entry.page, screen)
+
+        self.history.rewrite(transform)
 
     def _current_entry(self) -> HistoryEntry | None:
         try:

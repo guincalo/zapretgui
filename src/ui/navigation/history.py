@@ -113,6 +113,25 @@ class NavigationHistory:
         if index < self._index or self._index >= len(self._entries):
             self._index -= 1
         # После удаления соседями могли оказаться две записи одного экрана.
+        self._merge_equal_neighbours()
+        self._changed()
+
+    def rewrite(self, transform: Callable[[HistoryEntry], HistoryEntry]) -> None:
+        """Переписывает записи, когда экран сменил имя, оставаясь тем же экраном.
+
+        Так бывает, когда у открытого на странице предмета сменился ключ: профиль
+        после правки получил новую ссылку. Без этого журнал держал бы один и тот
+        же экран под двумя именами, и шаг «назад» с нового имени на старое
+        визуально ничего бы не менял.
+        """
+        entries = [transform(entry) for entry in self._entries]
+        if entries == self._entries:
+            return
+        self._entries = entries
+        self._merge_equal_neighbours()
+        self._changed()
+
+    def _merge_equal_neighbours(self) -> None:
         position = 1
         while position < len(self._entries):
             if self._entries[position].same_screen(self._entries[position - 1]):
@@ -121,7 +140,6 @@ class NavigationHistory:
                     self._index -= 1
             else:
                 position += 1
-        self._changed()
 
 
 __all__ = ["HISTORY_LIMIT", "HistoryEntry", "NavigationHistory", "ScreenState"]
