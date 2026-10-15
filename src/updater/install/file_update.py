@@ -51,6 +51,12 @@ OWNED_DIRS = (
     "presets/winws1_builtin",
     "presets/winws2_builtin",
 )
+# Движок обхода (winws2/winws) с драйвером и библиотеками лежит в exe/.
+# Если обновление не меняет и не убирает там ни одного файла, движок
+# переживает обновление: обход не останавливается, а новая версия при
+# запуске передаёт работу своему движку без разрыва.
+ENGINE_DIR = "exe/"
+ENGINE_PROCESSES = ("exe/winws2.exe", "exe/winws.exe")
 APPLIER_READY_NAME = "applier.ready"
 APPLIER_READY_TIMEOUT_SECONDS = 30.0
 
@@ -133,6 +139,22 @@ def _previous_failure(work: Path) -> str:
         return ""
 
 
+def engine_untouched(planned, remove) -> bool:
+    """Обновление не меняет и не убирает ни одного файла движка (папка exe/)."""
+    touched = [want.entry.path for want in planned.want] + list(remove)
+    return not any(str(path).casefold().startswith(ENGINE_DIR) for path in touched)
+
+
+def keeps_engine(plan_path: Path) -> bool:
+    """Движок переживает эту установку — обход останавливать не нужно."""
+    from zapret_update import apply
+
+    try:
+        return bool(apply.ApplyPlan.load(plan_path).keep_running)
+    except Exception:
+        return False
+
+
 def plan_summary(planned, manifest) -> str:
     """Строка журнала: сколько качать и чем — по ней видно, сработали ли заплатки."""
     kinds: dict[str, int] = {}
@@ -207,6 +229,10 @@ def prepare(
     listed.write_bytes(signed.raw)
     listed.with_name(listed.name + ".sig").write_bytes(signed.signature)
 
+    remove = removal_list(manifest, root, installed_manifest(root, channel=channel))
+    keep_engine = engine_untouched(planned, remove)
+    if keep_engine:
+        log("Движок обхода в обновлении не меняется: обход работает всё обновление", UPDATE_LOG_LEVEL)
     apply_plan = apply.ApplyPlan(
         product="Zapret 2 GUI",
         version=manifest.version,
@@ -218,7 +244,8 @@ def prepare(
         app_exe=APP_EXE,
         restart_args=["--tray"] if start_in_tray else [],
         preserve=list(PRESERVE),
-        remove=removal_list(manifest, root, installed_manifest(root, channel=channel)),
+        remove=remove,
+        keep_running=list(ENGINE_PROCESSES) if keep_engine else [],
         failure_file=str(work / FAILURE_FILE_NAME),
         blocker_file=str(work / BLOCKER_FILE_NAME),
         error_log=str(work / "error.log"),

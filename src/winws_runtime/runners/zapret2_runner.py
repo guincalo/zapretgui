@@ -45,7 +45,7 @@ from winws_runtime.health.silent_exit_probe import (
     probe_silent_exit,
 )
 from winws_runtime.health.winws_output import relevant_error_line
-from winws_runtime.engine.process_control import stop_process
+from winws_runtime.engine.process_control import adopt_engine_process, stop_process
 from winws_runtime.engine.startup import (
     DEFAULT_SETTLE_SECONDS,
     REASON_ALIVE_WITHOUT_MARKER,
@@ -1188,6 +1188,42 @@ class Winws2StrategyRunner(StrategyRunnerBase):
             if not preset_switch:
                 self._preset_file_path = None
             return False
+
+    def adopt_running_engine(self) -> bool:
+        """Принять работающий движок из своей папки, которого этот раннер не запускал.
+
+        Он остаётся после самообновления, которое движок не меняло, и после
+        выхода программы без остановки обхода. Принятый движок заменяется
+        своим через бесшовную передачу (``switch_preset_file_fast``): новый
+        стартует рядом из пресета, старый гасится после — обход не рвётся,
+        а работает уже свежий движок со своими lua и пресетом.
+        """
+        from winws_runtime.runtime.process_probe import find_expected_winws_processes
+
+        with self._operation_guard():
+            if self.running_process is not None and self.is_running():
+                return False
+            records = find_expected_winws_processes(self.winws_exe)
+            for record in records:
+                adopted = adopt_engine_process(record.pid, self.winws_exe)
+                if adopted is None:
+                    continue
+                self.running_process = adopted
+                self._adopted_extra_pids = [item.pid for item in records if item.pid != record.pid]
+                log(f"Принят работающий движок PID={record.pid}: передача без разрыва", "INFO")
+                return True
+        return False
+
+    def stop_extra_adopted_engines(self) -> None:
+        """Остановить лишние копии движка, найденные при приёме (их не должно быть)."""
+        pids = list(getattr(self, "_adopted_extra_pids", ()) or ())
+        self._adopted_extra_pids = []
+        for pid in pids:
+            process = adopt_engine_process(pid, self.winws_exe)
+            if process is not None:
+                log(f"Лишняя копия движка PID={pid} останавливается", "INFO")
+                stop_process(process, timeout=_PROCESS_STOP_TIMEOUT_SECONDS)
+                process.close()
 
     def switch_preset_file_fast(self, preset_path: str, strategy_name: str = "Preset", *, is_current=None) -> bool:
         """Fast path for switching running preset mode without full start pipeline."""

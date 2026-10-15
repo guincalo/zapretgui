@@ -156,5 +156,79 @@ class PresetLaunchServiceTests(unittest.TestCase):
             _stable_start_window_seconds=STARTUP_AUTOSTART_STABLE_WINDOW_SECONDS,
         )
 
+    def test_engine_left_running_is_handed_over_without_a_gap(self) -> None:
+        """Движок от прежней версии: свой стартует рядом, прежний гасится после — не «стоп, потом старт»."""
+        from winws_runtime.runtime.preset_launch_service import PresetLaunchService
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            preset_path = Path(tmp_dir) / "ready.txt"
+            preset_path.write_text(
+                "--new\n--wf-tcp-out=443\n--filter-tcp=443\n--hostlist=lists/tiktok.txt\n", encoding="utf-8"
+            )
+            runner = SimpleNamespace(
+                validate_preset_file=Mock(return_value=(True, "")),
+                adopt_running_engine=Mock(return_value=True),
+                switch_preset_file_fast=Mock(return_value=True),
+                stop_extra_adopted_engines=Mock(),
+                start_from_preset_file=Mock(return_value=True),
+                get_runner_state_snapshot=Mock(return_value=SimpleNamespace(pid=4242)),
+            )
+            service = PresetLaunchService(
+                selected_mode={"is_preset_file": True, "preset_path": str(preset_path), "name": "Пресет"},
+                launch_method="zapret2_mode",
+                runtime_feature=SimpleNamespace(),
+                runtime_api=SimpleNamespace(expected_exe_path="winws2.exe", has_residual_processes=Mock(return_value=True)),
+                startup_autostart=True,
+            )
+            with (
+                patch("winws_runtime.runtime.preset_launch_service.ensure_required_files_fast", return_value=True),
+                patch("winws_runtime.runners.runner_factory.get_strategy_runner", return_value=runner),
+                patch("winws_runtime.runtime.preset_launch_service.shutdown_runtime_sync") as shutdown,
+            ):
+                result = service.run()
+
+        self.assertTrue(result.success)
+        shutdown.assert_not_called()  # прежний движок не останавливали заранее
+        runner.switch_preset_file_fast.assert_called_once_with(str(preset_path), "Пресет")
+        runner.start_from_preset_file.assert_not_called()
+        runner.stop_extra_adopted_engines.assert_called_once_with()
+        self.assertEqual(service.started_pid, 4242)
+
+    def test_engine_that_cannot_be_adopted_is_stopped_and_started_as_before(self) -> None:
+        from winws_runtime.runtime.preset_launch_service import PresetLaunchService
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            preset_path = Path(tmp_dir) / "ready.txt"
+            preset_path.write_text(
+                "--new\n--wf-tcp-out=443\n--filter-tcp=443\n--hostlist=lists/tiktok.txt\n", encoding="utf-8"
+            )
+            runner = SimpleNamespace(
+                validate_preset_file=Mock(return_value=(True, "")),
+                adopt_running_engine=Mock(return_value=False),  # например, Zapret 1 или чужой процесс
+                switch_preset_file_fast=Mock(),
+                start_from_preset_file=Mock(return_value=True),
+            )
+            service = PresetLaunchService(
+                selected_mode={"is_preset_file": True, "preset_path": str(preset_path), "name": "Пресет"},
+                launch_method="zapret2_mode",
+                runtime_feature=SimpleNamespace(),
+                runtime_api=SimpleNamespace(expected_exe_path="winws2.exe", has_residual_processes=Mock(return_value=True)),
+            )
+            with (
+                patch("winws_runtime.runtime.preset_launch_service.ensure_required_files_fast", return_value=True),
+                patch("winws_runtime.runners.runner_factory.get_strategy_runner", return_value=runner),
+                patch(
+                    "winws_runtime.runtime.preset_launch_service.shutdown_runtime_sync",
+                    return_value=SimpleNamespace(still_running=False),
+                ) as shutdown,
+            ):
+                result = service.run()
+
+        self.assertTrue(result.success)
+        shutdown.assert_called_once()
+        runner.switch_preset_file_fast.assert_not_called()
+        runner.start_from_preset_file.assert_called_once()
+
+
 if __name__ == "__main__":
     unittest.main()

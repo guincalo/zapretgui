@@ -302,3 +302,50 @@ def test_version_that_failed_by_files_goes_to_the_installer_next_time(tmp_path) 
 
     with patch.object(file_update, "install_root", return_value=root), pytest.raises(file_update.FileUpdateUnavailable, match="lock"):
         file_update.prepare(SignedRelease(listed, b"{}", b"sig"), channel="dev", current_version="1.0.0.1", start_in_tray=False)
+
+
+def test_engine_survives_an_update_that_does_not_touch_exe(tmp_path) -> None:
+    from zapret_update import plan as update_plan
+
+    gui = manifest.FileEntry("_internal/Zapret.exe", 80, "a" * 64, 20)
+    engine = manifest.FileEntry("exe/winws2.exe", 80, "b" * 64, 20)
+    only_gui = update_plan.UpdatePlan(version="1.0.0.2", want=[update_plan.Want(gui)])
+    with_engine = update_plan.UpdatePlan(version="1.0.0.2", want=[update_plan.Want(gui), update_plan.Want(engine)])
+
+    assert file_update.engine_untouched(only_gui, [])
+    assert not file_update.engine_untouched(with_engine, [])
+    # Убранный файл движка — тоже изменение движка.
+    assert not file_update.engine_untouched(only_gui, ["EXE/old.dll"])
+
+
+def test_old_version_keeps_bypass_running_when_the_engine_survives(tmp_path) -> None:
+    plan = apply.ApplyPlan(
+        product="Zapret 2 GUI", version="1.0.0.2", from_version="1.0.0.1", app_dir=str(tmp_path), tree_dir="t",
+        work_dir=str(tmp_path), app_pid=1, app_exe="_internal/Zapret.exe", keep_running=list(file_update.ENGINE_PROCESSES),
+    )
+    plan_path = tmp_path / "plan.json"
+    plan.save(plan_path)
+    dpi = Mock()
+    dpi.is_running.return_value = True
+    artifact = SimpleNamespace(signed=SimpleNamespace(manifest=SimpleNamespace(version="1.0.0.2")))
+
+    with patch.object(file_update, "is_available", return_value=True):
+        started = flow.install_by_files(
+            artifact, token=CancellationToken(), dpi=dpi, on_stage=lambda _t: None, on_progress=None,
+            on_downloaded=lambda: None, splash=None, show_splash=lambda _s: True, start_in_tray=False,
+            prepare=lambda *_a, **_k: plan_path, launch=lambda _p: True,
+        )
+
+    assert started
+    dpi.stop.assert_not_called()
+
+
+def test_new_version_leaves_the_driver_of_a_surviving_engine_alone(tmp_path) -> None:
+    hooks = apply_mode._hooks_class()()
+    plan = SimpleNamespace(app_dir=str(tmp_path), keep_running=["exe/winws2.exe"])
+
+    with patch.object(apply_mode, "stop_driver_services") as stop:
+        hooks.before_swap(plan)
+        stop.assert_not_called()
+        hooks.before_swap(SimpleNamespace(app_dir=str(tmp_path), keep_running=[]))
+        stop.assert_called_once()

@@ -148,6 +148,12 @@ def _hooks_class():
 
     class GuiHooks(apply.Hooks):
         def before_swap(self, plan) -> None:
+            if plan.keep_running:
+                # Движок обхода переживает обновление: его драйвер нужен ему
+                # живым (остановка службы при работающем движке ломает и
+                # следующий запуск — служба застревает «останавливается»).
+                _log.info("Движок обхода работает дальше: %s", ", ".join(plan.keep_running))
+                return
             stopped = stop_driver_services(Path(plan.app_dir))
             if stopped:
                 _log.info("Остановлены службы драйверов из папки программы: %s", ", ".join(stopped))

@@ -174,3 +174,39 @@ def test_locked_file_names_its_holder_for_the_server(tmp_path) -> None:
     assert Path(plan.failure_file).read_text() == "lock"
     assert Path(plan.blocker_file).read_text() == "msmpeng"
     assert "MsMpEng.exe" in Path(plan.error_log).read_text(encoding="utf-8")
+
+
+def test_programs_that_survive_the_update_are_not_stopped(tmp_path) -> None:
+    from zapret_update import processes
+
+    root = tmp_path / "Zapret"
+    engine = root / "exe" / "winws2.exe"
+    gui = root / "_internal" / "Zapret.exe"
+    terminated = []
+    alive = {11: str(engine), 22: str(gui)}
+
+    def terminate(pid):
+        terminated.append(pid)
+        alive.pop(pid, None)
+
+    with patch.object(processes, "processes_under", side_effect=lambda _root: list(alive.items())), patch.object(
+        processes, "terminate", side_effect=terminate
+    ):
+        survivors = processes.stop_processes_under(root, 1.0, spare=[engine])
+
+    assert terminated == [22]
+    assert survivors == []
+
+
+def test_plan_names_the_programs_that_survive(tmp_path) -> None:
+    plan = _plan(tmp_path)
+    plan.keep_running = ["exe/winws2.exe"]
+    plan.save(tmp_path / "plan.json")
+
+    loaded = apply.ApplyPlan.load(tmp_path / "plan.json")
+    assert loaded.kept_paths == [Path(plan.app_dir) / "exe" / "winws2.exe"]
+    with patch.object(apply.processes, "wait_for_exit", return_value=True), patch.object(
+        apply.processes, "stop_processes_under", return_value=[]
+    ) as stop:
+        apply.Hooks().close_application(loaded)
+    assert stop.call_args.kwargs["spare"] == loaded.kept_paths

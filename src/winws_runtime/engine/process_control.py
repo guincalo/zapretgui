@@ -132,6 +132,67 @@ def _terminate(process) -> None:
     process.terminate()
 
 
+class AdoptedProcess:
+    """Работающий движок, которого эта программа не запускала (по номеру процесса).
+
+    Остаётся после самообновления, которое не трогало движок, и после выхода
+    программы без остановки обхода. Умеет то же, что нужно от ``Popen`` для
+    бесшовной передачи: ``pid``, ``poll``, ``wait``, ``terminate`` и хэндл.
+    """
+
+    def __init__(self, pid: int, handle: int) -> None:
+        self.pid = int(pid)
+        self._handle = int(handle)
+
+    def poll(self):
+        try:
+            if not winapi.wait_for_handle(self._handle, 0.0):
+                return None
+            return winapi.get_exit_code(self._handle)
+        except winapi.WinApiError:
+            return None
+
+    def wait(self, timeout: float | None = None):
+        if not winapi.wait_for_handle(self._handle, 0xFFFFFFFE / 1000 if timeout is None else float(timeout)):
+            raise subprocess.TimeoutExpired(f"pid {self.pid}", timeout)
+        return self.poll()
+
+    def terminate(self) -> None:
+        winapi.terminate_process(self._handle, ENGINE_KILL_EXIT_CODE)
+
+    def close(self) -> None:
+        handle, self._handle = self._handle, 0
+        if handle:
+            winapi.close_handle(handle)
+
+    def __del__(self) -> None:
+        try:
+            self.close()
+        except Exception:
+            pass
+
+
+def adopt_engine_process(pid: int, expected_exe_path: str) -> AdoptedProcess | None:
+    """Взять работающий движок по номеру, если это именно ``expected_exe_path``."""
+    if not winapi.is_available():
+        return None
+    try:
+        handle = winapi.open_process(
+            int(pid), winapi.SYNCHRONIZE | winapi.PROCESS_TERMINATE | winapi.PROCESS_QUERY_LIMITED_INFORMATION
+        )
+    except winapi.WinApiError as exc:
+        log(f"Движок PID={pid} не открыт: {exc}", "DEBUG")
+        return None
+    try:
+        image = winapi.query_image_path(handle)
+    except winapi.WinApiError:
+        image = ""
+    if not image or normalize_image_path(image) != normalize_image_path(expected_exe_path):
+        winapi.close_handle(handle)
+        return None
+    return AdoptedProcess(pid, handle)
+
+
 def stop_process(process, *, timeout: float = 5.0) -> bool:
     """Завершает запущенный нами процесс. True — выход подтверждён.
 

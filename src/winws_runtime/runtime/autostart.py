@@ -19,7 +19,20 @@ def start_dpi_autostart(
     runtime_snapshot = runtime_feature.objects.runtime_service.snapshot()
     initial_phase = str(getattr(runtime_snapshot, "phase", "") or "").strip().lower()
     if bool(getattr(runtime_snapshot, "running", False)) and initial_phase == "running":
-        log("Автозапуск DPI: активный процесс уже опубликован монитором", "INFO")
+        # Работает движок, которого эта программа не запускала: остался от
+        # прежней версии после самообновления (обход не останавливался) или
+        # после выхода без остановки обхода. Он со старыми lua и запуском —
+        # передаём его работу своему движку из пресета без разрыва.
+        adopted_method = str(launch_method or getattr(runtime_snapshot, "launch_method", "") or "").strip().lower()
+        if adopted_method not in ALL_LAUNCH_METHODS:
+            log("Автозапуск DPI: активный процесс уже опубликован монитором", "INFO")
+            return
+        log("Автозапуск DPI: работает прежний движок — передаём работу своему без разрыва", "INFO")
+        runtime_feature.objects.launch_runtime.start_dpi_async(
+            selected_mode=None,
+            launch_method=adopted_method,
+            _startup_autostart=True,
+        )
         return
     if initial_phase != "autostart_pending":
         log("Автозапуск DPI отключён", "INFO")

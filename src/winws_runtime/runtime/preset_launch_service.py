@@ -239,6 +239,41 @@ class PresetLaunchService:
         if shutdown_result.still_running:
             log("⚠️ Предыдущий процесс winws не остановился", "WARNING")
 
+    def _hand_over_running_engine(self, *, is_preset_file: bool, preset_path: str) -> PresetLaunchResult | None:
+        """Работающий движок, которого программа не запускала, — заменить без разрыва.
+
+        Zapret 2 умеет работать вдвоём на время передачи (``--wf-dup-check=0``):
+        свой движок стартует из пресета рядом, прежний гасится после. ``None``
+        — так нельзя (Zapret 1, движок не принят, нет пресета): обычный путь
+        «остановить и запустить».
+        """
+        if not is_preset_file or not preset_path:
+            return None
+        payload = self._resolve_presets_payload()
+        if payload is None:
+            return None
+        preset_path, strategy_name = payload
+        from winws_runtime.runners.runner_factory import get_strategy_runner
+
+        runner = get_strategy_runner(self._get_winws_exe())
+        adopt = getattr(runner, "adopt_running_engine", None)
+        if not callable(adopt) or not adopt():
+            return None
+        self._configure_runner_runtime_callbacks(runner)
+        self._progress("Передача работы новому движку...")
+        if not runner.switch_preset_file_fast(preset_path, strategy_name):
+            log("Передача без разрыва не удалась: прежний движок работает дальше", "WARNING")
+            return None
+        runner.stop_extra_adopted_engines()
+        try:
+            snapshot = runner.get_runner_state_snapshot()
+            pid = getattr(snapshot, "pid", None)
+            self.started_pid = pid if isinstance(pid, int) else None
+        except Exception:
+            self.started_pid = None
+        log(f"Пресет '{strategy_name}' принят без разрыва обхода", "✅ SUCCESS")
+        return self._result(True, "")
+
     def _resolve_presets_payload(self) -> tuple[str, str] | None:
         mode_param = self.selected_mode
         if not (isinstance(mode_param, dict) and mode_param.get("is_preset_file")):
@@ -441,6 +476,9 @@ class PresetLaunchService:
                     skip_stop=skip_stop,
                 ):
                     return self._result(False, self.last_error_message)
+                handed_over = self._hand_over_running_engine(is_preset_file=is_preset_file, preset_path=preset_path)
+                if handed_over is not None:
+                    return handed_over
 
             self._stop_previous_process_if_needed(
                 skip_stop=skip_stop,

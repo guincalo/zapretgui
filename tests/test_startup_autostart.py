@@ -219,7 +219,10 @@ class StartupAutostartTests(unittest.TestCase):
         presets_feature.refresh_launch_summary_in_store.assert_not_called()
         presets_feature.get_launch_snapshot.assert_not_called()
 
-    def test_preset_autostart_reuses_already_running_expected_process(self) -> None:
+    def test_preset_autostart_hands_over_an_engine_it_did_not_start(self) -> None:
+        # Движок остался от прежней версии (самообновление его не трогало) или
+        # от выхода без остановки обхода: работу передают своему движку из
+        # пресета без разрыва — служба запуска делает бесшовную передачу.
         from winws_runtime.runtime.autostart import start_dpi_autostart
 
         runtime_service = SimpleNamespace(
@@ -258,9 +261,11 @@ class StartupAutostartTests(unittest.TestCase):
         )
 
         runtime_service.snapshot.assert_called_once_with()
-        launch_runtime.start_dpi_async.assert_not_called()
+        launch_runtime.start_dpi_async.assert_called_once_with(
+            selected_mode=None, launch_method="zapret2_mode", _startup_autostart=True
+        )
+        runtime_service.mark_stopped.assert_not_called()
         presets_feature.get_launch_snapshot.assert_not_called()
-        presets_feature.refresh_launch_summary_in_store.assert_not_called()
 
     def test_startup_autostart_skips_expensive_preset_prevalidation_in_gui_thread(self) -> None:
         from winws_runtime.flow import start_preparation
