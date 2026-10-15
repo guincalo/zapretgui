@@ -223,6 +223,21 @@ def test_apply_mode_reports_to_the_old_version_and_releases_the_hold(tmp_path) -
     assert run.call_args.args[0] == plan
 
 
+def test_new_version_arms_the_rescue_even_when_the_old_plan_did_not_know_it(tmp_path) -> None:
+    plan = apply.ApplyPlan(
+        product="Zapret 2 GUI", version="1.0.0.2", from_version="1.0.0.1", app_dir=str(tmp_path),
+        tree_dir="t", work_dir=str(tmp_path), app_pid=7, app_exe="_internal/Zapret.exe",
+    )
+    plan.save(tmp_path / "plan.json")  # план прежней версии: без rescue_dir
+
+    with patch.object(apply, "run_apply", return_value=True) as run, patch.object(apply_mode, "_setup_logging"), patch.object(
+        file_update, "rescue_dir", return_value=r"C:\ProgramData\Zapret\update\dev\rescue"
+    ):
+        assert apply_mode.run_apply_mode(str(tmp_path / "plan.json")) == 0
+
+    assert run.call_args.args[0].rescue_dir.endswith("rescue")
+
+
 def test_prepare_builds_the_new_version_tree_from_the_store(tmp_path) -> None:
     pytest.importorskip("compression.zstd", reason="сжатие zstd есть только в Python 3.14")
     import http.server

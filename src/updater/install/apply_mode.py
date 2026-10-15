@@ -239,6 +239,15 @@ def run_apply_mode(plan_path: str) -> int:
     except Exception:
         _log.exception("План установки не читается: %s", plan_path)
         return 2
+    # План составляла старая версия: если она ещё не знала о страховке
+    # замены, её ставит новая — сразу с первого обновления на неё.
+    if not plan.rescue_dir:
+        try:
+            from .file_update import rescue_dir
+
+            plan.rescue_dir = rescue_dir()
+        except Exception:
+            _log.exception("Каталог страховки замены не определён")
     # Старая версия ждёт этот файл и только после него закрывается.
     try:
         (Path(plan.work_dir) / "applier.ready").write_text("ready", encoding="utf-8")
