@@ -707,6 +707,7 @@ def normalize_self_repair(data: object) -> dict[str, Any]:
 # установщика (раздачу не держит, сервер только считает причины).
 AUTO_INSTALL_OUTCOMES = ("", "started", "failed", "missed")
 AUTO_INSTALL_WHY_RE = re.compile(r"\A[a-z][a-z0-9]{0,15}\Z")
+AUTO_INSTALL_VIA = ("", "files", "setup")
 
 
 def normalize_auto_install(data: object) -> dict[str, Any]:
@@ -720,6 +721,8 @@ def normalize_auto_install(data: object) -> dict[str, Any]:
     if not (version and outcome in AUTO_INSTALL_OUTCOMES):
         outcome = ""
     why = as_clean_str(raw.get("why"), "")
+    who = as_clean_str(raw.get("who"), "")
+    via = as_clean_str(raw.get("via"), "")
     return {
         "version": version,
         "attempts": as_int(raw.get("attempts"), 0, minimum=0) if version else 0,
@@ -729,6 +732,9 @@ def normalize_auto_install(data: object) -> dict[str, Any]:
         "granted_at": granted_at if version else 0.0,
         "outcome": outcome,
         "why": why if outcome in ("failed", "missed") and AUTO_INSTALL_WHY_RE.fullmatch(why) else "",
+        "who": who if outcome == "failed" and AUTO_INSTALL_WHY_RE.fullmatch(who) else "",
+        "via": via if version and via in AUTO_INSTALL_VIA else "",
+        "dl_kib": as_int(raw.get("dl_kib"), 0, minimum=0) if version else 0,
     }
 
 

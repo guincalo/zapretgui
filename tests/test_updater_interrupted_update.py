@@ -61,6 +61,16 @@ class FailureCodeTests(unittest.TestCase):
 
 
 class InterruptedUpdateDetectionTests(unittest.TestCase):
+    def test_detected_lock_carries_who_held_the_file(self) -> None:
+        found = interrupted.detect_interrupted_update(
+            current_version="21.1.1.3", record=_record(failure="lock", blocker="msmpeng"), forget=False
+        )
+        self.assertEqual((found.code, found.blocker), ("lock", "msmpeng"))
+        strange = interrupted.detect_interrupted_update(
+            current_version="21.1.1.3", record=_record(failure="lock", blocker="C:\\av.exe"), forget=False
+        )
+        self.assertEqual(strange.blocker, "")
+
     def test_failed_update_with_old_version_is_reported(self) -> None:
         detected = detect_interrupted_update(
             current_version="21.1.1.3",

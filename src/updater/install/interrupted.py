@@ -51,6 +51,8 @@ class InterruptedUpdate:
     # ``cut`` — установка оборвалась (перезагрузка, выключение, наблюдателя
     # закрыли), ``other`` — причина неизвестна.
     code: str = "other"
+    # При «lock» — код программы, державшей файл (msmpeng, explorer…).
+    blocker: str = ""
 
 
 def failure_code(record: UpdateHandoffRecord) -> str:
@@ -178,6 +180,7 @@ def detect_interrupted_update(
         installer_available=_installer_exists(known.installer_path),
         state=known.state,
         code=failure_code(known),
+        blocker=str(known.blocker or "") if _CODE_RE.fullmatch(str(known.blocker or "")) else "",
     )
 
 

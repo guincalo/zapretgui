@@ -169,13 +169,15 @@ def test_install_progress_is_written_for_the_splash_and_the_next_start(tmp_path)
         product="Zapret 2 GUI", version="1.0.0.2", from_version="1.0.0.1", app_dir=str(tmp_path),
         tree_dir="t", work_dir=str(tmp_path), app_pid=7, app_exe="_internal/Zapret.exe",
         failure_file=str(tmp_path / "failure.txt"), error_log=str(tmp_path / "error.log"),
+        blocker_file=str(tmp_path / "blocker.txt"),
     )
     written = []
     with patch.object(install_handoff, "write_record", side_effect=lambda record: written.append(record)):
         report = apply_mode._reporter(plan)
         for stage in (apply.Stage.PREPARE, apply.Stage.WAIT_APP, apply.Stage.SWAP, apply.Stage.START):
             report(stage, 0.0)
-        (tmp_path / "failure.txt").write_text("crash")
+        (tmp_path / "failure.txt").write_text("lock")
+        (tmp_path / "blocker.txt").write_text("msmpeng")
         (tmp_path / "error.log").write_text("Новая версия завершилась сразу после запуска (код 3)\n")
         report(apply.Stage.ROLLBACK, 0.0)
         report(apply.Stage.FAILED, 1.0)
@@ -186,7 +188,10 @@ def test_install_progress_is_written_for_the_splash_and_the_next_start(tmp_path)
         install_handoff.HandoffState.SUCCEEDED,
         install_handoff.HandoffState.FAILED,
     ]
-    assert (written[-1].failure, written[-1].version, written[-1].installer_path) == ("crash", "1.0.0.2", "")
+    assert (written[-1].failure, written[-1].version, written[-1].installer_path) == ("lock", "1.0.0.2", "")
+    assert written[-1].blocker == "msmpeng"
+    # Запись переживает запись на диск и чтение следующим запуском.
+    assert install_handoff.UpdateHandoffRecord.from_payload(written[-1].to_payload()).blocker == "msmpeng"
     assert "код 3" in written[-1].error
 
 

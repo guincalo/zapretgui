@@ -29,6 +29,7 @@ from ..install.launcher import (
     start_supervised_installation,
 )
 from ..install.splash import RestartSplashSpec, show_restart_splash
+from ..release import outcome
 from ..release.resolver import lookup_latest_release
 from ..release_contract import ReleaseArtifactMetadata
 from ..versions import compare_versions, normalize_version
@@ -153,6 +154,13 @@ def download_and_stage(
             pass
 
 
+def _file_size(path: str) -> int:
+    try:
+        return Path(path).stat().st_size if path else 0
+    except OSError:
+        return 0
+
+
 def _resolve_and_download(
     requested_version: str,
     *,
@@ -228,6 +236,10 @@ def run_update_install(
             )
 
         on_downloaded()
+        # Путь и объём — для отчёта серверу; установке это не мешает никогда.
+        outcome.note_path(
+            str(getattr(handoff, "version", "") or ""), outcome.VIA_SETUP, _file_size(getattr(handoff, "installer_path", ""))
+        )
         token.checkpoint()
         if dpi.is_running():
             on_stage("Остановка DPI перед установкой…")
@@ -288,6 +300,7 @@ def install_by_files(
             cancelled=lambda: token.is_cancelled,
             on_stage=on_stage,
             on_progress=on_progress,
+            on_planned=lambda size: outcome.note_path(artifact.signed.manifest.version, outcome.VIA_FILES, size),
         )
     except FetchCancelled:
         raise UpdateCancelled("Обновление остановлено") from None

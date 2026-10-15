@@ -51,10 +51,10 @@ def update_busy_reason() -> str:
     return str(busy_reason() or "")
 
 
-def note_auto_install_failed(version: str, why: str = "") -> None:
+def note_auto_install_failed(version: str, why: str = "", who: str = "") -> None:
     from updater.release.outcome import note_attempt_failed
 
-    note_attempt_failed(str(version or ""), str(why or ""))
+    note_attempt_failed(str(version or ""), str(why or ""), str(who or ""))
 
 
 def note_auto_install_missed(version: str, why: str) -> None:

@@ -68,9 +68,9 @@ class UpdaterFeature:
         """Программа сама взялась ставить версию: попытка идёт в счёт лимита."""
         return int(self._commands().note_auto_install_attempt(str(version or "")))
 
-    def note_auto_install_failed(self, version: str, why: str = "") -> None:
+    def note_auto_install_failed(self, version: str, why: str = "", who: str = "") -> None:
         """Установщик версии не справился: сервер узнает причину и придержит её раздачу."""
-        self._commands().note_auto_install_failed(str(version or ""), str(why or ""))
+        self._commands().note_auto_install_failed(str(version or ""), str(why or ""), str(who or ""))
 
     def note_auto_install_missed(self, version: str, why: str) -> None:
         """Версия не скачалась или не дошла до установщика: сервер узнает причину."""

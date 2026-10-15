@@ -51,6 +51,8 @@ class UpdateHandoffRecord:
     # Короткая причина неудачи для сервера очереди (пишет наблюдатель):
     # gone, tamper, start, exit<код>, same.
     failure: str = ""
+    # При «lock» — код программы, державшей файл (msmpeng, explorer…).
+    blocker: str = ""
     updated_at: float = 0.0
     schema_version: int = SCHEMA_VERSION
 
@@ -68,6 +70,7 @@ class UpdateHandoffRecord:
             "installed_version": str(self.installed_version),
             "error": str(self.error),
             "failure": str(self.failure),
+            "blocker": str(self.blocker),
             "updated_at": float(self.updated_at),
         }
 
@@ -99,6 +102,7 @@ class UpdateHandoffRecord:
             installed_version=str(payload.get("installed_version") or ""),
             error=str(payload.get("error") or ""),
             failure=str(payload.get("failure") or ""),
+            blocker=str(payload.get("blocker") or ""),
             updated_at=_as_float(payload.get("updated_at")),
             schema_version=_as_int(payload.get("schema_version")) or 1,
         )

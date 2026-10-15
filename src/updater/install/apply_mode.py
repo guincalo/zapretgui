@@ -194,9 +194,10 @@ def _reporter(plan):
         if state is None or last.get("state") is state:
             return
         last["state"] = state
-        error, failure = "", ""
+        error, failure, blocker = "", "", ""
         if state is install_handoff.HandoffState.FAILED:
             failure = _read(plan.failure_file).strip()
+            blocker = _read(getattr(plan, "blocker_file", "")).strip()
             error = (_read(plan.error_log).strip().splitlines() or ["установка не удалась"])[0]
         install_handoff.write_record(
             install_handoff.UpdateHandoffRecord(
@@ -208,6 +209,7 @@ def _reporter(plan):
                 installed_version=plan.version if state is install_handoff.HandoffState.SUCCEEDED else "",
                 error=error,
                 failure=failure,
+                blocker=blocker,
             )
         )
 

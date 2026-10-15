@@ -15,11 +15,18 @@ class _Store:
     def get_auto_install_state(self) -> dict:
         return dict(self.state)
 
-    def set_auto_install_outcome(self, version: str, value: str, why: str = "") -> bool:
+    def set_auto_install_outcome(self, version: str, value: str, why: str = "", who: str = "") -> bool:
         if self.state.get("version") != version:
             return False
         self.state["outcome"] = value
         self.state["why"] = why
+        self.state["who"] = who
+        return True
+
+    def set_auto_install_path(self, version: str, via: str, dl_kib: int) -> bool:
+        if self.state.get("version") != version:
+            return False
+        self.state["via"], self.state["dl_kib"] = via, dl_kib
         return True
 
 
@@ -138,6 +145,33 @@ class UpdateOutcomeTests(unittest.TestCase):
         self.assertEqual(outcome.granted_at("77.0.0.2"), 0.0)
 
 
+class PathAndBlockerTests(unittest.TestCase):
+    _store = UpdateOutcomeTests._store
+
+    def test_done_report_tells_the_path_and_the_downloaded_size(self) -> None:
+        self._store(version="21.1.7.159", from_version="21.1.7.158", granted_at=1000.0, outcome="started")
+        outcome.note_path("21.1.7.159", outcome.VIA_FILES, 1_257_701)
+
+        report = outcome.pending_report(current_version="21.1.7.159", now=1006.0)
+
+        self.assertEqual(report, {"prev": "21.1.7.158", "took": "6", "via": "files", "dl": "1228"})
+
+    def test_lock_failure_names_who_held_the_file(self) -> None:
+        self._store(version="21.1.7.159", from_version="21.1.7.158", granted_at=1000.0, outcome="started")
+        outcome.note_attempt_failed("21.1.7.159", "lock", "msmpeng")
+
+        report = outcome.pending_report(current_version="21.1.7.158", now=1100.0)
+
+        self.assertEqual(report, {"fail": "21.1.7.159", "why": "lock", "who": "msmpeng"})
+
+    def test_strange_path_or_holder_is_not_sent(self) -> None:
+        self._store(version="21.1.7.159", from_version="21.1.7.158", granted_at=1000.0, outcome="started")
+        outcome.note_path("21.1.7.159", "ftp", 10)
+        outcome.note_attempt_failed("21.1.7.159", "lock", "C:\\Users\\Имя\\av.exe")
+
+        self.assertEqual(outcome.pending_report(current_version="21.1.7.158", now=1100.0), {"fail": "21.1.7.159", "why": "lock"})
+
+
 class StoredReasonTests(unittest.TestCase):
     """Причина хранится в настоящих настройках и уходит вместе с исходом."""
 
@@ -160,6 +194,22 @@ class StoredReasonTests(unittest.TestCase):
             # Следующая попытка начинается без старой причины.
             settings_store.add_auto_install_attempt("21.1.7.119", from_version="21.1.7.118")
             self.assertEqual(settings_store.get_auto_install_state()["why"], "")
+
+    def test_path_and_holder_survive_in_settings_and_reset_on_next_attempt(self) -> None:
+        import tempfile
+
+        from settings import store as settings_store
+
+        with tempfile.TemporaryDirectory() as tmp, patch("settings.store.MAIN_DIRECTORY", tmp):
+            settings_store.add_auto_install_attempt("21.1.7.159", from_version="21.1.7.158", granted_at=1000.0)
+            outcome.note_path("21.1.7.159", outcome.VIA_SETUP, 41 * 1024 * 1024)
+            outcome.note_attempt_failed("21.1.7.159", "lock", "msmpeng")
+            state = settings_store.get_auto_install_state()
+            self.assertEqual((state["via"], state["dl_kib"], state["who"]), ("setup", 41 * 1024, "msmpeng"))
+
+            settings_store.add_auto_install_attempt("21.1.7.159", from_version="21.1.7.158")
+            state = settings_store.get_auto_install_state()
+            self.assertEqual((state["via"], state["dl_kib"], state["who"]), ("", 0, ""))
 
 
 if __name__ == "__main__":

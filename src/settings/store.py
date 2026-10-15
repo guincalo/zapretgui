@@ -697,14 +697,15 @@ def get_auto_install_attempts(version: str) -> int:
 
 
 def get_auto_install_state() -> dict[str, Any]:
-    """``{"version", "attempts", "from_version", "granted_at", "outcome", "why"}``."""
+    """``{"version", "attempts", "from_version", "granted_at", "outcome", "why", "who", "via", "dl_kib"}``."""
     return dict(_read_path_value(("updater", "auto_install"), {}) or {})
 
 
-def set_auto_install_outcome(version: str, outcome: str, why: str = "") -> bool:
+def set_auto_install_outcome(version: str, outcome: str, why: str = "", who: str = "") -> bool:
     """Меняет исход автоустановки версии; чужую версию не трогает.
 
-    ``why`` — короткая причина неудачи для сервера очереди.
+    ``why`` — короткая причина неудачи для сервера очереди, ``who`` — при
+    «lock» код программы, державшей файл.
     """
     target = str(version or "")
     changed = False
@@ -713,8 +714,27 @@ def set_auto_install_outcome(version: str, outcome: str, why: str = "") -> bool:
         nonlocal changed
 
         state = _as_dict(_get_path_value(data, ("updater", "auto_install"), {}))
-        wanted = {"outcome": str(outcome or ""), "why": str(why or "")}
+        wanted = {"outcome": str(outcome or ""), "why": str(why or ""), "who": str(who or "")}
         if str(state.get("version") or "") != target or all(state.get(k, "") == v for k, v in wanted.items()):
+            return
+        _set_path_value(data, ("updater", "auto_install"), {**state, **wanted})
+        changed = True
+
+    _update_settings(_mutate)
+    return changed
+
+
+def set_auto_install_path(version: str, via: str, dl_kib: int) -> bool:
+    """Каким путём ставится версия и сколько скачано; чужую версию не трогает."""
+    target = str(version or "")
+    changed = False
+
+    def _mutate(data: dict[str, Any]) -> None:
+        nonlocal changed
+
+        state = _as_dict(_get_path_value(data, ("updater", "auto_install"), {}))
+        wanted = {"via": str(via or ""), "dl_kib": max(int(dl_kib or 0), 0)}
+        if str(state.get("version") or "") != target or all(state.get(k) == v for k, v in wanted.items()):
             return
         _set_path_value(data, ("updater", "auto_install"), {**state, **wanted})
         changed = True
@@ -757,6 +777,9 @@ def add_auto_install_attempt(version: str, *, from_version: str = "", granted_at
                 "granted_at": max(float(granted_at or 0.0), 0.0),
                 "outcome": "started",
                 "why": "",
+                "who": "",
+                "via": "",
+                "dl_kib": 0,
             },
         )
 
@@ -2139,6 +2162,7 @@ __all__ = [
     "set_active_hosts_domains",
     "set_animations_enabled",
     "set_auto_install_outcome",
+    "set_auto_install_path",
     "set_auto_update_enabled",
     "set_update_skipped_version",
     "set_whats_new_pending",

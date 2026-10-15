@@ -62,12 +62,15 @@ def _clean_why(why: str) -> str:
     return text if WHY_RE.fullmatch(text) else ""
 
 
-def note_attempt_failed(version: str, why: str = "") -> None:
-    """Установщик версии не справился: об этом и о причине узнает сервер."""
+def note_attempt_failed(version: str, why: str = "", who: str = "") -> None:
+    """Установщик версии не справился: об этом и о причине узнает сервер.
+
+    ``who`` — при «lock» код программы, державшей файл (msmpeng, explorer…).
+    """
     from settings import store as settings_store
 
     try:
-        settings_store.set_auto_install_outcome(str(version or ""), OUTCOME_FAILED, _clean_why(why))
+        settings_store.set_auto_install_outcome(str(version or ""), OUTCOME_FAILED, _clean_why(why), _clean_why(who))
     except Exception as exc:
         log(f"Не удалось запомнить исход обновления: {exc}", "WARNING")
 
@@ -93,6 +96,22 @@ def note_download_failed(version: str, why: str) -> None:
         log(f"Не удалось запомнить, почему обновление не скачалось: {exc}", "WARNING")
 
 
+VIA_FILES = "files"
+VIA_SETUP = "setup"
+
+
+def note_path(version: str, via: str, downloaded_bytes: int) -> None:
+    """Каким путём ставится версия (по файлам или установщиком) и сколько скачано."""
+    if via not in (VIA_FILES, VIA_SETUP):
+        return
+    from settings import store as settings_store
+
+    try:
+        settings_store.set_auto_install_path(str(version or ""), via, max(int(downloaded_bytes or 0), 0) // 1024)
+    except Exception as exc:
+        log(f"Не удалось запомнить путь обновления: {exc}", "WARNING")
+
+
 def pending_report(*, current_version: str = APP_VERSION, now: float | None = None) -> dict[str, str]:
     """Что добавить к вопросу серверу: ``prev``/``took``, ``fail``/``miss`` с ``why`` либо ничего."""
     from settings import store as settings_store
@@ -112,6 +131,9 @@ def pending_report(*, current_version: str = APP_VERSION, now: float | None = No
             why = _clean_why(str(state.get("why") or ""))
             if why:
                 report["why"] = why
+            who = _clean_why(str(state.get("who") or ""))
+            if who and kind == "fail":
+                report["who"] = who
             return report
         previous = str(state.get("from_version") or "")
         if not previous or compare_versions(previous, current_version) >= 0:
@@ -123,6 +145,10 @@ def pending_report(*, current_version: str = APP_VERSION, now: float | None = No
         took = float(now if now is not None else time.time()) - granted
         if granted > 0 and 0 <= took <= MAX_TOOK_SECONDS:
             report["took"] = str(int(took))
+        via = str(state.get("via") or "")
+        if via in (VIA_FILES, VIA_SETUP):
+            report["via"] = via
+            report["dl"] = str(max(int(state.get("dl_kib") or 0), 0))
         return report
     except Exception:
         return {}
@@ -146,6 +172,7 @@ __all__ = [
     "note_attempt_failed",
     "note_download_failed",
     "note_granted",
+    "note_path",
     "pending_report",
     "report_delivered",
 ]

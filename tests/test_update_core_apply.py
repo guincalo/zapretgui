@@ -142,3 +142,35 @@ def test_failed_start_hook_hears_the_mark_and_the_exit_code(tmp_path) -> None:
         apply.run_apply(plan, Hooks())
 
     assert heard == [("mark", 3)]
+
+
+def test_holder_code_is_a_short_name_without_path_or_extension() -> None:
+    from zapret_update import processes
+
+    assert processes.holder_code("C:\\Program Files\\Windows Defender\\MsMpEng.exe", "Antimalware Service") == "msmpeng"
+    assert processes.holder_code("C:\\Windows\\System32\\svchost.exe", "Windows Search", "WSearch") == "wsearch"
+    assert processes.holder_code("", "7-Zip File Manager") == "p7zipfilemanager"
+    assert processes.holder_code("D:\\Очень длинное имя программы для проверки.exe") == ""
+
+
+def test_locked_file_names_its_holder_for_the_server(tmp_path) -> None:
+    from zapret_update import swap
+
+    plan = _plan(tmp_path)
+    plan.blocker_file = str(Path(plan.app_dir) / ".update" / "blocker.txt")
+    locked = Path(plan.app_dir) / "_internal" / "Zapret.exe"
+
+    def busy(self):
+        raise swap.InstallError("Файл занят другой программой", path=locked)
+
+    with patch.object(swap.FileSwap, "commit", busy), patch.object(
+        apply.processes, "lock_holders", return_value=["Antimalware Service (C:\\av\\MsMpEng.exe)"]
+    ), patch.object(apply.processes, "lock_holder_codes", return_value=["msmpeng"]) as codes, patch.object(
+        apply.processes, "start_detached", return_value=_process(exits=False)
+    ), patch.object(apply, "OLD_VERSION_READY_WAIT_S", 0.2):
+        assert apply.run_apply(plan, _Hooks()) is False
+
+    codes.assert_called_once_with(locked)
+    assert Path(plan.failure_file).read_text() == "lock"
+    assert Path(plan.blocker_file).read_text() == "msmpeng"
+    assert "MsMpEng.exe" in Path(plan.error_log).read_text(encoding="utf-8")

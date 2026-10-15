@@ -122,6 +122,7 @@ def removal_list(new, root: Path, installed) -> list[str]:
 
 
 FAILURE_FILE_NAME = "failure.txt"
+BLOCKER_FILE_NAME = "blocker.txt"
 
 
 def _previous_failure(work: Path) -> str:
@@ -157,8 +158,13 @@ def prepare(
     cancelled=lambda: False,
     on_stage=lambda _text: None,
     on_progress=None,
+    on_planned=lambda _download_bytes: None,
 ) -> Path:
-    """Скачивает изменения и собирает пробное дерево; возвращает путь плана установки."""
+    """Скачивает изменения и собирает пробное дерево; возвращает путь плана установки.
+
+    ``on_planned(байт)`` — сколько предстоит скачать: путь и объём уходят в
+    отчёт серверу после обновления.
+    """
     from zapret_update import apply, fetch, plan, stage
 
     root = install_root()
@@ -180,6 +186,7 @@ def prepare(
     except plan.PlanError as exc:
         raise FileUpdateUnavailable(str(exc)) from None
     log(plan_summary(planned, manifest), UPDATE_LOG_LEVEL)
+    on_planned(planned.download_size)
     on_stage("Скачивание изменений…")
     ready = fetch.fetch_plan(
         planned,
@@ -213,6 +220,7 @@ def prepare(
         preserve=list(PRESERVE),
         remove=removal_list(manifest, root, installed_manifest(root, channel=channel)),
         failure_file=str(work / FAILURE_FILE_NAME),
+        blocker_file=str(work / BLOCKER_FILE_NAME),
         error_log=str(work / "error.log"),
     )
     plan_path = work / "plan.json"
