@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 from core.runtime import long_tasks
 from updater import busy
+from zapret_update import screen
 
 
 class LongTaskTests(unittest.TestCase):
@@ -57,7 +58,7 @@ class LongTaskTests(unittest.TestCase):
 
 def _fresh_memory(case: unittest.TestCase) -> None:
     """Память об игре — общая на процесс: каждый случай начинает без неё."""
-    patcher = patch.object(busy, "_last_fullscreen", 0.0)
+    patcher = patch.object(screen, "_last_fullscreen", 0.0)
     patcher.start()
     case.addCleanup(patcher.stop)
 
@@ -67,13 +68,13 @@ class BusyReasonTests(unittest.TestCase):
         _fresh_memory(self)
 
     def test_free_person_can_be_updated(self) -> None:
-        with patch.object(busy, "_notification_state", return_value=5):
+        with patch.object(screen, "_notification_state", return_value=5):
             self.assertEqual(busy.busy_reason(), "")
 
     def test_game_and_presentation_mean_busy_whatever_is_in_front(self) -> None:
         for state in (3, 4):
-            with patch.object(busy, "_notification_state", return_value=state), patch.object(
-                busy, "_foreground", return_value=busy.FOREGROUND_SHELL
+            with patch.object(screen, "_notification_state", return_value=state), patch.object(
+                screen, "_foreground", return_value=busy.FOREGROUND_SHELL
             ):
                 self.assertEqual(busy.busy_reason(), busy.BUSY_FULLSCREEN, state)
 
@@ -89,17 +90,17 @@ class BusyReasonTests(unittest.TestCase):
             "": "",
         }
         for foreground, reason in expected.items():
-            with patch.object(busy, "_last_fullscreen", 0.0), patch.object(
-                busy, "_notification_state", return_value=2
-            ), patch.object(busy, "_foreground", return_value=foreground):
+            with patch.object(screen, "_last_fullscreen", 0.0), patch.object(
+                screen, "_notification_state", return_value=2
+            ), patch.object(screen, "_foreground", return_value=foreground):
                 self.assertEqual(busy.busy_reason(), reason, foreground)
 
     def test_raw_screen_state_is_told_as_code_and_foreground(self) -> None:
-        with patch.object(busy, "_notification_state", return_value=2), patch.object(
-            busy, "_foreground", return_value=busy.FOREGROUND_PART
+        with patch.object(screen, "_notification_state", return_value=2), patch.object(
+            screen, "_foreground", return_value=busy.FOREGROUND_PART
         ):
             self.assertEqual(busy.screen_state(), "2p")
-        with patch.object(busy, "_notification_state", return_value=0):
+        with patch.object(screen, "_notification_state", return_value=0):
             self.assertEqual(busy.screen_state(), "")
         self.assertTrue(busy.is_fullscreen(2, "f"))
         self.assertFalse(busy.is_fullscreen(2, "s"))
@@ -107,7 +108,7 @@ class BusyReasonTests(unittest.TestCase):
 
     def test_locked_screen_and_quiet_hours_do_not_delay_the_update(self) -> None:
         for state in (0, 1, 6, 7):
-            with patch.object(busy, "_notification_state", return_value=state):
+            with patch.object(screen, "_notification_state", return_value=state):
                 self.assertEqual(busy.busy_reason(), "", state)
 
     def test_borderless_game_is_busy_although_windows_says_free(self) -> None:
@@ -122,22 +123,22 @@ class BusyReasonTests(unittest.TestCase):
         self.assertFalse(busy.is_fullscreen(1, busy.FOREGROUND_BARE))
 
     def test_game_is_remembered_after_alt_tab(self) -> None:
-        with patch.object(busy, "_notification_state", return_value=5), patch.object(
-            busy, "_foreground", return_value=busy.FOREGROUND_BARE
+        with patch.object(screen, "_notification_state", return_value=5), patch.object(
+            screen, "_foreground", return_value=busy.FOREGROUND_BARE
         ):
-            self.assertTrue(busy.fullscreen_app_active(now=1000.0))
+            self.assertTrue(screen.fullscreen_active(now=1000.0))
         # Свернул игру и ушёл в Discord: на переднем плане обычное окно.
-        with patch.object(busy, "_notification_state", return_value=5), patch.object(
-            busy, "_foreground", return_value=busy.FOREGROUND_PART
+        with patch.object(screen, "_notification_state", return_value=5), patch.object(
+            screen, "_foreground", return_value=busy.FOREGROUND_PART
         ):
-            self.assertTrue(busy.fullscreen_app_active(now=1000.0 + 9 * 60))
-            self.assertFalse(busy.fullscreen_app_active(now=1000.0 + busy.GAME_MEMORY_SECONDS + 1))
+            self.assertTrue(screen.fullscreen_active(now=1000.0 + 9 * 60))
+            self.assertFalse(screen.fullscreen_active(now=1000.0 + screen.GAME_MEMORY_SECONDS + 1))
         # Заблокировал экран и ушёл — обновиться самое время.
-        with patch.object(busy, "_notification_state", return_value=1):
-            self.assertFalse(busy.fullscreen_app_active(now=1001.0))
+        with patch.object(screen, "_notification_state", return_value=1):
+            self.assertFalse(screen.fullscreen_active(now=1001.0))
 
     def test_running_check_matters_more_than_the_screen(self) -> None:
-        with long_tasks.long_task("strategy_scan"), patch.object(busy, "_notification_state", return_value=3):
+        with long_tasks.long_task("strategy_scan"), patch.object(screen, "_notification_state", return_value=3):
             self.assertEqual(busy.busy_reason(), "strategy_scan")
 
 
@@ -151,9 +152,9 @@ class ActivityTests(unittest.TestCase):
         patcher = patch.object(presence, "_window_shown", value)
         patcher.start()
         self.addCleanup(patcher.stop)
-        screen = patch.object(busy, "_notification_state", return_value=5)
-        screen.start()
-        self.addCleanup(screen.stop)
+        screen_patch = patch.object(screen, "_notification_state", return_value=5)
+        screen_patch.start()
+        self.addCleanup(screen_patch.stop)
 
     def test_open_window_and_tray_are_told_apart(self) -> None:
         from core.runtime import presence
