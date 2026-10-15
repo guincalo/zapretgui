@@ -144,6 +144,12 @@ class PacketFramingTests(unittest.TestCase):
                 with self.subTest(size=len(payload)):
                     self.assertEqual(PacketReader(PADDED).feed(encode_packet(PADDED, payload)), [payload])
 
+    def test_padded_transport_error_goes_without_padding(self) -> None:
+        # Desktop узнаёт -404 только по пакету длиной в одно слово.
+        error = (-404).to_bytes(4, "little", signed=True)
+        for _ in range(64):
+            self.assertEqual(encode_packet(PADDED, error), b"\x04\0\0\0" + error)
+
     def test_zero_length_is_protocol_error(self) -> None:
         with self.assertRaises(ObfsProtocolError):
             PacketReader(INTERMEDIATE).feed(b"\0\0\0\0")

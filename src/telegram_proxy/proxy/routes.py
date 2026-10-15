@@ -16,11 +16,18 @@
 
 Ручной внешний сервер с режимом «always» — явный выбор пользователя: тогда
 весь TCP идёт только через него.
+
+Кластер. Медиа-соединение фронт и свой домен Cloudflare (+dc) приводят на
+обычный кластер DC, остальные пути — на медиа-кластер. Если известно, на каком
+кластере живёт ключ медиа-сессии (key_clusters), основные пути этого кластера
+(релей, свой домен, фронты) встают раньше основных путей другого. Запасные
+(воркеры, SOCKS, прямой TCP) остаются в конце: суточный лимит воркеров и
+сервер страны не тратятся ради кластера.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from ipaddress import IPv4Address
 from urllib.parse import urlencode
 
@@ -32,6 +39,7 @@ from telegram_proxy.proxy.health import (
     address_key,
     cdn_key,
 )
+from telegram_proxy.proxy.key_clusters import CLUSTER_MEDIA, CLUSTER_REGULAR
 from telegram_proxy.proxy.obfs import DC_FIELD_PLUS, DC_FIELD_RANDOM, DC_FIELD_SIGNED
 from telegram_proxy.proxy.route_catalog import (
     CDN_FRONT_DCS,
@@ -53,6 +61,10 @@ KIND_UPSTREAM = "upstream"
 KIND_DIRECT = "direct"
 
 WS_KINDS = frozenset({KIND_RELAY, KIND_USER_DOMAIN, KIND_USER_WORKER, KIND_FRONT, KIND_TUNNEL})
+# Основные пути: без суточных лимитов и чужих серверов. Остальные — запасные.
+PRIMARY_KINDS = frozenset({KIND_RELAY, KIND_USER_DOMAIN, KIND_FRONT})
+# Пути, которые медиа приводят на обычный кластер: заголовок с +dc.
+_REGULAR_CLUSTER_KINDS = frozenset({KIND_USER_DOMAIN, KIND_FRONT})
 
 # Сколько фронтов пробовать внутри одного соединения Telegram.
 FRONTS_PER_CONNECTION = 3
@@ -94,10 +106,15 @@ class Route:
     front_family: int = -1
     target_host: str = ""
     target_port: int = 443
+    cluster: str = CLUSTER_REGULAR
 
     @property
     def is_ws(self) -> bool:
         return self.kind in WS_KINDS
+
+    @property
+    def is_primary(self) -> bool:
+        return self.kind in PRIMARY_KINDS
 
     @property
     def label(self) -> str:
@@ -119,6 +136,8 @@ class PlanInput:
     target_port: int = 443
     upstream: UpstreamProxyConfig = field(default_factory=UpstreamProxyConfig)
     cloudflare: CloudflareFallbackConfig = field(default_factory=CloudflareFallbackConfig)
+    # Кластер, на котором живёт ключ этого соединения ("" — неизвестен).
+    key_cluster: str = ""
 
 
 _FRONT_DOMAINS = frozenset(front.domain for front in CDN_FRONTS)
@@ -272,7 +291,27 @@ def _tcp_route(kind: str, target_host: str, target_port: int) -> Route:
     )
 
 
+def _cluster(kind: str, is_media: bool) -> str:
+    if is_media and kind not in _REGULAR_CLUSTER_KINDS:
+        return CLUSTER_MEDIA
+    return CLUSTER_REGULAR
+
+
+def _home_cluster_first(plan: list[Route], cluster: str) -> list[Route]:
+    """Основные пути кластера ключа — раньше основных путей другого; запасные на месте."""
+    primaries = sorted((route for route in plan if route.is_primary), key=lambda route: route.cluster != cluster)
+    ordered = iter(primaries)
+    return [next(ordered) if route.is_primary else route for route in plan]
+
+
 def build_plan(request: PlanInput, health: RouteHealth) -> list[Route]:
+    plan = [replace(route, cluster=_cluster(route.kind, request.is_media)) for route in _build_plan(request, health)]
+    if request.is_media and request.key_cluster:
+        plan = _home_cluster_first(plan, request.key_cluster)
+    return plan
+
+
+def _build_plan(request: PlanInput, health: RouteHealth) -> list[Route]:
     dc = int(request.dc)
     is_media = bool(request.is_media)
     upstream = request.upstream
@@ -314,6 +353,7 @@ __all__ = [
     "KIND_UPSTREAM",
     "KIND_USER_DOMAIN",
     "KIND_USER_WORKER",
+    "PRIMARY_KINDS",
     "PlanInput",
     "Route",
     "TUNNELS_PER_CONNECTION",

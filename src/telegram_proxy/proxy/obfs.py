@@ -251,7 +251,9 @@ def encode_packet(framing: str, payload: bytes) -> bytes:
     if framing == INTERMEDIATE:
         return struct.pack("<I", size) + payload
     if framing == PADDED:
-        padding = os.urandom(os.urandom(1)[0] % 16)
+        # Ошибку транспорта (-404 и др., ровно 4 байта) Desktop узнаёт только
+        # по длине пакета в одно слово: с хвостом он её не видит.
+        padding = b"" if size == 4 else os.urandom(os.urandom(1)[0] % 16)
         return struct.pack("<I", size + len(padding)) + payload + padding
     raise ValueError(f"unknown framing: {framing}")
 

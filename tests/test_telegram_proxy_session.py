@@ -12,6 +12,7 @@ from telegram_proxy.proxy import routes as routes_module
 from telegram_proxy.proxy import session as session_module
 from telegram_proxy.proxy import ws as ws_module
 from telegram_proxy.proxy.aes_ctr import AesCtrStream, aes_ctr_keystream
+from telegram_proxy.proxy.key_clusters import CLUSTER_MEDIA, CLUSTER_REGULAR, KEY_NOT_FOUND_PACKET
 from telegram_proxy.proxy.obfs import ABRIDGED, PADDED, PacketReader, encode_packet
 from telegram_proxy.proxy.routing import UpstreamProxyConfig
 from telegram_proxy.wss_proxy import TelegramWSProxy
@@ -51,6 +52,17 @@ def rpc_packet(body_len: int) -> bytes:
     return b"\0" * 8 + os.urandom(8) + struct.pack("<I", body_len) + os.urandom(body_len)
 
 
+def keyed_packet(key_id: bytes, body_len: int) -> bytes:
+    """Пакет, зашифрованный ключом key_id (номер ключа идёт открыто)."""
+    return key_id + os.urandom(16) + os.urandom(body_len)
+
+
+def route_kind(host: str) -> str:
+    if host == RELAY_IP or host.endswith("web.telegram.org"):
+        return "relay"
+    return "tunnel" if host.endswith("workers.dev") else "front"
+
+
 class FakeTelegramWs:
     """WebSocket, за которым «Telegram»: принимает заголовок и отвечает эхом пакетов."""
 
@@ -61,8 +73,11 @@ class FakeTelegramWs:
         answer: bool,
         answer_delay: float = 0.0,
         send_delay: float = 0.0,
+        rejects_keys: bool = False,
     ):
         self.target = target
+        # Кластер за этим сокетом не знает ни одного ключа: -404 на пакет с ключом.
+        self.rejects_keys = rejects_keys
         self.answer = answer
         self.answer_delay = answer_delay
         # Медленный send(): пока кадр уходит, Desktop успевает прислать ещё.
@@ -98,7 +113,9 @@ class FakeTelegramWs:
             self.packets.extend(packets)
             if self.answer:
                 for packet in packets:
-                    reply = self._encrypt.update(encode_packet(ABRIDGED, answer_for(packet)))
+                    keyed = packet[:8] != b"\0" * 8
+                    body = KEY_NOT_FOUND_PACKET if (self.rejects_keys and keyed) else answer_for(packet)
+                    reply = self._encrypt.update(encode_packet(ABRIDGED, body))
                     asyncio.get_running_loop().call_later(self.answer_delay, self._deliver, reply)
 
     def _deliver(self, reply: bytes) -> None:
@@ -159,11 +176,17 @@ class SessionScenarioTests(unittest.IsolatedAsyncioTestCase):
         # Релей, до которого не доходит даже SYN: connect висит без конца.
         self.relay_hangs = False
         self.send_delay = 0.0
+        # Виды путей (relay / front / tunnel), которые отказывают в TCP или отвечают -404.
+        self.refuse_kinds: set[str] = set()
+        self.reject_kinds: set[str] = set()
         self.quota_hosts: set[str] = set()
         self.dialled: list[str] = []
 
         async def fake_connect(target, *, on_tcp_connected=None, **_kwargs):
             self.dialled.append(target.connect_host)
+            kind = route_kind(target.connect_host)
+            if kind in self.refuse_kinds:
+                raise ws_module.WsConnectError(ws_module.STAGE_TCP, "refused")
             if target.connect_host == RELAY_IP and self.relay_hangs:
                 await asyncio.Event().wait()
             if self.refuse_ws:
@@ -175,10 +198,16 @@ class SessionScenarioTests(unittest.IsolatedAsyncioTestCase):
             if target.connect_host == RELAY_IP:
                 delay = self.relay_answer_delay
                 sock = FakeTelegramWs(
-                    target, answer=delay is not None, answer_delay=delay or 0.0, send_delay=self.send_delay
+                    target,
+                    answer=delay is not None,
+                    answer_delay=delay or 0.0,
+                    send_delay=self.send_delay,
+                    rejects_keys=kind in self.reject_kinds,
                 )
             else:
-                sock = FakeTelegramWs(target, answer=True, send_delay=self.send_delay)
+                sock = FakeTelegramWs(
+                    target, answer=True, send_delay=self.send_delay, rejects_keys=kind in self.reject_kinds
+                )
             if on_tcp_connected is not None:
                 on_tcp_connected()
             self.sockets.append(sock)
@@ -492,6 +521,103 @@ class SessionScenarioTests(unittest.IsolatedAsyncioTestCase):
         answers = await self._read_packets(reader, from_server, ABRIDGED, 2)
         self.assertEqual(answers, [answer_for(first), answer_for(second)])
         writer.close()
+
+    # ---- ключ медиа-сессии и два кластера DC ----
+
+    async def _media_exchange(self, key_id: bytes, *, dc: int = -2) -> list[bytes]:
+        """Один пакет с ключом от Desktop; что получил Desktop в ответ ([] — закрыто молча)."""
+        reader, writer = await self._socks5_connect("149.154.167.222", 443)
+        header, to_server, from_server = make_client_header(b"\xef" * 4, dc)
+        writer.write(header + to_server.update(encode_packet(ABRIDGED, keyed_packet(key_id, 40))))
+        await writer.drain()
+        packet_reader = PacketReader(ABRIDGED)
+        packets: list[bytes] = []
+        while not packets:
+            data = await asyncio.wait_for(reader.read(65536), timeout=3)
+            if not data:
+                break
+            packets.extend(packet_reader.feed(from_server.update(data)))
+        writer.close()
+        return packets
+
+    async def test_media_key_unknown_on_relay_cluster_moves_to_front_silently(self) -> None:
+        self._race_timing(race_delay=0.3)
+        self.relay_answer_delay = 0.0
+        self.reject_kinds = {"relay"}
+        proxy = await self._start(mode="socks5")
+        key = os.urandom(8)
+
+        answers = await self._media_exchange(key)
+
+        # Desktop не увидел -404: ответил фронт обычного кластера, где живёт ключ.
+        self.assertEqual(len(answers), 1)
+        self.assertNotEqual(answers[0], KEY_NOT_FOUND_PACKET)
+        self.assertEqual(proxy.stats.key_cluster_switches, 1)
+        self.assertEqual(proxy.key_clusters.home(key), CLUSTER_REGULAR)
+        self.assertTrue(any("-404 hidden" in line for line in self.logs), self.logs)
+
+        # Следующее медиа-соединение с этим ключом сразу идёт к фронтам.
+        self.dialled.clear()
+        self.assertNotEqual((await self._media_exchange(key))[0], KEY_NOT_FOUND_PACKET)
+        self.assertEqual(route_kind(self.dialled[0]), "front")
+        self.assertEqual(proxy.stats.key_cluster_switches, 1)
+
+    async def test_media_key_unknown_on_both_clusters_is_passed_to_telegram(self) -> None:
+        self.relay_answer_delay = 0.0
+        self.reject_kinds = {"relay", "front", "tunnel"}
+        proxy = await self._start(mode="socks5")
+
+        self.assertEqual(await self._media_exchange(os.urandom(8)), [KEY_NOT_FOUND_PACKET])
+        self.assertEqual(proxy.stats.key_not_found_passed, 1)
+        self.assertTrue(any("unknown on both clusters" in line for line in self.logs), self.logs)
+
+    async def test_front_404_with_only_fallbacks_to_media_cluster_lets_key_move(self) -> None:
+        self.refuse_kinds = {"relay"}
+        self.reject_kinds = {"front"}
+        proxy = await self._start(mode="socks5")
+
+        self.assertEqual(await self._media_exchange(os.urandom(8)), [KEY_NOT_FOUND_PACKET])
+        # Ради кластера ключа медиа не уходит на воркеры с суточным лимитом.
+        self.assertFalse(any(route_kind(host) == "tunnel" for host in self.dialled), self.dialled)
+        self.assertEqual(proxy.stats.key_not_found_passed, 1)
+
+    async def test_key_home_briefly_unreachable_closes_quietly_once_then_passes_404(self) -> None:
+        self.refuse_kinds = {"relay"}
+        proxy = await self._start(mode="socks5")
+        key = os.urandom(8)
+        await self._media_exchange(key)
+        self.assertEqual(proxy.key_clusters.home(key), CLUSTER_REGULAR)
+
+        # Фронты на минуту пропали, туннель ведёт на медиа-кластер, где ключа нет.
+        self.refuse_kinds = {"relay", "front"}
+        self.reject_kinds = {"tunnel"}
+        self.assertEqual(await self._media_exchange(key), [])
+        self.assertEqual(proxy.stats.key_quiet_closes, 1)
+        # Второй раз подряд — дом не вернулся, ключу пора переехать.
+        self.assertEqual(await self._media_exchange(key), [KEY_NOT_FOUND_PACKET])
+        self.assertEqual(proxy.key_clusters.home(key), "")
+
+    async def test_front_404_does_not_win_the_race_against_answering_relay(self) -> None:
+        self._race_timing(race_delay=0.05)
+        self.relay_answer_delay = 0.2
+        self.reject_kinds = {"front"}
+        proxy = await self._start(mode="socks5")
+        key = os.urandom(8)
+
+        answers = await self._media_exchange(key)
+
+        self.assertNotEqual(answers[0], KEY_NOT_FOUND_PACKET)
+        self.assertTrue(any(route_kind(host) == "front" for host in self.dialled))
+        self.assertEqual(proxy.key_clusters.home(key), CLUSTER_MEDIA)
+        self.assertEqual(proxy.stats.key_cluster_switches, 1)
+
+    async def test_404_on_main_session_is_passed_as_before(self) -> None:
+        self.relay_answer_delay = 0.0
+        self.reject_kinds = {"relay"}
+        proxy = await self._start(mode="socks5")
+
+        self.assertEqual(await self._media_exchange(os.urandom(8), dc=2), [KEY_NOT_FOUND_PACKET])
+        self.assertEqual(proxy.stats.key_cluster_switches, 0)
 
     @staticmethod
     async def _close_server(server) -> None:

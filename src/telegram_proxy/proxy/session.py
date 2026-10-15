@@ -18,7 +18,11 @@
    кто ответит первым (ZaStoGram, «гнать фронт наперегонки с релеем»).
    Работающий релей успевает раньше, и фронт не открывается вовсе. Релей,
    проигравший без TCP, считается отказавшим и вскоре подавляется.
-6. После первого ответа — обычная пересылка в обе стороны с перекодировкой
+6. Медиа-соединение: если сервер ответил -404 («ключ не найден»), ключ
+   Desktop живёт на другом кластере DC (key_clusters). Прокси не отдаёт -404,
+   а переходит на путь другого кластера; отдаёт, только когда ключа нет нигде
+   или ключу пора переехать к рабочему основному пути.
+7. После первого ответа — обычная пересылка в обе стороны с перекодировкой
    пакетов сервера в формат клиента.
 """
 
@@ -27,10 +31,16 @@ from __future__ import annotations
 import asyncio
 import ssl
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Protocol
 
 from telegram_proxy.proxy import ws as ws_transport
+from telegram_proxy.proxy.key_clusters import (
+    KEY_NOT_FOUND_PACKET,
+    cluster_title,
+    is_key_not_found,
+    key_id_of,
+)
 from telegram_proxy.proxy.obfs import (
     ABRIDGED,
     ClientSide,
@@ -82,6 +92,7 @@ class SessionHost(Protocol):
 
     stats: object
     route_health: object
+    key_clusters: object
     ws_pool: object
     mode_label: str
     buffer_size: int
@@ -193,9 +204,21 @@ class _Committed:
     route: Route
     conn: _ServerConn
     cipher: StreamCipher
-    first_data: bytes
+    # Первые целые пакеты сервера и разборщик с остатком потока после них.
+    packets: list[bytes]
+    reader: PacketReader
+    raw_len: int
     sent_index: int
     elapsed: float
+    # Сервер ответил -404: ключ медиа-сессии живёт на другом кластере.
+    key_unknown: bool = False
+
+
+# Что делать после -404 на медиа-соединении.
+_SWITCH = "switch"  # перейти на путь другого кластера, Desktop ничего не видит
+_DELIVER = "deliver"  # отдать -404: Desktop создаст ключ заново
+_QUIET = "quiet"  # закрыть без байта: Desktop переподключится со своим ключом
+_END = "end"  # путей другого кластера не осталось — решить в конце плана
 
 
 class TelegramSession:
@@ -230,7 +253,10 @@ class TelegramSession:
         self._client_eof = False
         self._committed = False
         self._client_reader = PacketReader(client.framing)
-        self._server_reader = PacketReader(ABRIDGED)
+        # Ключ медиа-сессии и кластеры, которые его не знают.
+        self._key_id = b""
+        self._key_home = ""
+        self._rejected_clusters: set[str] = set()
         self._sent_total = 0
         self._recv_total = 0
 
@@ -285,24 +311,55 @@ class TelegramSession:
                 target_host=self._target_host,
                 target_port=self._target_port,
             )
+            if self._is_media:
+                self._key_id = key_id_of(self._packets[0])
+                self._key_home = self._host.key_clusters.home(self._key_id)
+                if self._key_home:
+                    request = replace(request, key_cluster=self._key_home)
             plan = build_plan(request, self._host.route_health)
             index = 0
+            last_miss: Route | None = None
             while index < len(plan):
                 route = plan[index]
-                next_route = plan[index + 1] if index + 1 < len(plan) else None
+                if route.cluster in self._rejected_clusters:
+                    index += 1
+                    continue
+                follow = self._next_index(plan, index)
+                next_route = plan[follow] if follow is not None else None
+                misses: list[_Committed] = []
                 try:
                     if self._should_race(route, next_route):
-                        after_front = plan[index + 2] if index + 2 < len(plan) else None
-                        committed, raced = await self._race(route, next_route, after_front)
-                        index += 2 if raced else 1
+                        after = self._next_index(plan, follow)
+                        committed, raced, misses = await self._race(
+                            route, next_route, plan[after] if after is not None else None
+                        )
+                        index = follow + 1 if raced else index + 1
                     else:
                         committed = await self._attempt(route, next_route)
                         index += 1
                 except _ClientGone:
                     return
+                if committed is not None and committed.key_unknown:
+                    misses.append(committed)
+                    committed = None
                 if committed is not None:
+                    for miss in misses:
+                        self._rejected_clusters.add(miss.route.cluster)
+                        self._log_key_switch(miss.route, f"answered by {committed.route.label}")
+                    self._remember_key_home(committed)
                     await self._relay(committed)
                     return
+                for miss in misses:
+                    last_miss = miss.route
+                    action = self._key_miss_action(miss.route, plan[index:])
+                    if action == _DELIVER:
+                        await self._finish_key_miss(miss.route, _DELIVER, "only fallback routes lead to the other cluster")
+                        return
+            if last_miss is not None:
+                # Ключ не знает один кластер, а другой не ответил вовсе.
+                action = self._end_after_misses(last_miss)
+                await self._finish_key_miss(last_miss, action, "no route of the other cluster answered")
+                return
             self._host.stats.failed_connections += 1
             self._host.log(
                 f"[{self._label}] DC{self._dc}{self._media_tag}: all routes failed "
@@ -407,7 +464,7 @@ class TelegramSession:
             conn = probe.conn = await self._open(route, probe)
             if conn.pooled:
                 try:
-                    return await self._await_answer(route, conn, started, probe)
+                    return await self._answered(route, conn, started, probe)
                 except _RouteFailed as exc:
                     if exc.silent:
                         # Сервер молчал весь срок сторожа: это отказ маршрута,
@@ -419,7 +476,7 @@ class TelegramSession:
                     await self._abandon(conn)
                     conn = probe.conn = None
                     conn = probe.conn = await self._open(route, probe, use_pool=False)
-            return await self._await_answer(route, conn, started, probe)
+            return await self._answered(route, conn, started, probe)
         except _ClientGone as gone:
             if conn is not None:
                 if gone.deadline is not None:
@@ -446,6 +503,76 @@ class TelegramSession:
                 await self._abandon(conn, zero_recv=True)
             self._note_failure(route, _RouteFailed(_error_text(exc)), started, next_route)
             return None
+
+    async def _answered(self, route: Route, conn: _ServerConn, started: float, probe: _Probe) -> _Committed:
+        committed = await self._await_answer(route, conn, started, probe)
+        if committed.key_unknown:
+            # Путь жив, просто кластер не тот: сокет больше не нужен.
+            self._note_route_ok(route, conn)
+            await self._abandon(conn)
+        return committed
+
+    # ---- кластер ключа медиа-сессии ----
+
+    @staticmethod
+    def _next_index(plan: list[Route], index: int | None) -> int | None:
+        return None if index is None or index + 1 >= len(plan) else index + 1
+
+    def _key_tag(self) -> str:
+        return f"[{self._label}] DC{self._dc} media key={self._key_id[:4].hex()}"
+
+    def _remember_key_home(self, committed: _Committed) -> None:
+        # Короткий пакет — ошибка транспорта (-429 и др.), а не ответ на ключ.
+        if self._is_media and self._key_id and len(committed.packets[0]) > 4:
+            self._host.key_clusters.note_ok(self._key_id, committed.route.cluster)
+
+    def _log_key_switch(self, route: Route, outcome: str) -> None:
+        self._host.stats.key_cluster_switches += 1
+        self._host.log(
+            f"{self._key_tag()}: not found on {cluster_title(route.cluster)} via {route.label} "
+            f"({route.describe()}); -404 hidden, {outcome}"
+        )
+
+    def _key_miss_action(self, route: Route, remaining: list[Route]) -> str:
+        """Путь ответил -404. Перейти на другой кластер или отдать -404?"""
+        self._rejected_clusters.add(route.cluster)
+        others = [item for item in remaining if item.cluster not in self._rejected_clusters]
+        if not others:
+            return _END
+        if route.is_primary and not others[0].is_primary:
+            # Основной путь жив, а к дому ключа ведут только воркеры и SOCKS:
+            # ключу лучше переехать, чем гонять медиа через запасные пути.
+            return _DELIVER
+        self._log_key_switch(route, f"trying {cluster_title(others[0].cluster)}")
+        return _SWITCH
+
+    def _end_after_misses(self, route: Route) -> str:
+        if len(self._rejected_clusters) < 2 and self._host.key_clusters.may_close_quietly(
+            self._key_id, route.cluster
+        ):
+            return _QUIET
+        return _DELIVER
+
+    async def _finish_key_miss(self, route: Route, action: str, why: str) -> None:
+        stats = self._host.stats
+        if action == _QUIET:
+            stats.key_quiet_closes += 1
+            self._host.log(
+                f"{self._key_tag()}: not found on {cluster_title(route.cluster)} via {route.label}, "
+                f"its own cluster is unreachable right now; closed without -404 so Telegram retries with its key"
+            )
+            return
+        stats.key_not_found_passed += 1
+        if len(self._rejected_clusters) >= 2:
+            why = "unknown on both clusters"
+        self._host.log(f"{self._key_tag()}: -404 passed to Telegram ({why}); it will create a new key")
+        self._host.key_clusters.forget(self._key_id)
+        try:
+            out = encode_packet(self._client.framing, KEY_NOT_FOUND_PACKET)
+            self._writer.write(self._client.cipher.encryptor.update(out))
+            await self._writer.drain()
+        except (ConnectionError, OSError):
+            pass
 
     def _judge_race_loser(self, route: Route, conn: _ServerConn | None, probe: _Probe, next_route: Route | None) -> None:
         """Оценить релей, у которого фронт выиграл гонку.
@@ -476,26 +603,30 @@ class TelegramSession:
             route.kind == KIND_RELAY
             and next_route is not None
             and next_route.kind == KIND_FRONT
+            # Ключ живёт на кластере релея: фронт другого кластера ответил бы -404.
+            and self._key_home in ("", next_route.cluster)
             and self._host.route_health.is_unproven(route.health_key, route.address_health_key)
         )
 
     async def _race(
         self, relay: Route, front: Route, after_front: Route | None
-    ) -> tuple[_Committed | None, bool]:
+    ) -> tuple[_Committed | None, bool, list[_Committed]]:
         """Релей и через FRONT_RACE_DELAY фронт: кто первым ответит, тот и везёт.
 
-        Возвращает (победитель или None, пробовался ли фронт). Если релей
+        Возвращает (победитель или None, пробовался ли фронт, ответы -404).
+        Ответ -404 — не победа: другой участник продолжает. Если релей
         отказал раньше, чем фронт стартовал, фронт идёт обычной очередью.
         """
         relay_probe = _Probe()
         relay_task = asyncio.create_task(self._attempt(relay, front, relay_probe))
         tasks = {relay_task}
         winner: _Committed | None = None
+        misses: list[_Committed] = []
         try:
             await asyncio.wait(tasks, timeout=FRONT_RACE_DELAY)
             if relay_task.done():
                 tasks.clear()
-                return relay_task.result(), False
+                return relay_task.result(), False, misses
             front_task = asyncio.create_task(self._attempt(front, after_front))
             tasks.add(front_task)
             gone: _ClientGone | None = None
@@ -509,6 +640,9 @@ class TelegramSession:
                         continue
                     if result is None:
                         continue
+                    if result.key_unknown:
+                        misses.append(result)
+                        continue
                     if winner is None:
                         winner = result
                     else:
@@ -516,7 +650,7 @@ class TelegramSession:
                         await self._abandon(result.conn)
             if winner is None and gone is not None:
                 raise gone
-            return winner, True
+            return winner, True, misses
         finally:
             if tasks:
                 if winner is not None and winner.route is front and relay_task in tasks:
@@ -535,6 +669,8 @@ class TelegramSession:
         first = True
         deadline = time.monotonic() + self._watchdog
         recv_task = asyncio.create_task(conn.recv())
+        reader = PacketReader(ABRIDGED)
+        raw_len = 0
         wakeup = asyncio.Event()
         self._packet_listeners.add(wakeup)
         try:
@@ -575,13 +711,25 @@ class TelegramSession:
                     raise _RouteFailed(f"closed before answer: {_error_text(exc)}") from exc
                 if not data:
                     raise _RouteFailed("closed before answer (recv=0)")
+                raw_len += len(data)
+                try:
+                    packets = reader.feed(cipher.decryptor.update(data))
+                except ObfsProtocolError as exc:
+                    raise _RouteFailed(f"bad server stream: {exc}") from exc
+                if not packets:
+                    # Кусок пакета: ждать остаток в том же сроке сторожа.
+                    recv_task = asyncio.create_task(conn.recv())
+                    continue
                 return _Committed(
                     route=route,
                     conn=conn,
                     cipher=cipher,
-                    first_data=data,
+                    packets=packets,
+                    reader=reader,
+                    raw_len=raw_len,
                     sent_index=sent,
                     elapsed=time.monotonic() - started,
+                    key_unknown=self._is_media and bool(self._key_id) and is_key_not_found(packets[0]),
                 )
         except BaseException:
             if not recv_task.done():
@@ -731,10 +879,12 @@ class TelegramSession:
 
     # ---- пересылка ----
 
-    async def _deliver_to_client(self, cipher: StreamCipher, data: bytes) -> None:
-        self._recv_total += len(data)
-        self._host.stats.bytes_received += len(data)
-        packets = self._server_reader.feed(cipher.decryptor.update(data))
+    async def _deliver_to_client(self, reader: PacketReader, cipher: StreamCipher, data: bytes) -> None:
+        await self._deliver_packets(reader.feed(cipher.decryptor.update(data)), len(data))
+
+    async def _deliver_packets(self, packets: list[bytes], raw_len: int) -> None:
+        self._recv_total += raw_len
+        self._host.stats.bytes_received += raw_len
         if not packets:
             return
         out = b"".join(encode_packet(self._client.framing, packet) for packet in packets)
@@ -765,12 +915,12 @@ class TelegramSession:
                 await self._packet_event.wait()
 
         async def server_to_client() -> None:
-            await self._deliver_to_client(cipher, committed.first_data)
+            await self._deliver_packets(committed.packets, committed.raw_len)
             while True:
                 data = await conn.recv()
                 if not data:
                     return
-                await self._deliver_to_client(cipher, data)
+                await self._deliver_to_client(committed.reader, cipher, data)
 
         tasks = [asyncio.create_task(client_to_server()), asyncio.create_task(server_to_client())]
         error = ""

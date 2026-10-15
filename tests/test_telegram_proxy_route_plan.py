@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 from telegram_proxy.proxy.cloudflare import AUTO_CLOUDFLARE_DOMAINS, CloudflareFallbackConfig
 from telegram_proxy.proxy.health import RouteHealth, address_key, cdn_key
+from telegram_proxy.proxy.key_clusters import CLUSTER_MEDIA, CLUSTER_REGULAR, KeyClusters
 from telegram_proxy.proxy import routes as routes_module
 from telegram_proxy.proxy.route_catalog import CDN_FRONTS, TUNNEL_HOSTS
 from telegram_proxy.proxy.routes import (
@@ -60,6 +61,28 @@ class RoutePlanTests(unittest.TestCase):
     def test_media_uses_minus_one_relay_domain(self) -> None:
         plan = build_plan(PlanInput(dc=4, is_media=True, target_host="149.154.164.250"), self.health)
         self.assertEqual(plan[0].sni, "kws4-1.web.telegram.org")
+
+    def test_media_fronts_land_on_regular_cluster_and_the_rest_on_media(self) -> None:
+        plan = build_plan(PlanInput(dc=2, is_media=True, target_host="149.154.167.222", upstream=PRESET), self.health)
+        clusters = {route.kind: route.cluster for route in plan}
+        self.assertEqual(clusters[KIND_FRONT], CLUSTER_REGULAR)
+        for kind in (KIND_RELAY, KIND_TUNNEL, KIND_UPSTREAM):
+            self.assertEqual(clusters[kind], CLUSTER_MEDIA)
+        plain = build_plan(PlanInput(dc=2, is_media=False, target_host="149.154.167.51", upstream=PRESET), self.health)
+        self.assertEqual({route.cluster for route in plain}, {CLUSTER_REGULAR})
+
+    def test_key_living_on_regular_cluster_puts_fronts_before_relay(self) -> None:
+        request = PlanInput(
+            dc=2, is_media=True, target_host="149.154.167.222", upstream=PRESET, key_cluster=CLUSTER_REGULAR
+        )
+        plan = build_plan(request, self.health)
+        # Запасные пути (воркеры, SOCKS) ради кластера вперёд не встают.
+        self.assertEqual(kinds(plan), [KIND_FRONT, KIND_FRONT, KIND_FRONT, KIND_RELAY, *TUNNELS, KIND_UPSTREAM])
+        media_home = build_plan(
+            PlanInput(dc=2, is_media=True, target_host="149.154.167.222", upstream=PRESET, key_cluster=CLUSTER_MEDIA),
+            self.health,
+        )
+        self.assertEqual(kinds(media_home)[0], KIND_RELAY)
 
     def test_dc1_has_no_relay_and_starts_with_fronts(self) -> None:
         plan = build_plan(PlanInput(dc=1, is_media=False, target_host="149.154.175.50"), self.health)
@@ -133,6 +156,33 @@ class RoutePlanTests(unittest.TestCase):
             self.health.note_failure(key, threshold=6)
             self.clock.now += 3
         self.assertTrue(self.health.is_suppressed(key))
+
+
+class KeyClustersTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.clock = FakeClock()
+        self.keys = KeyClusters(clock=self.clock, capacity=2)
+
+    def test_home_is_remembered_and_oldest_key_is_dropped(self) -> None:
+        self.keys.note_ok(b"k1" * 4, CLUSTER_MEDIA)
+        self.keys.note_ok(b"k2" * 4, CLUSTER_REGULAR)
+        self.keys.note_ok(b"k1" * 4, CLUSTER_MEDIA)
+        self.keys.note_ok(b"k3" * 4, CLUSTER_REGULAR)
+        self.assertEqual(self.keys.home(b"k1" * 4), CLUSTER_MEDIA)
+        self.assertEqual(self.keys.home(b"k2" * 4), "")
+        self.assertEqual(self.keys.home(b""), "")
+
+    def test_quiet_close_only_for_a_fresh_home_and_once_a_minute(self) -> None:
+        key = b"k1" * 4
+        self.assertFalse(self.keys.may_close_quietly(key, CLUSTER_MEDIA))
+        self.keys.note_ok(key, CLUSTER_REGULAR)
+        self.assertFalse(self.keys.may_close_quietly(key, CLUSTER_REGULAR))
+        self.assertTrue(self.keys.may_close_quietly(key, CLUSTER_MEDIA))
+        self.clock.now += 30
+        self.assertFalse(self.keys.may_close_quietly(key, CLUSTER_MEDIA))
+        self.clock.now += 100
+        # Дом ключа не отвечал больше двух минут: ключу пора переехать.
+        self.assertFalse(self.keys.may_close_quietly(key, CLUSTER_MEDIA))
 
 
 class RouteHealthTests(unittest.TestCase):

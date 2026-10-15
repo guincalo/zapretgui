@@ -36,6 +36,11 @@ class ProxyStats:
     passthrough_connections: int = 0
     upstream_connections: int = 0
     recv_zero_count: int = 0
+    # Ключ медиа-сессии на другом кластере: -404 скрыт и путь сменён / отдан
+    # Desktop / соединение закрыто молча, пока дом ключа недоступен.
+    key_cluster_switches: int = 0
+    key_not_found_passed: int = 0
+    key_quiet_closes: int = 0
     recv_zero_per_dc: dict = field(default_factory=dict)
     http_rejected: int = 0
     mtproxy_invalid_init_count: int = 0

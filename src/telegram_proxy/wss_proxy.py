@@ -27,6 +27,7 @@ from telegram_proxy.proxy.cloudflare import CloudflareFallbackConfig
 from telegram_proxy.proxy.dc_map import IP_TO_DC, dc_to_tcp_endpoint, ip_to_dc, is_telegram_ip
 from telegram_proxy.proxy.fake_tls import normalize_fake_tls_domain, read_mtproxy_client_init
 from telegram_proxy.proxy.health import RouteHealth
+from telegram_proxy.proxy.key_clusters import KeyClusters
 from telegram_proxy.proxy.mtproxy import normalize_secret
 from telegram_proxy.proxy.obfs import (
     HEADER_LEN,
@@ -194,6 +195,7 @@ class TelegramWSProxy:
         self._running = False
         self.stats = ProxyStats()
         self.route_health = RouteHealth(path=route_health_path, front_count=len(CDN_FRONTS))
+        self.key_clusters = KeyClusters()
         self.ws_pool = WsSparePool(self.stats, enabled=self._pool_size > 0, buffer_size=self.buffer_size)
         self._upstream_runtime = self._new_upstream_runtime()
         self._mtproxy_invalid_init_log_marks = {1, 5, 20, 50}
