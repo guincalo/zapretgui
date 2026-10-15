@@ -76,6 +76,11 @@ def _auto_install_allowed(version: str) -> bool:
     return True
 
 
+def auto_install_allowed(version: str) -> bool:
+    """Можно ли ещё ставить версию самой программе (лимит попыток не исчерпан)."""
+    return _auto_install_allowed(version)
+
+
 def _pause_left(now: float) -> float:
     elapsed = now - _last_successful_check_at()
     # Часы перевели назад: пауза считается истёкшей.

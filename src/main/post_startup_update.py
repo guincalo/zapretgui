@@ -57,7 +57,12 @@ SIGNAL_PROBE_WAIT_SECONDS = 10.0
 # Сервер разрешил обновиться, а человек занят (игра на весь экран, проверка
 # сети, подбор стратегии): установка закрыла бы программу и оборвала дело.
 # Она ждёт простоя, заглядывая с этой паузой.
-BUSY_RECHECK_MS = 30 * 1000
+BUSY_RECHECK_MS = 5 * 1000
+# Программа взялась ставить версию по разрешению, а через столько всё ещё
+# работает: скачивание или запуск новой версии сорвались. Пока разрешение
+# действует и попытки не кончились, она пробует снова — второго разрешения
+# сервер не пришлёт, и без этого обновление ждало бы перезапуска программы.
+GRANT_RETRY_MS = 3 * 60 * 1000
 
 _BUSY_TEXTS = {
     "fullscreen": "идёт игра или видео на весь экран",
@@ -330,7 +335,19 @@ def install_update_check(
         )
         return True
 
-    def _on_release_signalled(version: str, attempt: int = 0, *, urgent: bool = False) -> None:
+    def _grant_watchdog(version: str) -> None:
+        if not is_startup_host_alive(startup_host) or time.monotonic() >= signal_granted_until:
+            return
+        try:
+            allowed = updater_feature.auto_install_allowed(version)
+        except Exception:
+            allowed = False
+        if not allowed:
+            return
+        log(f"Разрешение на v{version} ещё действует, а обновление не встало: пробуем снова", "🔁 UPDATE")
+        _on_release_signalled(version, renew=False)
+
+    def _on_release_signalled(version: str, attempt: int = 0, *, urgent: bool = False, renew: bool = True) -> None:
         """Сервер разрешил обновиться: проверяем и ставим сразу.
 
         Если человек занят, установка ждёт простоя: разрешение сервера не
@@ -349,20 +366,22 @@ def install_update_check(
             if deferred_version != version:
                 deferred_version = version
                 _on_update_deferred(version, busy)
-            schedule_after(BUSY_RECHECK_MS, lambda: _on_release_signalled(version))
+            schedule_after(BUSY_RECHECK_MS, lambda: _on_release_signalled(version, renew=renew))
             return
         if attempt == 0:
             if deferred_version == version:
                 log(f"Программа освободилась: ставим обновление v{version}", "🔁 UPDATE")
             deferred_version = ""
-            signal_granted_until = time.monotonic() + SIGNAL_GRANT_SECONDS
+            if renew:
+                signal_granted_until = time.monotonic() + SIGNAL_GRANT_SECONDS
             signal_retries_left = SIGNAL_CHECK_MAX_RETRIES
         if _start_update_check(_SOURCE_BACKGROUND):
+            schedule_after(GRANT_RETRY_MS, lambda: _grant_watchdog(version))
             return
         if attempt < SIGNAL_CHECK_MAX_RETRIES:
             schedule_after(
                 SIGNAL_CHECK_RETRY_MS,
-                lambda: _on_release_signalled(version, attempt + 1),
+                lambda: _on_release_signalled(version, attempt + 1, renew=renew),
             )
 
     update_bridge.release_signalled.connect(_on_release_signalled)

@@ -13,19 +13,24 @@ from __future__ import annotations
 """
 
 import sys
+import threading
+import time
 
 BUSY_FULLSCREEN = "fullscreen"
 
 # Ответы Windows на вопрос «можно ли сейчас показывать уведомления»
 # (SHQueryUserNotificationState).
+_QUNS_NOT_PRESENT = 1  # экран заблокирован, заставка, сеанс отключён — человек отошёл
 _QUNS_BUSY = 2
 _QUNS_RUNNING_D3D_FULL_SCREEN = 3
 _QUNS_PRESENTATION_MODE = 4
+_QUNS_APP = 7  # полноэкранное приложение из Microsoft Store
 # Игра Direct3D на весь экран и режим презентации — ответы однозначные.
 _SURE_STATES = (_QUNS_RUNNING_D3D_FULL_SCREEN, _QUNS_PRESENTATION_MODE)
 
 # Что стоит на переднем плане.
 FOREGROUND_FULL = "f"     # чужое окно закрывает весь экран
+FOREGROUND_BARE = "b"     # чужое окно на весь экран без заголовка и рамки: игра или видео
 FOREGROUND_PART = "p"     # окно занимает часть экрана
 FOREGROUND_SHELL = "s"    # рабочий стол или панель задач
 FOREGROUND_OWN = "o"      # окно самой программы
@@ -88,7 +93,15 @@ def _foreground() -> str:
             rect.left <= screen.left and rect.top <= screen.top
             and rect.right >= screen.right and rect.bottom >= screen.bottom
         )
-        return FOREGROUND_FULL if covers else FOREGROUND_PART
+        if not covers:
+            return FOREGROUND_PART
+        # Без заголовка и рамки окно на весь экран — это игра в режиме «окно
+        # без рамки» или видео на весь экран. Обычное развёрнутое окно (при
+        # скрытой панели задач оно тоже закрывает весь экран) с заголовком.
+        style = int(user32.GetWindowLongW(window, -16)) & 0xFFFFFFFF  # GWL_STYLE
+        captioned = (style & 0x00C00000) == 0x00C00000  # WS_CAPTION
+        sizable = bool(style & 0x00040000)  # WS_THICKFRAME
+        return FOREGROUND_FULL if captioned or sizable else FOREGROUND_BARE
     except Exception:
         return ""
 
@@ -98,14 +111,20 @@ def is_fullscreen(state: int, foreground: str) -> bool:
 
     Игра Direct3D на весь экран и режим презентации — ответы Windows
     однозначные. Ответ «экран занят» (2) расплывчат: его дают и невидимые
-    окна поверх экрана, и чужие оболочки. Ему программа верит, только если
-    окно на переднем плане и правда закрывает весь экран и это не рабочий
-    стол и не она сама. Иначе обновление откладывалось бы у людей, которые
-    ничем не заняты.
+    окна поверх экрана, и чужие оболочки. Ему (и полноэкранному приложению
+    Store, 7) программа верит, только если окно на переднем плане и правда
+    закрывает весь экран и это не рабочий стол и не она сама.
+
+    Игры в режиме «окно без рамки» Windows считает обычными окнами и отвечает
+    «можно» (5) — так было у ~5 % программо-минут. Их выдаёт само окно: на
+    весь экран, без заголовка и рамки. Если человек отошёл (1), обновлению
+    ничто не мешает.
     """
-    if state in _SURE_STATES:
+    if state == _QUNS_NOT_PRESENT:
+        return False
+    if state in _SURE_STATES or foreground == FOREGROUND_BARE:
         return True
-    return state == _QUNS_BUSY and foreground == FOREGROUND_FULL
+    return state in (_QUNS_BUSY, _QUNS_APP) and foreground in (FOREGROUND_FULL, FOREGROUND_BARE)
 
 
 def screen_state() -> str:
@@ -116,12 +135,63 @@ def screen_state() -> str:
     return f"{state}{_foreground()}" if state else ""
 
 
-def fullscreen_app_active() -> bool:
-    """На экране игра, видео или презентация во весь экран."""
+# Память об игре: человек свернул игру и ушёл в Discord — на переднем плане
+# уже не игра, но обновление на несколько секунд остановит обход и выкинет
+# его из игры. Поэтому занятым он считается ещё столько после того, как
+# игру на весь экран видели в последний раз.
+GAME_MEMORY_SECONDS = 10 * 60
+# Как часто фоновая проверка смотрит на экран (дёшево: два вызова Windows).
+SAMPLE_SECONDS = 10.0
+
+_memory_lock = threading.Lock()
+_last_fullscreen = 0.0
+_sampler: threading.Thread | None = None
+
+
+def _note_fullscreen(now: float) -> None:
+    global _last_fullscreen
+    with _memory_lock:
+        _last_fullscreen = now
+
+
+def _recently_fullscreen(now: float) -> bool:
+    with _memory_lock:
+        return _last_fullscreen > 0 and now - _last_fullscreen < GAME_MEMORY_SECONDS
+
+
+def fullscreen_app_active(*, now: float | None = None) -> bool:
+    """На экране игра, видео или презентация во весь экран — сейчас или недавно."""
+    moment = time.monotonic() if now is None else now
     state = _notification_state()
-    if state in _SURE_STATES:
+    if state == _QUNS_NOT_PRESENT:
+        # Экран заблокирован: человек отошёл, обновиться самое время.
+        return False
+    foreground = _foreground() if state not in _SURE_STATES else ""
+    if is_fullscreen(state, foreground):
+        _note_fullscreen(moment)
         return True
-    return state == _QUNS_BUSY and _foreground() == FOREGROUND_FULL
+    return _recently_fullscreen(moment)
+
+
+def _sample_forever() -> None:
+    while True:
+        try:
+            fullscreen_app_active()
+        except Exception:
+            pass
+        time.sleep(SAMPLE_SECONDS)
+
+
+def start_sampler() -> None:
+    """Фоновая проверка экрана раз в ``SAMPLE_SECONDS``: память об игре без пропусков."""
+    global _sampler
+    if sys.platform != "win32":
+        return
+    with _memory_lock:
+        if _sampler is not None:
+            return
+        _sampler = threading.Thread(target=_sample_forever, name="busy-sampler", daemon=True)
+        _sampler.start()
 
 
 def busy_reason() -> str:
@@ -166,4 +236,5 @@ __all__ = [
     "fullscreen_app_active",
     "is_fullscreen",
     "screen_state",
+    "start_sampler",
 ]

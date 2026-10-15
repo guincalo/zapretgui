@@ -76,6 +76,10 @@ class UpdaterFeature:
         """Версия не скачалась или не дошла до установщика: сервер узнает причину."""
         self._commands().note_auto_install_missed(str(version or ""), str(why or ""))
 
+    def auto_install_allowed(self, version: str) -> bool:
+        """Можно ли ещё ставить версию самой программе: лимит попыток не исчерпан."""
+        return bool(self._commands().auto_install_allowed(str(version or "")))
+
     def update_busy_reason(self) -> str:
         """Чем занят человек (игра на весь экран, проверка сети); пусто — можно обновляться."""
         return str(self._commands().update_busy_reason() or "")

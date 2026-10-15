@@ -44,6 +44,12 @@ def note_auto_install_attempt(version: str) -> int:
     return int(add_auto_install_attempt(target, from_version=APP_VERSION, granted_at=granted_at(target)))
 
 
+def auto_install_allowed(version: str) -> bool:
+    from updater.startup_update_check import auto_install_allowed as allowed
+
+    return bool(allowed(str(version or "")))
+
+
 def update_busy_reason() -> str:
     """Чем занят человек (игра на весь экран, проверка сети) либо пустая строка."""
     from updater.busy import busy_reason
@@ -113,9 +119,12 @@ def create_release_watcher(*, on_release, on_queued, on_revoked=None, is_bypass_
     """
     from config.build_info import APP_VERSION, CHANNEL
 
-    from updater.busy import activity, busy_reason
+    from updater.busy import activity, busy_reason, start_sampler
     from updater.release import outcome
     from updater.release.watch import ReleaseWatcher
+
+    # Память об игре: экран проверяется и между вопросами серверу.
+    start_sampler()
 
     def _granted(version: str) -> None:
         # Отсюда считается «от разрешения до запуска новой версии».

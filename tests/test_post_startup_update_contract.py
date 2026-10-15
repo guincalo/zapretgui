@@ -139,12 +139,17 @@ class _Feature:
         # Чем занят человек при очередном вопросе; список кончился — свободен.
         self.busy_reasons: list[str] = []
         self.failed_versions: list[str] = []
+        # Остались ли ещё попытки поставить версию самой программе (по одному ответу на вопрос).
+        self.allowed_attempts: list[bool] = []
 
     def update_busy_reason(self) -> str:
         return self.busy_reasons.pop(0) if self.busy_reasons else ""
 
-    def note_auto_install_failed(self, version: str) -> None:
+    def note_auto_install_failed(self, version: str, why: str = "", who: str = "") -> None:
         self.failed_versions.append(version)
+
+    def auto_install_allowed(self, version: str) -> bool:
+        return self.allowed_attempts.pop(0) if self.allowed_attempts else False
 
     def is_auto_update_enabled(self) -> bool:
         return self.auto_update_enabled
@@ -474,6 +479,37 @@ class BackgroundUpdateCheckTests(unittest.TestCase):
         self.assertEqual(feature.sources, ["startup", "background"])
         self.assertEqual(feature.signalled, [False, True])
         host.ensure_page.assert_called_once_with(PageName.SERVERS)
+
+    def test_failed_install_is_retried_while_the_permission_lasts(self) -> None:
+        from main import post_startup_update
+
+        feature = _Feature(self._CLEAN)
+        watchdogs: list = []
+
+        class _WatchTimers(_Timers):
+            def schedule(self, delay_ms, callback) -> None:
+                if int(delay_ms) == post_startup_update.GRANT_RETRY_MS:
+                    watchdogs.append(callback)
+                    return
+                super().schedule(delay_ms, callback)
+
+        self._run(feature, timers=_WatchTimers())
+        feature.result = dict(self._FOUND, auto_install=True)
+        feature.on_release("9.9.9")
+        self.assertEqual(feature.sources, ["startup", "background"])
+        self.assertEqual(len(watchdogs), 1)
+
+        # Через три минуты программа всё ещё здесь: обновление не встало.
+        feature.allowed_attempts = [True]
+        watchdogs.pop()()
+        self.assertEqual(feature.sources, ["startup", "background", "background"])
+        self.assertEqual(feature.signalled, [False, True, True])
+
+        # Попытки кончились: дальше только по кнопке, без окон по кругу.
+        feature.allowed_attempts = [False]
+        watchdogs.pop()()
+        self.assertEqual(feature.sources, ["startup", "background", "background"])
+        self.assertEqual(watchdogs, [])
 
     def test_revoked_version_is_replaced_even_during_a_game(self) -> None:
         """Выключатель версии: сломанную версию меняем, не дожидаясь простоя."""

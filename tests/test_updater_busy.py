@@ -55,7 +55,17 @@ class LongTaskTests(unittest.TestCase):
             thread.join(5)
 
 
+def _fresh_memory(case: unittest.TestCase) -> None:
+    """Память об игре — общая на процесс: каждый случай начинает без неё."""
+    patcher = patch.object(busy, "_last_fullscreen", 0.0)
+    patcher.start()
+    case.addCleanup(patcher.stop)
+
+
 class BusyReasonTests(unittest.TestCase):
+    def setUp(self) -> None:
+        _fresh_memory(self)
+
     def test_free_person_can_be_updated(self) -> None:
         with patch.object(busy, "_notification_state", return_value=5):
             self.assertEqual(busy.busy_reason(), "")
@@ -72,15 +82,16 @@ class BusyReasonTests(unittest.TestCase):
         # одного его мало, нужно чужое окно во весь экран на переднем плане.
         expected = {
             busy.FOREGROUND_FULL: busy.BUSY_FULLSCREEN,
+            busy.FOREGROUND_BARE: busy.BUSY_FULLSCREEN,
             busy.FOREGROUND_PART: "",
             busy.FOREGROUND_SHELL: "",
             busy.FOREGROUND_OWN: "",
             "": "",
         }
         for foreground, reason in expected.items():
-            with patch.object(busy, "_notification_state", return_value=2), patch.object(
-                busy, "_foreground", return_value=foreground
-            ):
+            with patch.object(busy, "_last_fullscreen", 0.0), patch.object(
+                busy, "_notification_state", return_value=2
+            ), patch.object(busy, "_foreground", return_value=foreground):
                 self.assertEqual(busy.busy_reason(), reason, foreground)
 
     def test_raw_screen_state_is_told_as_code_and_foreground(self) -> None:
@@ -99,12 +110,41 @@ class BusyReasonTests(unittest.TestCase):
             with patch.object(busy, "_notification_state", return_value=state):
                 self.assertEqual(busy.busy_reason(), "", state)
 
+    def test_borderless_game_is_busy_although_windows_says_free(self) -> None:
+        # Игра «окно без рамки»: Windows отвечает «можно» (5), выдаёт окно.
+        self.assertTrue(busy.is_fullscreen(5, busy.FOREGROUND_BARE))
+        # Обычное развёрнутое окно с заголовком — нет.
+        self.assertFalse(busy.is_fullscreen(5, busy.FOREGROUND_FULL))
+        # Полноэкранное приложение Store — как «экран занят».
+        self.assertTrue(busy.is_fullscreen(7, busy.FOREGROUND_FULL))
+        self.assertFalse(busy.is_fullscreen(7, busy.FOREGROUND_PART))
+        # Человек отошёл: ничто не мешает.
+        self.assertFalse(busy.is_fullscreen(1, busy.FOREGROUND_BARE))
+
+    def test_game_is_remembered_after_alt_tab(self) -> None:
+        with patch.object(busy, "_notification_state", return_value=5), patch.object(
+            busy, "_foreground", return_value=busy.FOREGROUND_BARE
+        ):
+            self.assertTrue(busy.fullscreen_app_active(now=1000.0))
+        # Свернул игру и ушёл в Discord: на переднем плане обычное окно.
+        with patch.object(busy, "_notification_state", return_value=5), patch.object(
+            busy, "_foreground", return_value=busy.FOREGROUND_PART
+        ):
+            self.assertTrue(busy.fullscreen_app_active(now=1000.0 + 9 * 60))
+            self.assertFalse(busy.fullscreen_app_active(now=1000.0 + busy.GAME_MEMORY_SECONDS + 1))
+        # Заблокировал экран и ушёл — обновиться самое время.
+        with patch.object(busy, "_notification_state", return_value=1):
+            self.assertFalse(busy.fullscreen_app_active(now=1001.0))
+
     def test_running_check_matters_more_than_the_screen(self) -> None:
         with long_tasks.long_task("strategy_scan"), patch.object(busy, "_notification_state", return_value=3):
             self.assertEqual(busy.busy_reason(), "strategy_scan")
 
 
 class ActivityTests(unittest.TestCase):
+    def setUp(self) -> None:
+        _fresh_memory(self)
+
     def _shown(self, value):
         from core.runtime import presence
 

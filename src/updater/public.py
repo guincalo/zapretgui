@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from updater.commands import (
+    auto_install_allowed,
     check_installation_integrity,
     create_release_watcher,
     get_update_skipped_version,
@@ -22,6 +23,7 @@ from updater.commands import (
 )
 
 __all__ = [
+    "auto_install_allowed",
     "check_installation_integrity",
     "create_release_watcher",
     "get_update_skipped_version",

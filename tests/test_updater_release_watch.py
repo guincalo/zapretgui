@@ -359,7 +359,8 @@ class ReleaseWatcherTests(unittest.TestCase):
         harness.run()
 
         rounds = [pause for pause in harness.pauses if pause != watch.NEXT_SOURCE_PAUSE_SECONDS]
-        self.assertEqual(rounds[:3], [60.0, 120.0, 240.0])
+        # Паузы растут, но не дольше трёх минут: вернулась сеть — программа узнаёт быстро.
+        self.assertEqual(rounds[:3], [60.0, 120.0, 180.0])
         self.assertIs(harness.watcher.reachable, False)
 
     def test_http_error_counts_as_failure(self) -> None:
