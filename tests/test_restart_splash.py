@@ -250,6 +250,11 @@ class SplashSpecTests(unittest.TestCase):
         self.assertGreaterEqual(hidden.width, 720)
         self.assertIn("Updating", hidden.title)
         self.assertEqual(hidden.statuses, ("Done", "In progress", "Waiting"))
+        # Подсказка у кнопки в углу — на языке программы.
+        self.assertTrue(spec.hide_hint.startswith("Свернуть"))
+        self.assertTrue(hidden.hide_hint.startswith("Minimize"))
+        payload = spec.to_payload(logo_path="", shown_path="", ready_path="", log_path="")
+        self.assertEqual(payload["texts"]["hide"], spec.hide_hint)
 
 
     def test_small_card_sits_in_the_bottom_right_corner_of_the_screen(self) -> None:
@@ -286,6 +291,8 @@ class SplashSpecTests(unittest.TestCase):
         self.assertTrue(spec.jokes)
         payload = spec.to_payload(logo_path="", shown_path="", ready_path="", log_path="")
         self.assertEqual(payload["layout"], "compact")
+        # Свернуть карточку некуда — её кнопка «Скрыть».
+        self.assertTrue(spec.hide_hint.startswith("Скрыть"))
 
         english = build_restart_splash_spec(
             host, dialog_widget=None, current_version="1.9", target_version="2.0", language="en", compact=True
@@ -498,6 +505,27 @@ class PageSplashTests(unittest.TestCase):
         self.assertIn("окно остаётся поверх всех", watch)
         failed = script[script.index("'failed'    {"):script.index("'failed'    {") + 260]
         self.assertIn("$form.TopMost = $false", failed)
+
+    def test_person_can_put_the_window_away(self) -> None:
+        """Жалоба 15.10.2026: окно на пол-экрана нельзя было ни закрыть, ни свернуть."""
+        script = render_splash_script()
+
+        # Кнопка в правом верхнем углу рисуется у обоих видов окна.
+        window = script[script.index("function Draw-Window"):script.index("function Test-InHideButton")]
+        self.assertIn("Draw-HideButton $g $width", window)
+        # Щелчок по кнопке и Esc прячут окно.
+        self.assertIn("if ($pressed -and (Test-InHideButton $e.Location)) { Hide-Splash 'кнопка' }", script)
+        self.assertIn("$form.KeyPreview = $true", script)
+        self.assertIn("if ($e.KeyCode -eq [System.Windows.Forms.Keys]::Escape) { Hide-Splash 'Esc' }", script)
+        hide = script[script.index("function Hide-Splash"):script.index("# Подсказка у кнопки")]
+        # Большое окно уходит на панель задач, карточка (её там нет) — закрывается.
+        self.assertIn("$form.WindowState = [System.Windows.Forms.FormWindowState]::Minimized", hide)
+        self.assertIn("Start-Closing $true", hide)
+        self.assertLess(hide.index("if ($compact) {"), hide.index("FormWindowState]::Minimized"))
+        # Свёрнутое окно обратно не вытаскивается, когда закрылась старая версия.
+        front = script[script.index("function Bring-ToFront"):script.index("function Watch-OldApp")]
+        self.assertLess(front.index("FormWindowState]::Minimized"), front.index("$form.Activate()"))
+        self.assertIn("$tip.Show([string]$spec.texts.hide", script)
 
     def test_quiet_window_is_shown_without_taking_focus(self) -> None:
         script = render_splash_script()

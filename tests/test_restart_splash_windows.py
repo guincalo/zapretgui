@@ -100,6 +100,90 @@ class RestartSplashWindowsTests(unittest.TestCase):
         with self.assertRaises(subprocess.TimeoutExpired):
             process.wait(timeout=3)
 
+    def _window(self, process: subprocess.Popen) -> int:
+        import ctypes
+        from ctypes import wintypes
+
+        user32 = ctypes.windll.user32
+        found: list[int] = []
+        callback_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+
+        def visit(hwnd, _lparam):
+            # По процессу и заголовку: без рабочего стола (сеанс ssh) Windows
+            # считает все окна невидимыми, а у WinForms есть и служебные окна.
+            pid = wintypes.DWORD()
+            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+            if pid.value == process.pid:
+                title = ctypes.create_unicode_buffer(256)
+                user32.GetWindowTextW(hwnd, title, 256)
+                if title.value == "Zapret — обновление":
+                    found.append(int(hwnd))
+            return True
+
+        deadline = time.monotonic() + 5
+        while not found and time.monotonic() < deadline:
+            user32.EnumWindows(callback_type(visit), 0)
+            time.sleep(0.05)
+        self.assertTrue(found, "окно процесса не найдено")
+        return found[0]
+
+    @staticmethod
+    def _iconic(hwnd: int) -> bool:
+        import ctypes
+
+        return bool(ctypes.windll.user32.IsIconic(hwnd))
+
+    def _click_corner(self, hwnd: int) -> None:
+        import ctypes
+        from ctypes import wintypes
+
+        rect = wintypes.RECT()
+        ctypes.windll.user32.GetClientRect(hwnd, ctypes.byref(rect))
+        point = (12 << 16) | (rect.right - 12)
+        for message, wparam in ((0x0200, 0), (0x0201, 1), (0x0202, 0)):  # MOVE, LBUTTONDOWN, LBUTTONUP
+            ctypes.windll.user32.PostMessageW(hwnd, message, wparam, point)
+            time.sleep(0.1)
+
+    def test_escape_minimizes_window_and_update_goes_on(self) -> None:
+        self._state("launched")
+        process = self._start()
+        hwnd = self._window(process)
+        import ctypes
+
+        ctypes.windll.user32.PostMessageW(hwnd, 0x0100, 0x1B, 0)  # WM_KEYDOWN, Esc
+        deadline = time.monotonic() + 3
+        while not self._iconic(hwnd) and time.monotonic() < deadline:
+            time.sleep(0.05)
+        self.assertTrue(self._iconic(hwnd), "Esc не свернул окно")
+        # Свёрнутое окно по-прежнему ждёт и гаснет вместе с обновлением.
+        self.assertIsNone(process.poll())
+        self._state("succeeded")
+        time.sleep(0.3)
+        self.ready.write_text("{}", encoding="utf-8")
+        self.assertEqual(process.wait(timeout=10), 0)
+
+    def test_corner_button_minimizes_window(self) -> None:
+        self._state("launched")
+        process = self._start()
+        hwnd = self._window(process)
+        self._click_corner(hwnd)
+        deadline = time.monotonic() + 3
+        while not self._iconic(hwnd) and time.monotonic() < deadline:
+            time.sleep(0.05)
+        self.assertTrue(self._iconic(hwnd), "кнопка в углу не свернула окно")
+        self.assertIsNone(process.poll())
+
+    def test_corner_button_hides_small_card(self) -> None:
+        payload = json.loads(self.spec_path.read_text(encoding="utf-8"))
+        payload.update(layout="compact", width=460, height=190)
+        self.spec_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        self._state("launched")
+        process = self._start()
+        self._click_corner(self._window(process))
+        self.assertEqual(process.wait(timeout=10), 0)
+        log_text = (self.dir / "splash.log").read_text(encoding="utf-8", errors="replace")
+        self.assertIn("карточку скрыли", log_text)
+
     def test_snapshot_draws_every_stage(self) -> None:
         for stage in ("prepared", "launched", "succeeded"):
             snapshot = self.dir / f"{stage}.png"

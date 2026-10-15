@@ -69,6 +69,8 @@ class RestartSplashSpec:
     # или он в другом окне), окно обновления появляется, но клавиатуру у его
     # программы не выхватывает.
     take_focus: bool = True
+    # Подсказка у кнопки в углу: «Свернуть» у большого окна, «Скрыть» у карточки.
+    hide_hint: str = ""
 
     def to_payload(
         self,
@@ -93,6 +95,7 @@ class RestartSplashSpec:
                 "window_title": str(self.window_title),
                 "files_template": str(self.files_template),
                 "statuses": [str(item) for item in self.statuses],
+                "hide": str(self.hide_hint),
             },
             "jokes": [str(item) for item in self.jokes if str(item or "").strip()],
             "colors": {str(key): str(value) for key, value in dict(self.colors).items()},

@@ -3679,6 +3679,14 @@ TEXTS: dict[str, dict[str, str]] = {
         "ru": "Окно закроется само, когда откроется новая версия",
         "en": "This window closes by itself when the new version opens",
     },
+    "update_dialog.restart.minimize": {
+        "ru": "Свернуть — обновление продолжится (Esc)",
+        "en": "Minimize — the update keeps going (Esc)",
+    },
+    "update_dialog.restart.compact.hide": {
+        "ru": "Скрыть — обновление продолжится",
+        "en": "Hide — the update keeps going",
+    },
     "update_dialog.restart.window_title": {
         "ru": "Zapret — обновление",
         "en": "Zapret — update",

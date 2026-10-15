@@ -211,6 +211,10 @@ $S = @{
     InstallStarted   = $false
     InstallSucceeded = $false
     LogClosed    = $false
+    # Кнопка «Свернуть» («Скрыть» у маленькой карточки) в правом верхнем углу.
+    HideRect     = $null
+    HideHover    = $false
+    HidePressed  = $false
 }
 
 function Next-Joke {
@@ -281,6 +285,11 @@ function Test-NewAppWindow {
 
 function Bring-ToFront([string]$why) {
     $ok = $false
+    if ($form.WindowState -eq [System.Windows.Forms.FormWindowState]::Minimized) {
+        # Человек сам свернул окно: обратно его не вытаскиваем.
+        Write-Line "Окно свёрнуто — не поднимаем ($why)"
+        return
+    }
     if ($compact) {
         # Маленькая карточка — как уведомление: всегда поверх остальных окон,
         # но фокус у программы, в которой сейчас человек, не забирает.
@@ -313,6 +322,7 @@ function Bring-ToFront([string]$why) {
 function Watch-OldApp {
     # Окно обновления остаётся поверх всех окон до самого конца (решение
     # владельца): человек видит ход обновления, в какой бы программе ни был.
+    # Мешает — сворачивает его кнопкой в углу (решение владельца 15.10.2026).
     # «Поверх всех» снимается только при неудаче — чтобы сообщение
     # установщика об ошибке не осталось под окном (см. Start-Closing).
     $now = $S.Clock.Elapsed.TotalSeconds
@@ -1027,7 +1037,8 @@ function Draw-FrameCompact([System.Drawing.Graphics]$g, [int]$width, [int]$heigh
     $titleHeight = $F.CTitle.GetHeight($g)
     $smallHeight = $F.CSmall.GetHeight($g)
     $headTop = [single]($top + ($logoSide - $titleHeight - $smallHeight) / 2)
-    $headWidth = [single]($width - $pad - $textLeft)
+    # Справа в углу — крестик «Скрыть»: заголовок под него не заезжает.
+    $headWidth = [single]($width - [Math]::Max([double]$pad, 40.0 * $k) - $textLeft)
     $g.DrawString([string]$spec.texts.title, $F.CTitle, $fg, (New-Object System.Drawing.RectangleF($textLeft, $headTop, $headWidth, ($titleHeight + 2 * $k))), $oneLine)
     $g.DrawString([string]$spec.texts.subtitle, $F.CSmall, $muted, (New-Object System.Drawing.RectangleF($textLeft, ($headTop + $titleHeight), $headWidth, ($smallHeight + 2 * $k))), $oneLine)
 
@@ -1104,8 +1115,73 @@ function Draw-FrameCompact([System.Drawing.Graphics]$g, [int]$width, [int]$heigh
     $fg.Dispose(); $muted.Dispose()
 }
 
+function Get-HideButtonRect([int]$width) {
+    # Кнопка в правом верхнем углу, как у обычных окон Windows; растёт вместе
+    # с масштабом экрана и самим окном.
+    $u = [double]($screenScale * $M)
+    if ($compact) { $w = 36.0 * $u; $h = 30.0 * $u } else { $w = 46.0 * $u; $h = 32.0 * $u }
+    return New-Object System.Drawing.RectangleF([single]($width - $w), [single]0, [single]$w, [single]$h)
+}
+
+function Draw-HideButton([System.Drawing.Graphics]$g, [int]$width) {
+    # Большое окно — «Свернуть» (чёрточка), маленькая карточка — «Скрыть»
+    # (крестик): у неё нет кнопки на панели задач, свернуть её некуда.
+    $rect = Get-HideButtonRect $width
+    $S.HideRect = $rect
+    $base = if ($null -ne $S.Base) { $S.Base } else { $C.Background }
+    if ($S.HideHover) {
+        $share = if ($S.HidePressed) { 0.06 } else { 0.1 }
+        $hoverBrush = New-Object System.Drawing.SolidBrush((Mix-Color $base $C.Foreground $share))
+        $g.FillRectangle($hoverBrush, $rect)
+        $hoverBrush.Dispose()
+    }
+    $u = [double]($screenScale * $M)
+    # Значок заметен сразу, а не только под мышью: окно мешает — его ищут глазами.
+    $color = if ($S.HideHover) { $C.Foreground } else { With-Alpha $C.Foreground 0.8 }
+    $pen = New-Object System.Drawing.Pen($color, [single]([Math]::Max(1.0, 1.2 * $u)))
+    $cx = [single]($rect.X + $rect.Width / 2.0)
+    $cy = [single]($rect.Y + $rect.Height / 2.0)
+    $r = [single](6.0 * $u)
+    if ($compact) {
+        $g.DrawLine($pen, [single]($cx - $r), [single]($cy - $r), [single]($cx + $r), [single]($cy + $r))
+        $g.DrawLine($pen, [single]($cx - $r), [single]($cy + $r), [single]($cx + $r), [single]($cy - $r))
+    } else {
+        $g.DrawLine($pen, [single]($cx - $r), $cy, [single]($cx + $r), $cy)
+    }
+    $pen.Dispose()
+}
+
 function Draw-Window([System.Drawing.Graphics]$g, [int]$width, [int]$height) {
     if ($compact) { Draw-FrameCompact $g $width $height } else { Draw-Frame $g $width $height }
+    Draw-HideButton $g $width
+}
+
+function Test-InHideButton($point) {
+    # Место считается по окну, а не берётся из последней отрисовки: щелчок
+    # работает, даже если окно ещё ни разу не нарисовалось.
+    $rect = Get-HideButtonRect $form.ClientSize.Width
+    $S.HideRect = $rect
+    return $rect.Contains([single]$point.X, [single]$point.Y)
+}
+
+function Hide-Splash([string]$how) {
+    # Окно только показывает ход: обновление ведут установщик и новая версия,
+    # поэтому спрятать окно можно в любой момент — ничего не прервётся.
+    if ($S.Snapshot -or $S.Closing) { return }
+    try { $tip.Hide($form) } catch { }
+    $S.HideHover = $false
+    $S.HidePressed = $false
+    if ($compact) {
+        Start-Closing $true "карточку скрыли ($how), обновление продолжается"
+        return
+    }
+    try {
+        # Окно уходит на панель задач: вернуть его можно щелчком по значку.
+        $form.WindowState = [System.Windows.Forms.FormWindowState]::Minimized
+        Write-Line "Окно свернули ($how), обновление продолжается"
+    } catch {
+        Write-Line "Свернуть не удалось: $($_.Exception.Message)"
+    }
 }
 
 $form = New-Object System.Windows.Forms.Form
@@ -1113,7 +1189,8 @@ $form.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::None
 $form.StartPosition = [System.Windows.Forms.FormStartPosition]::Manual
 # У маленькой карточки своей кнопки на панели задач нет: это уведомление.
 $form.ShowInTaskbar = (-not $compact)
-# Поверх всех окон — всё время обновления (см. Watch-OldApp).
+# Поверх всех окон — всё время обновления (см. Watch-OldApp); человек может
+# свернуть окно кнопкой в углу или Esc (см. Hide-Splash).
 $form.TopMost = (-not $S.Snapshot)
 $form.Text = [string]$spec.texts.window_title
 $form.BackColor = if ($compact) { $C.Card } else { $C.Background }
@@ -1230,6 +1307,51 @@ $form.Add_Paint({
         $S.TickErrors += 1
         if ($S.TickErrors -le 5) { Write-Line "Ошибка отрисовки: $($_.Exception.Message)" }
     }
+})
+
+# Подсказка у кнопки: показывается и тогда, когда окно не активно.
+$tip = New-Object System.Windows.Forms.ToolTip
+$tip.ShowAlways = $true
+$form.Add_MouseMove({
+    param($sender, $e)
+    $over = Test-InHideButton $e.Location
+    if ($over -eq $S.HideHover) { return }
+    $S.HideHover = $over
+    if (-not $over) { $S.HidePressed = $false }
+    try {
+        if ($over) {
+            $tip.Show([string]$spec.texts.hide, $form, [int]$S.HideRect.X, [int]($S.HideRect.Bottom + 4))
+        } else {
+            $tip.Hide($form)
+        }
+    } catch { }
+    $form.Invalidate()
+})
+$form.Add_MouseLeave({
+    if (-not $S.HideHover) { return }
+    $S.HideHover = $false
+    $S.HidePressed = $false
+    try { $tip.Hide($form) } catch { }
+    $form.Invalidate()
+})
+$form.Add_MouseDown({
+    param($sender, $e)
+    if ($e.Button -eq [System.Windows.Forms.MouseButtons]::Left -and (Test-InHideButton $e.Location)) {
+        $S.HidePressed = $true
+        $form.Invalidate()
+    }
+})
+$form.Add_MouseUp({
+    param($sender, $e)
+    $pressed = $S.HidePressed
+    $S.HidePressed = $false
+    if ($pressed -and (Test-InHideButton $e.Location)) { Hide-Splash 'кнопка' }
+})
+# Esc — то же, что кнопка: как у обычного окна.
+$form.KeyPreview = $true
+$form.Add_KeyDown({
+    param($sender, $e)
+    if ($e.KeyCode -eq [System.Windows.Forms.Keys]::Escape) { Hide-Splash 'Esc' }
 })
 
 $form.Add_Shown({

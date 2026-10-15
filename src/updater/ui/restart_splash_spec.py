@@ -161,11 +161,13 @@ def build_restart_splash_spec(
     if compact:
         title = t("compact.title", "Обновляем Zapret")
         subtitle = t("compact.subtitle_template", "Ставим версию {version}").format(version=target_version)
+        hide_hint = t("compact.hide", "Скрыть — обновление продолжится")
     else:
         title = t("title_template", "Обновляем Zapret до v{version}").format(version=target_version)
         subtitle = t("subtitle_template", "v{current}  →  v{target}   ·   программа откроется сама").format(
             current=current_version, target=target_version
         )
+        hide_hint = t("minimize", "Свернуть — обновление продолжится (Esc)")
     return RestartSplashSpec(
         x=x,
         y=y,
@@ -182,6 +184,7 @@ def build_restart_splash_spec(
         ),
         footer=t("footer", "Окно закроется само, когда откроется новая версия"),
         window_title=t("window_title", "Zapret — обновление"),
+        hide_hint=hide_hint,
         files_template=t("files_template", "{done} из {total} файлов"),
         statuses=(
             t("status.done", "Готово"),
