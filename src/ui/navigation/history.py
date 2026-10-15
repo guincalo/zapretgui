@@ -96,6 +96,39 @@ class NavigationHistory:
         self._index = len(self._entries) - 1
         self._changed()
 
+    def replace_current(self, entry: HistoryEntry) -> None:
+        """Страница сама уточнила экран, на котором человек уже стоит (пришли данные,
+        открытый предмет исчез): это та же запись, а не новый шаг. Правая часть
+        журнала («вперёд») остаётся."""
+        if self.current() is None:
+            self.visit(entry)
+            return
+        if self._entries[self._index] == entry:
+            return
+        self._entries[self._index] = entry
+        self._merge_equal_neighbours()
+        self._changed()
+
+    def prune(self, keep: Callable[[HistoryEntry], bool]) -> None:
+        """Убирает записи, которые больше нельзя открыть (страница недоступна в
+        новом режиме). Указатель остаётся на текущей записи, а если убрана она —
+        на ближайшей позади."""
+        if all(keep(entry) for entry in self._entries):
+            return
+        kept: list[HistoryEntry] = []
+        index = -1
+        for position, entry in enumerate(self._entries):
+            if keep(entry):
+                kept.append(entry)
+            if position == self._index:
+                index = len(kept) - 1
+        self._entries = kept
+        self._index = index if kept else -1
+        if kept and self._index < 0:
+            self._index = 0
+        self._merge_equal_neighbours()
+        self._changed()
+
     def move_to(self, index: int) -> HistoryEntry | None:
         """Ставит указатель на запись; сам экран показывает вызывающий."""
         if not 0 <= index < len(self._entries):

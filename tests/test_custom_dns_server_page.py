@@ -24,6 +24,12 @@ SECURE = {
 }
 
 
+def page_screen(key: str):
+    from ui.navigation.history import ScreenState
+
+    return ScreenState(key=key)
+
+
 class CustomDnsServerPageTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
@@ -324,6 +330,7 @@ class CustomDnsServerPageTests(unittest.TestCase):
 
     def test_saved_server_is_announced_and_page_returns_to_dns(self) -> None:
         page = self._page()
+        page.show()
         page.open_server(None)
         page.doh_edit.setText("https://dns.example.com/dns-query")
         page.save_button.click()
@@ -338,6 +345,73 @@ class CustomDnsServerPageTests(unittest.TestCase):
         self.assertTrue(page.is_editing())
         self.assertEqual(page.addresses_edit.text(), "203.0.113.5 203.0.113.6 2001:db8::5")
         self.assertEqual(page.save_button.text(), "Сохранить")
+
+    def test_save_finished_after_leaving_the_page_does_not_pull_back_to_dns(self) -> None:
+        page = self._page()
+        page.open_server(None)
+        page.doh_edit.setText("https://dns.example.com/dns-query")
+        page.save_button.click()
+        # Человек ушёл на другую страницу, пока искались адреса: страница скрыта.
+        page.hide()
+
+        page._on_saved(CustomServerResult(success=True, servers=(SECURE,), server=SECURE))
+
+        self.open_dns_page.assert_not_called()
+        self.assertTrue(page.is_editing())
+
+    # ── журнал экранов: какой сервер открыт ─────────────────
+
+    def test_screen_names_the_server_or_the_new_form(self) -> None:
+        page = self._page()
+        page.open_server(None)
+        self.assertEqual(page.navigation_screen().key, "new")
+
+        page.open_server(SECURE)
+
+        self.assertEqual(page.navigation_screen().key, "server:secure")
+        self.assertEqual(page.navigation_screen().title, "Мой шифрованный")
+
+    def test_back_to_another_server_opens_it_again_by_id(self) -> None:
+        page = self._page()
+        page.open_server(None)
+        other = dict(SECURE, name="Сервер после правки")
+        self.feature.find_custom_server = Mock(return_value=other)
+
+        self.assertTrue(page.restore_navigation_screen(page_screen("server:secure")))
+
+        self.feature.find_custom_server.assert_called_once_with("secure")
+        self.assertEqual(page.name_edit.text(), "Сервер после правки")
+        self.assertEqual(page.navigation_screen().key, "server:secure")
+
+    def test_back_to_a_deleted_server_is_refused(self) -> None:
+        page = self._page()
+        page.open_server(None)
+        self.feature.find_custom_server = Mock(return_value=None)
+
+        self.assertFalse(page.restore_navigation_screen(page_screen("server:gone")))
+
+    def test_back_to_the_new_form_keeps_the_draft(self) -> None:
+        page = self._page()
+        page.open_server(None)
+        page.doh_edit.setText("https://draft.example/dns-query")
+
+        self.assertTrue(page.restore_navigation_screen(page_screen("new")))
+
+        self.assertEqual(page.doh_edit.text(), "https://draft.example/dns-query")
+
+    def test_saving_a_new_server_corrects_the_screen_instead_of_adding_a_step(self) -> None:
+        page = self._page()
+        page.open_server(None)
+        steps, corrections = [], []
+        page.navigation_screen_changed.connect(lambda: steps.append(page.navigation_screen().key))
+        page.navigation_screen_corrected.connect(lambda: corrections.append(page.navigation_screen().key))
+        page.doh_edit.setText("https://dns.example.com/dns-query")
+        page.save_button.click()
+
+        page._on_saved(CustomServerResult(success=True, servers=(SECURE,), server=SECURE))
+
+        self.assertEqual(steps, [])
+        self.assertEqual(corrections, ["server:secure"])
 
     def test_saved_with_a_notice_warns_instead(self) -> None:
         page = self._page()
@@ -510,7 +584,7 @@ class CustomDnsServerRouteTests(unittest.TestCase):
             open_custom_dns_server=opener,
         )
 
-        show_page.assert_called_once_with(PageName.NETWORK)
+        show_page.assert_called_once_with(PageName.NETWORK, up=True)
         self.assertIs(custom["deps"].dns_feature, feature)
         self.assertIs(network["deps"].open_custom_server, opener)
         # Странице нужна только задача «открыть ссылку», а не все внешние действия.

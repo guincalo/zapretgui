@@ -162,6 +162,46 @@ class PastCheckOnScreenTests(unittest.TestCase):
         self.addCleanup(page.deleteLater)
         return page
 
+    def test_past_check_and_its_cards_are_screens_of_the_window_history(self) -> None:
+        saved = {
+            "problems": [],
+            "working": ["YouTube"],
+            "services": [{"key": "youtube", "label": "YouTube", "level": "ok", "kind": "", "targets": []}],
+        }
+        page = self._page(_Feature(saved))
+        page._show_history(RUNS)
+        page.show()
+        page._history_list.run_opened.emit({**RUNS[2], "log_file": "C:/logs/run.log"})
+        _wait_for_past_check(page)
+        view = page._past_check_view
+
+        # Прошлая проверка — свой экран, а не «вкладка BlockCheck».
+        past = page.navigation_screen()
+        self.assertEqual(past.key, "past:C:/logs/run.log")
+        self.assertEqual(past.title, view.title())
+
+        view.card_opened.emit(view.cards.cards()[0].card)
+        card = page.navigation_screen()
+        self.assertEqual(card.key, "pastcard:past:C:/logs/run.log/site:youtube")
+
+        # Закрытие карточки возвращает в прошлую проверку, и журнал знает это.
+        page._detail_view.closed.emit()
+        self.assertFalse(view.isHidden())
+        self.assertEqual(page.navigation_screen().key, past.key)
+
+        # «Назад» и «вперёд» открывают их заново, даже с другой вкладки.
+        page.switch_to_tab(page.TAB_DNS_SPOOFING)
+        self.assertTrue(page.restore_navigation_screen(card))
+        self.assertFalse(page._detail_view.isHidden())
+        self.assertEqual(page.navigation_screen().key, card.key)
+        page._detail_view.closed.emit()
+        self.assertFalse(view.isHidden())
+
+        page.switch_to_tab(page.TAB_DNS_SPOOFING)
+        self.assertTrue(page.restore_navigation_screen(past))
+        self.assertFalse(view.isHidden())
+        self.assertEqual(page.navigation_screen().key, past.key)
+
     def test_page_opens_the_saved_report_full_page_and_returns_by_escape(self) -> None:
         saved = {
             "problems": [],

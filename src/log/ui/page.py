@@ -52,6 +52,7 @@ from log.ui.support_workflow import (
 )
 from app.ui_texts import tr as tr_catalog
 from ui.theme import get_cached_qta_pixmap, get_theme_tokens
+from ui.navigation.page_tabs import pivot_item_text
 from log.log import log
 
 # Паттерны для определения РЕАЛЬНЫХ ошибок (строгие)
@@ -479,6 +480,14 @@ class LogsPage(BasePage):
         self.stacked_widget.addWidget(self._manage_page)
 
         self.add_widget(self.stacked_widget)
+        # Вкладки — экраны журнала: «назад» вернёт на ту, где человек был.
+        self.bind_navigation_tabs(
+            ("logs", "send", "manage"),
+            current_index=self.stacked_widget.currentIndex,
+            open_index=self._switch_tab,
+            changed=self.stacked_widget.currentChanged,
+            title=lambda index: pivot_item_text(self.tabs_pivot, ("logs", "send", "manage")[index]),
+        )
 
         # Apply token-driven styles once widgets exist.
         self._apply_page_theme()

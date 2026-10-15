@@ -85,7 +85,8 @@ class TelegramProxyAdvancedRouteTests(unittest.TestCase):
 
         self.assertIs(advanced_kwargs["telegram_proxy_feature"], feature)
         advanced_kwargs["open_telegram_proxy"]()
-        show_page.assert_called_once_with(PageName.TELEGRAM_PROXY)
+        # Строка пути «Telegram Proxy» — шаг «наверх»: назад, если пришли оттуда.
+        show_page.assert_called_once_with(PageName.TELEGRAM_PROXY, up=True)
         show_page.reset_mock()
         main_kwargs["open_advanced_settings"]()
         show_page.assert_called_once_with(PageName.TELEGRAM_PROXY_ADVANCED, allow_internal=True)

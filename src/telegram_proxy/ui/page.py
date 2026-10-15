@@ -63,6 +63,7 @@ from log.log import log
 
 import telegram_proxy.ui.page_runtime as telegram_proxy_page_runtime
 import telegram_proxy.config.settings as telegram_proxy_settings
+from ui.navigation.page_tabs import pivot_item_text
 from qfluentwidgets import (
     CaptionLabel,
     InfoBar,
@@ -337,6 +338,14 @@ class TelegramProxyPage(BasePage):
         self.add_widget(self._pivot)
         self.add_widget(self._stacked, stretch=1)
         self._stacked.setCurrentIndex(0)
+        # Вкладки — экраны журнала: «назад» вернёт на ту, где человек был.
+        self.bind_navigation_tabs(
+            ("settings", "logs", "diag"),
+            current_index=self._stacked.currentIndex,
+            open_index=self._switch_tab,
+            changed=self._stacked.currentChanged,
+            title=lambda index: pivot_item_text(self._pivot, ("settings", "logs", "diag")[index]),
+        )
         self._log_ui_timing("telegram_proxy_ui.setup_ui.total", started_at)
 
     def _ensure_panel_built(self, index: int) -> None:

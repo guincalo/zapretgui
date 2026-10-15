@@ -1,6 +1,7 @@
 import os
 import unittest
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -979,6 +980,40 @@ class PageCardsTests(unittest.TestCase):
 
         self.assertFalse(page.restore_navigation_screen(type(tab_screen)(key="tab:нет такой")))
         self.assertFalse(page.restore_navigation_screen(type(tab_screen)(key="card:hostings")))
+
+    def test_back_to_a_card_shows_the_current_check_not_an_old_snapshot(self) -> None:
+        page = self._page()
+        page._report_lines = ["x"]
+        page._on_finished({**_REPORT, "problems": [], "working": []})
+        page.show()
+        QApplication.processEvents()
+        page._open_card_by_key("hostings")
+        card_screen = page.navigation_screen()
+        old_card = page._detail_view.card()
+        page._escape_shortcut.activated.emit()
+
+        # Новый запуск проверки заменил отчёт: «назад» к карточке показывает свежие данные.
+        page._on_finished({**_REPORT, "problems": [], "working": []})
+        widget = page._result_cards.card("hostings")
+        widget.card = replace(widget.card, status="Обрыв у 0 из 4")
+        self.assertTrue(page.restore_navigation_screen(card_screen))
+        self.assertEqual(page._detail_view.card().status, "Обрыв у 0 из 4")
+        self.assertNotEqual(old_card.status, "Обрыв у 0 из 4")
+
+        # Карточки больше нет в отчёте — экран честно недоступен.
+        page._escape_shortcut.activated.emit()
+        self.assertFalse(page.restore_navigation_screen(type(card_screen)(key="card:нет такой", payload=("blockcheck", None))))
+
+    def test_escape_on_a_tab_is_the_window_back_step(self) -> None:
+        page = self._page()
+        page.show()
+        QApplication.processEvents()
+        steps = []
+        page.set_navigation_back(lambda: steps.append("back") or True)
+
+        page._escape_shortcut.activated.emit()
+
+        self.assertEqual(steps, ["back"])
 
     def test_progress_reaches_the_steps_widget(self) -> None:
         page = self._page()

@@ -8,10 +8,13 @@
   - Рейтинги (OrchestraRatingsPage)
 """
 
+from PyQt6.QtCore import pyqtSignal
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QStackedWidget
 from app.ui_texts import normalize_language, tr as tr_catalog
 from qfluentwidgets import SegmentedWidget
 from ui.accessibility import set_control_accessibility, set_state_text
+from ui.navigation.history import ScreenState
+from ui.navigation.page_tabs import NavigationTabs, pivot_item_text
 from ui.segmented_accessibility import set_segmented_items_accessibility
 
 
@@ -35,6 +38,9 @@ class OrchestraSettingsPage(QWidget):
         "tab.orchestra.ratings",
     ]
     TAB_LABELS = ["Залоченные", "Заблокированные", "Белый список", "Рейтинги"]
+
+    # Страница не на BasePage, но в журнале экранов участвует так же: вкладки — экраны.
+    navigation_screen_changed = pyqtSignal()
 
     def __init__(self, parent=None, *, orchestra_feature):
         super().__init__(parent)
@@ -80,12 +86,26 @@ class OrchestraSettingsPage(QWidget):
         main_layout.addWidget(self.stacked)
 
         self.stacked.setCurrentIndex(0)
+        self._navigation_tabs = NavigationTabs(
+            self.TAB_KEYS,
+            current_index=self.stacked.currentIndex,
+            open_index=self._switch_tab,
+            title=lambda index: pivot_item_text(self.pivot, self.TAB_KEYS[index]),
+        )
+        self.stacked.currentChanged.connect(lambda _index: self.navigation_screen_changed.emit())
+
+    def navigation_screen(self) -> ScreenState:
+        return self._navigation_tabs.screen()
+
+    def restore_navigation_screen(self, screen: ScreenState) -> bool:
+        return self._navigation_tabs.restore(screen)
 
     def showEvent(self, event):  # noqa: N802
         super().showEvent(event)
+        # Первая вкладка собирается при первом показе, если до него не открыли другую
+        # (поиск, кнопка «назад»): заказанную вкладку не перебиваем.
         if not self._first_tab_built:
-            self._first_tab_built = True
-            self._switch_tab(0)
+            self._switch_tab(self.stacked.currentIndex())
 
     def _ensure_tab_page(self, index: int) -> QWidget | None:
         if not (0 <= index < len(self.TAB_KEYS)):
@@ -180,6 +200,7 @@ class OrchestraSettingsPage(QWidget):
     # ------------------------------------------------------------------
 
     def _switch_tab(self, index: int) -> None:
+        self._first_tab_built = True
         self._ensure_tab_page(index)
         self.stacked.setCurrentIndex(index)
         if self.pivot is not None and 0 <= index < len(self.TAB_KEYS):

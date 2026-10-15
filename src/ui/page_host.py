@@ -184,11 +184,11 @@ class WindowPageHost:
         except Exception:
             return ""
 
-    def _is_page_allowed(self, page_name: PageName) -> bool:
+    def is_page_allowed(self, page_name: PageName) -> bool:
         return is_page_allowed_for_method(page_name, self._current_launch_method())
 
     def ensure_page(self, page_name: PageName) -> QWidget | None:
-        if not self._is_page_allowed(page_name):
+        if not self.is_page_allowed(page_name):
             log(f"[PAGE_HOST] skip ensure_page for disallowed page {page_name.name}", "DEBUG")
             return None
 
@@ -243,7 +243,7 @@ class WindowPageHost:
 
         started_at = _time.perf_counter()
         first_show = page_name not in self._shown_pages
-        if not self._is_page_allowed(page_name):
+        if not self.is_page_allowed(page_name):
             log(f"[PAGE_HOST] reject show_page for disallowed page {page_name.name}", "WARNING")
             return False
 
@@ -284,7 +284,6 @@ class WindowPageHost:
         self._log_step_timing(page_name, "open.navigation_sync", step_started_at)
         self._request_page_keyboard_focus(page)
         self._shown_pages.add(page_name)
-        self.navigation_history.note_screen_changed()
         log_page_timing(
             page_name,
             "open.navigation.first" if first_show else "open.navigation.repeat",

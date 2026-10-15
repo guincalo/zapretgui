@@ -30,10 +30,10 @@ class WindowPageActions:
     start_onboarding_tour: Callable[..., Any]
 
 
-def show_page(window, page_name, *, allow_internal: bool = False) -> bool:
+def show_page(window, page_name, *, allow_internal: bool = False, up: bool = False) -> bool:
     from ui.window_adapter import show_page as _show_page
 
-    return bool(_show_page(window, page_name, allow_internal=allow_internal))
+    return bool(_show_page(window, page_name, allow_internal=allow_internal, up=up))
 
 
 def show_active_mode_control_page(window, *, allow_internal: bool = False) -> bool:
@@ -137,10 +137,11 @@ def build_window_page_actions(*, window, appearance_actions) -> WindowPageAction
         notify=window.window_notification_center.notify,
         request_exit=window.request_exit,
         open_folder=window.open_folder,
-        show_page=lambda page_name, *, allow_internal=False: show_page(
+        show_page=lambda page_name, *, allow_internal=False, up=False: show_page(
             window,
             page_name,
             allow_internal=allow_internal,
+            up=up,
         ),
         show_active_mode_control_page=lambda *, allow_internal=False: show_active_mode_control_page(
             window,

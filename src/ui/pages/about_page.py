@@ -25,6 +25,7 @@ from ui.one_shot_worker_runtime import OneShotWorkerRuntime
 from ui.queued_worker_state import QueuedWorkerState
 from ui.theme import get_cached_qta_pixmap, get_theme_tokens, get_themed_qta_icon
 from ui.widgets.stagger_float_in import attach_stagger_float_in, skip_float_in
+from ui.navigation.page_tabs import pivot_item_text
 from log.log import log
 
 
@@ -139,6 +140,16 @@ class AboutPage(BasePage):
         # Карточки вкладки выплывают сами, стопка вкладок целиком не выплывает.
         skip_float_in(self.stacked_widget)
         self.add_widget(self.stacked_widget)
+        # Вкладки — экраны журнала: «назад» вернёт на ту, где человек был.
+        self.bind_navigation_tabs(
+            about_page_plans.TAB_KEYS,
+            current_index=self.stacked_widget.currentIndex,
+            open_index=self._switch_tab,
+            changed=self.stacked_widget.currentChanged,
+            title=lambda index: pivot_item_text(self.tabs_pivot, about_page_plans.TAB_KEYS[index]),
+            # Вкладку могли заказать, пока страница скрыта: она и есть текущий экран.
+            pending_key=lambda: self.__dict__.get("_pending_tab_key"),
+        )
 
     def _apply_pending_tab_if_ready(self) -> None:
         pending_tab_key = str(getattr(self, "_pending_tab_key", "") or "").strip().lower()

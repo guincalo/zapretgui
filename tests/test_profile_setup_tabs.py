@@ -326,6 +326,36 @@ class WindowHistoryScreenTests(_TabsCase):
         self.assertEqual(page._profile_key, "uid:discord")
         self.assertEqual(renamed, [])
 
+    def test_opening_another_profile_is_a_step_and_its_data_is_a_correction(self) -> None:
+        page = self._loaded_page()
+        steps, corrections = [], []
+        page.navigation_screen_changed.connect(lambda: steps.append(page.navigation_screen().key))
+        page.navigation_screen_corrected.connect(lambda: corrections.append(page.navigation_screen().key))
+        page.reload_current_profile = Mock()
+
+        page.show_profile("uid:discord")
+        self.assertEqual(steps, ["uid:discord|strategies|"])
+
+        # Пришли данные профиля, и страница перестроилась: это не шаг человека.
+        page._loading = True
+        page._rebuild_breadcrumb()
+        page._loading = False
+        self.assertEqual(steps, ["uid:discord|strategies|"])
+        self.assertEqual(corrections, ["uid:discord|strategies|"])
+
+    def test_missing_profile_leaves_the_window_history(self) -> None:
+        from profile.ui.profile_setup_payload_controller import ProfileSetupPayloadController
+
+        page = self._loaded_page()
+        page._pending_navigation_screen = ("raw", "")
+        gone = []
+        page.navigation_screen_unavailable.connect(lambda: gone.append(True))
+
+        ProfileSetupPayloadController(page)._report_profile_missing()
+
+        self.assertEqual(gone, [True])
+        self.assertIsNone(page._pending_navigation_screen)
+
     def test_user_choice_while_loading_cancels_the_pending_screen(self) -> None:
         page = self._loaded_page()
         page._pending_navigation_screen = ("strategies", "fake-1")

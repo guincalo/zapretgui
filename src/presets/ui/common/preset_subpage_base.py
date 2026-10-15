@@ -9,6 +9,7 @@ from PyQt6.QtGui import QColor, QKeySequence, QShortcut
 from PyQt6.QtWidgets import QApplication, QHBoxLayout, QSizePolicy, QWidget, QFileDialog
 
 from ui.pages.base_page import BasePage
+from ui.navigation.history import ScreenState
 from ui.fluent_widgets import set_tooltip, style_semantic_caption_label
 from ui.theme import get_themed_qta_icon
 from ui.accessibility import (
@@ -305,7 +306,63 @@ class _RenameDialog(MessageBoxBase):
         set_state_text(self.warningLabel, f"Ошибка: {text}")
 
 
+def _preset_screen_key(file_name: str) -> str:
+    # Имена файлов в Windows не различают регистр.
+    return f"preset:{str(file_name or '').strip().lower()}"
+
+
 class PresetRawEditorPage(BasePage):
+    @property
+    def _preset_file_name(self) -> str:
+        return str(self.__dict__.get("_preset_file_name", "") or "")
+
+    @_preset_file_name.setter
+    def _preset_file_name(self, value) -> None:
+        """Новое имя файла ТОГО ЖЕ пресета (переименование, нормализация после
+        загрузки или сохранения): журнал экранов переписывает записи на него.
+        Открытие другого пресета — _open_preset_file, мимо этого сеттера."""
+        old = self._preset_file_name
+        new = str(value or "").strip()
+        self.__dict__["_preset_file_name"] = new
+        if not (old and new and old.lower() != new.lower()):
+            return
+        try:
+            self.navigation_screens_renamed.emit(_preset_screen_key(old), _preset_screen_key(new))
+        except RuntimeError:
+            # Страница без Qt-части (собрана в обход __init__): журнала у неё нет.
+            pass
+
+    def _open_preset_file(self, file_name: str) -> None:
+        """Переход к другому пресету: новый экран журнала."""
+        self.__dict__["_preset_file_name"] = str(file_name or "").strip()
+        self.navigation_screen_changed.emit()
+
+    # ── журнал экранов окна: какой пресет открыт ────────────
+
+    def navigation_screen(self) -> ScreenState:
+        # Пресет могли заказать, пока дописывается прежний: он и есть текущий экран.
+        file_name = str(self.__dict__.get("_requested_preset_file_name") or "") or self._preset_file_name
+        if not file_name:
+            return ScreenState()
+        title = self._preset_name if file_name == self._preset_file_name else Path(file_name).stem
+        return ScreenState(key=_preset_screen_key(file_name), title=str(title or ""), payload=file_name)
+
+    def restore_navigation_screen(self, screen: ScreenState) -> bool:
+        if not screen.key:
+            return not self._preset_file_name
+        file_name = screen.payload if isinstance(screen.payload, str) else ""
+        if not file_name or _preset_screen_key(file_name) != screen.key:
+            return False
+        # Пресета больше нет — загрузка не удастся, и страница скажет журналу об этом.
+        self.set_preset_file_name(file_name)
+        return True
+
+    def rename_navigation_screen(self, screen: ScreenState, old: str, new: str) -> ScreenState:
+        if screen.key != old:
+            return screen
+        file_name = self._preset_file_name if _preset_screen_key(self._preset_file_name) == new else ""
+        return ScreenState(key=new, title=str(self._preset_name or screen.title), payload=file_name or screen.payload)
+
     def __init__(
         self,
         parent=None,
@@ -1029,13 +1086,15 @@ class PresetRawEditorPage(BasePage):
         self._raw_text_editor.open_find_panel()
 
     def set_preset_file_name(self, file_name: str) -> None:
+        next_file_name = str(file_name or "").strip()
+        self._requested_preset_file_name = next_file_name
         if not self._run_after_raw_preset_save(lambda: self.set_preset_file_name(file_name)):
             return
-        next_file_name = str(file_name or "").strip()
+        self._requested_preset_file_name = ""
         if self._can_reuse_loaded_raw_preset(next_file_name):
             self._refresh_header()
             return
-        self._preset_file_name = next_file_name
+        self._open_preset_file(next_file_name)
         self._preset_name = Path(self._preset_file_name).stem if self._preset_file_name else ""
         self._preset_path = None
         self._preset_origin = "user"
@@ -1371,6 +1430,9 @@ class PresetRawEditorPage(BasePage):
         self._raw_preset_content_dirty = True
         self._set_footer(f"Ошибка загрузки: {error}")
         self._is_loading = False
+        # Пресет не открылся (удалён, переименован в обход редактора): журнал
+        # выбросит его запись и вернёт на соседний экран.
+        self.navigation_screen_unavailable.emit()
 
     def _on_raw_preset_worker_finished(self, _worker) -> None:
         state = self._raw_load_state_obj()
@@ -2174,7 +2236,7 @@ class PresetRawEditorPage(BasePage):
             duplicated, path, load_result = result
             self._notify_preset_structure_changed()
             self._preset_name = duplicated.name
-            self._preset_file_name = duplicated.file_name
+            self._open_preset_file(duplicated.file_name)
             self._preset_path = path
             self._preset_origin = str(getattr(duplicated, "kind", "") or "user").strip().lower() or "user"
             self._preset_can_reset_to_builtin = False
@@ -2204,7 +2266,11 @@ class PresetRawEditorPage(BasePage):
         elif action == "delete":
             name = str(payload.get("display_name") or self._preset_name or "").strip()
             self._notify_preset_structure_changed()
-            self._open_back_callback()
+            # Удалённого пресета больше нет: его запись уходит из журнала, и человек
+            # возвращается туда, откуда пришёл. Если возвращаться некуда — к списку.
+            self.navigation_screen_unavailable.emit()
+            if self.isVisible():
+                self._open_back_callback()
             self._show_success(f"Пресет «{name}» удалён")
 
     def _apply_raw_preset_action_result(self, load_result) -> None:

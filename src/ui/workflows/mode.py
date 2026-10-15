@@ -117,6 +117,17 @@ def apply_launch_method_changed_ui(window, method: str) -> None:
         pass
 
     try:
+        # Страницы прежнего режима больше не открыть: журнал забывает их сразу,
+        # иначе «назад» горела бы, а нажатие ничего не делало.
+        from ui.window_ui_session import get_window_ui_session
+
+        session = get_window_ui_session(window)
+        if session is not None:
+            session.page_host.navigation_history.prune_unavailable()
+    except Exception:
+        pass
+
+    try:
         redirect_to_preset_setup_page_for_method(window, method)
     except Exception:
         pass

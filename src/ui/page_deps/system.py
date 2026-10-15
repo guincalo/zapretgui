@@ -58,7 +58,7 @@ def build_custom_dns_server_page_kwargs(*, page_name: PageName, dns_feature, sho
     return {
         "deps": CustomDnsServerPageDeps(
             dns_feature=dns_feature,
-            open_dns_page=lambda: show_page(PageName.NETWORK),
+            open_dns_page=lambda: show_page(PageName.NETWORK, up=True),
         ),
     }
 
@@ -78,7 +78,7 @@ def build_hosts_file_page_kwargs(*, page_name: PageName, hosts_feature, show_pag
     return {
         "deps": HostsFilePageDeps(
             hosts_feature=hosts_feature,
-            open_hosts_page=lambda: show_page(PageName.HOSTS),
+            open_hosts_page=lambda: show_page(PageName.HOSTS, up=True),
         ),
     }
 
@@ -100,7 +100,7 @@ def build_fakes_page_kwargs(*, page_name: PageName, fakes_feature, external_acti
             create_import_worker=fakes_feature.create_import_worker,
             create_delete_worker=fakes_feature.create_delete_worker,
             create_open_folder_worker=_create_open_folder_worker,
-            open_control_page=lambda: show_page(PageName.ZAPRET2_MODE_CONTROL),
+            open_control_page=lambda: show_page(PageName.ZAPRET2_MODE_CONTROL, up=True),
         ),
     }
 
@@ -301,7 +301,7 @@ def build_servers_page_kwargs(
             # Вызывается из фонового потока установки: запись в настройки там допустима.
             note_failure=updater_feature.note_auto_install_missed,
         ),
-        "open_about": lambda: show_page(PageName.ABOUT),
+        "open_about": lambda: show_page(PageName.ABOUT, up=True),
         "create_changelog_link_open_worker": _create_changelog_link_open_worker,
     }
 
@@ -392,7 +392,7 @@ def build_telegram_proxy_advanced_page_kwargs(*, page_name: PageName, telegram_p
     _ = page_name
     return {
         "telegram_proxy_feature": telegram_proxy_feature,
-        "open_telegram_proxy": lambda: show_page(PageName.TELEGRAM_PROXY),
+        "open_telegram_proxy": lambda: show_page(PageName.TELEGRAM_PROXY, up=True),
     }
 
 

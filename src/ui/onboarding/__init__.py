@@ -67,7 +67,24 @@ def start_onboarding_tour(window, *, automatic: bool = False) -> bool:
         TOUR_STEPS,
         language=resolve_ui_language(window),
     )
-    return overlay.start()
+    # Экскурсия сама водит по страницам и вкладкам: это не шаги человека, журнал
+    # экранов их не пишет. После неё в журнал попадает один шаг — где человек остался.
+    navigation = _navigation_history(window)
+    if navigation is not None:
+        navigation.suspend()
+        overlay.finished.connect(lambda _reason: navigation.resume())
+    started = overlay.start()
+    if not started and navigation is not None:
+        navigation.resume()
+    return started
+
+
+def _navigation_history(window):
+    from ui.window_ui_session import get_window_ui_session
+
+    session = get_window_ui_session(window)
+    host = getattr(session, "page_host", None) if session is not None else None
+    return getattr(host, "navigation_history", None)
 
 
 def sync_onboarding_overlay_geometry(window) -> None:

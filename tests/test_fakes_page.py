@@ -47,7 +47,7 @@ def test_fakes_page_deps_are_narrow_worker_factories():
     assert deps.create_import_worker is fakes_feature.create_import_worker
     assert deps.create_delete_worker is fakes_feature.create_delete_worker
     deps.open_control_page()
-    show_page.assert_called_once_with(PageName.ZAPRET2_MODE_CONTROL)
+    show_page.assert_called_once_with(PageName.ZAPRET2_MODE_CONTROL, up=True)
     deps.create_open_folder_worker(7, parent="p")
     external_actions.create_external_action_worker.assert_called_once_with(
         7,

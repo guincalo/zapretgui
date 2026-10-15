@@ -172,8 +172,8 @@ def build_profile_setup_page_kwargs(
         ),
         "open_hosts_editor": lambda: show_page(PageName.HOSTS),
         "open_dns_settings": lambda: show_page(PageName.NETWORK),
-        "open_profiles": lambda page=profiles_page: show_page(page, allow_internal=True),
-        "open_root": lambda m=method: show_page(resolve_profile_setup_root_page_for_method(m), allow_internal=True),
+        "open_profiles": lambda page=profiles_page: show_page(page, allow_internal=True, up=True),
+        "open_root": lambda m=method: show_page(resolve_profile_setup_root_page_for_method(m), allow_internal=True, up=True),
         "on_profile_changed": lambda profile_key, change_kind, profile_item=None, old_profile_key=None, m=method: on_profile_setup_changed(
             m,
             profile_key,
@@ -206,8 +206,8 @@ def build_profile_order_page_kwargs(
     return {
         "create_profile_order_load_worker": profile_feature.create_profile_order_load_worker,
         "create_preset_profile_order_move_worker": profile_feature.create_preset_profile_order_move_worker,
-        "open_profiles": lambda page=profiles_page: show_page(page, allow_internal=True),
-        "open_root": lambda page=control_page: show_page(page, allow_internal=True),
+        "open_profiles": lambda page=profiles_page: show_page(page, allow_internal=True, up=True),
+        "open_root": lambda page=control_page: show_page(page, allow_internal=True, up=True),
         "ui_state_store": ui_state_store,
     }
 
@@ -298,10 +298,12 @@ def build_preset_raw_editor_page_kwargs(
         "open_back": lambda m=method: show_page(
             resolve_preset_raw_editor_back_page_for_method(m),
             allow_internal=True,
+            up=True,
         ),
         "open_root": lambda m=method: show_page(
             resolve_preset_raw_editor_root_page_for_method(m),
             allow_internal=True,
+            up=True,
         ),
         "ui_state_store": ui_state_store,
     }

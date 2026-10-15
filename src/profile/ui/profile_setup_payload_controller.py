@@ -73,11 +73,7 @@ class ProfileSetupPayloadController:
             return
         payload, apply_signature = _page_module()._profile_setup_payload_and_apply_signature(payload)
         if payload is None:
-            _page_module().set_widget_text_if_changed(
-                page._summary,
-                "Профиль не найден. Вернитесь к списку и выберите profile заново.",
-            )
-            _page_module().set_widget_enabled_if_changed(page._enabled_checkbox, False)
+            self._report_profile_missing()
             return
         if (
             apply_signature is not None
@@ -146,11 +142,24 @@ class ProfileSetupPayloadController:
         ):
             return
         _page_module().log(f"{page.__class__.__name__}: не удалось прочитать профиль {page._profile_key}: {error}", "ERROR")
+        self._report_profile_missing()
+
+    def _report_profile_missing(self) -> None:
+        """Профиля нет (удалён, сменился пресет): страница пишет об этом, а журнал
+        экранов выбрасывает его запись и ведёт на соседний экран."""
+        page = self._page
+        page._pending_navigation_screen = None
         _page_module().set_widget_text_if_changed(
             page._summary,
             "Профиль не найден. Вернитесь к списку и выберите profile заново.",
         )
         _page_module().set_widget_enabled_if_changed(page._enabled_checkbox, False)
+        signal = getattr(page, "navigation_screen_unavailable", None)
+        if signal is not None:
+            try:
+                signal.emit()
+            except RuntimeError:
+                pass
 
     def _accept_current_profile_setup_load_worker_finished(self, worker) -> bool:
         page = self._page

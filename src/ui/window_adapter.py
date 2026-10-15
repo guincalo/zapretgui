@@ -7,11 +7,20 @@ from app.page_names import PageName
 from ui.window_ui_session import get_window_ui_session
 
 
-def show_page(window, page_name: PageName, *, allow_internal: bool = False) -> bool:
+def show_page(window, page_name: PageName, *, allow_internal: bool = False, up: bool = False) -> bool:
+    """Показывает страницу. ``up=True`` — ссылка «наверх» (строка пути, «Отмена»,
+    возврат после сохранения): если человек пришёл как раз с этой страницы, это
+    шаг «назад» по журналу, а не новый шаг вперёд."""
     session = get_window_ui_session(window)
     if session is None:
         return False
-    return session.page_host.show_page(page_name, allow_internal=allow_internal)
+    host = session.page_host
+    if up:
+        return host.navigation_history.navigate_up(
+            page_name,
+            lambda: host.show_page(page_name, allow_internal=allow_internal),
+        )
+    return host.show_page(page_name, allow_internal=allow_internal)
 
 
 def ensure_page(window, page_name: PageName):

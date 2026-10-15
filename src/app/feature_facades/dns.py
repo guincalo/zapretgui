@@ -27,6 +27,8 @@ class DnsFeature:
     load_past_dns_check_report: Callable = lambda _log_file: None
     load_past_dns_check_text: Callable = lambda _log_file: ""
     load_past_server_check_report: Callable = lambda _log_file: None
+    # Свой сервер по его id; None — такого больше нет (удалён).
+    find_custom_server: Callable = lambda _server_id: None
 
 
 def build_dns_feature() -> DnsFeature:
@@ -198,4 +200,12 @@ def build_dns_feature() -> DnsFeature:
         load_past_dns_check_report=lambda log_file: _commands().load_past_dns_check_report(log_file),
         load_past_dns_check_text=lambda log_file: _commands().load_past_dns_check_text(log_file),
         load_past_server_check_report=lambda log_file: _commands().load_past_server_check_report(log_file),
+        find_custom_server=lambda server_id: next(
+            (
+                server
+                for server in _commands().load_custom_servers()
+                if str(server.get("id") or "") == str(server_id or "")
+            ),
+            None,
+        ),
     )

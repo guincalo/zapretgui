@@ -105,6 +105,10 @@ def update_blockcheck_tabs_accessibility(pivot, *, current: object | None = None
 # Как часто экран берёт свежий неполный отчёт, пока идёт проверка.
 PARTIAL_REDRAW_MS = 400
 
+
+# Подробный отчёт текущей проверки: из журнала он открывается заново, со свежим текстом.
+_LIVE_REPORT_TITLE = "Подробный отчёт BlockCheck"
+
 class BlockcheckPage(BasePage):
     """BlockCheck — какие сайты открываются и что делать с остальными."""
 
@@ -924,10 +928,16 @@ class BlockcheckPage(BasePage):
         self._detail_from_past = past is not None
         if self._detail_from_past:
             self._past_return_scroll = self.verticalScrollBar().value()
+        # Экран, из которого карточку открыли (прошлая проверка), — до смены экрана.
+        past_screen = self._over_tabs_screen if self._detail_from_past else None
         self._show_over_tabs(self._detail_view, remember_scroll=not self._detail_from_past)
         self._detail_view.show_card(card, parent_title=past.title() if self._detail_from_past else "")
         self._detail_view.setFocus()
-        self._note_over_tabs_screen("card", card.key, card.title, card)
+        if past_screen is not None:
+            # Карточка прошлой проверки: её отчёт не меняется, а «назад» из неё — в ту проверку.
+            self._note_over_tabs_screen("pastcard", f"{past_screen.key}/{card.key}", card.title, (past_screen, card))
+        else:
+            self._note_over_tabs_screen("card", card.key, card.title, card)
 
     def _open_card_by_key(self, key: str) -> None:
         """Нажатие на строку итога: открывает полный отчёт той же карточки, что стоит ниже."""
@@ -936,7 +946,13 @@ class BlockcheckPage(BasePage):
             self._open_card_detail(widget.card)
 
     def _close_subpage(self) -> None:
-        """Esc: назад из подробностей карточки, DNS-сервера или отчёта."""
+        """Esc: назад из подробностей карточки, DNS-сервера или отчёта; на вкладке —
+        тот же шаг «назад» по журналу, что и на любой странице."""
+        if self._over_tabs_screen is None and not self._any_over_tabs_view_open():
+            # В поле ввода Esc — клавиша поля, а не команда «назад».
+            if not self._typing_in_text_field():
+                self.navigation_step_back()
+            return
         if self._detail_view is not None and not self._detail_view.isHidden():
             # Сначала шаг назад внутри отчёта (со страницы сервера — к списку хостингов).
             if not self._detail_view.go_back():
@@ -952,19 +968,40 @@ class BlockcheckPage(BasePage):
                 widget.setVisible(visible)
 
     def _close_card_detail(self) -> None:
+        """Строка пути или Esc из карточки: туда, откуда её открыли, — шагом «наверх»."""
         if self._detail_view is None or self._detail_view.isHidden():
             return
+        self.navigation_step_up(None, self._return_from_card_detail)
+
+    def _return_from_card_detail(self) -> None:
         if self._detail_from_past and self._detail_past_view is not None:
             self._detail_from_past = False
+            past_screen = self._detail_past_screen()
             self._show_over_tabs(self._detail_past_view, remember_scroll=False)
             self._detail_past_view.setFocus()
             QTimer.singleShot(0, lambda: self.verticalScrollBar().setValue(self._past_return_scroll))
+            if past_screen is not None:
+                self._note_over_tabs_screen(*past_screen)
             return
-        self._close_card_detail_to_tab()
+        self._return_to_tab()
+
+    def _detail_past_screen(self):
+        """Прошлая проверка, из которой открыта карточка: (вид, имя, заголовок, данные)."""
+        screen = self._over_tabs_screen
+        if screen is None or not screen.key.startswith("pastcard:"):
+            return None
+        past, _card = screen.payload[1]
+        kind, _, name = past.key.partition(":")
+        return kind, name, past.title, past.payload[1]
 
     def _close_card_detail_to_tab(self) -> None:
+        """Корень строки пути из карточки: прямо на вкладку."""
         if self._detail_view is None or self._detail_view.isHidden():
             return
+        tab_key = f"tab:{self.TAB_ORDER[self._active_tab_index]}"
+        self.navigation_step_up(tab_key, self._return_to_tab)
+
+    def _return_to_tab(self) -> None:
         self._detail_from_past = False
         self._switch_tab(self._active_tab_index)
         # Возвращаем к той карточке, с которой уходили: список длинный, искать её заново незачем.
@@ -998,10 +1035,19 @@ class BlockcheckPage(BasePage):
         view.setVisible(True)
         self._scroll_to_top()
 
+    def _any_over_tabs_view_open(self) -> bool:
+        views = (self._detail_view, self._server_detail_view, self._log_report_view, self._past_check_view, self._past_cards_view)
+        return any(view is not None and not view.isHidden() for view in views)
+
     def _close_over_tabs(self) -> None:
+        """Строка пути или Esc из подробностей сервера, отчёта, прошлой проверки:
+        туда, откуда пришли, — шагом «наверх», а не новым шагом вперёд."""
         views = (self._server_detail_view, self._log_report_view, self._past_check_view, self._past_cards_view)
         if all(view is None or view.isHidden() for view in views):
             return
+        self.navigation_step_up(None, self._return_to_over_tabs_origin)
+
+    def _return_to_over_tabs_origin(self) -> None:
         self._switch_tab(self._active_tab_index)
         # Возвращаем туда же, откуда уходили; вкладка к этому мигу ещё раскладывается.
         QTimer.singleShot(0, self._restore_over_tabs_scroll)
@@ -1033,20 +1079,55 @@ class BlockcheckPage(BasePage):
                 return False
             self.switch_to_tab(name)
             return True
-        openers = {
-            "card": self._open_card_detail,
-            "server": self._open_server_detail,
-            "report": self._open_log_report,
-        }
         payload = screen.payload
-        if kind not in openers or not isinstance(payload, tuple) or len(payload) != 2:
+        if not isinstance(payload, tuple) or len(payload) != 2:
             return False
         tab_key, data = payload
         if tab_key not in self.TAB_ORDER or not self.is_page_ready():
             return False
+        opener = self._screen_opener(kind, name, data)
+        if opener is None:
+            return False
         self._switch_tab(self.TAB_ORDER.index(tab_key))
-        openers[kind](data)
-        return True
+        return opener() is not False
+
+    def _screen_opener(self, kind: str, name: str, data):
+        """Как заново открыть экран поверх вкладок; None — его больше нет.
+
+        Карточка текущей проверки берётся из текущего отчёта по ключу: после нового
+        запуска «назад» показывает свежие данные, а пропавшая карточка честно
+        выпадает из журнала. Прошлые проверки не меняются — их данные открываются
+        как есть."""
+        if kind == "card":
+            widget = self._result_cards.card(name) if self._result_cards is not None else None
+            return None if widget is None else (lambda: self._open_card_detail(widget.card))
+        if kind == "report" and name == _LIVE_REPORT_TITLE:
+            return self._open_report
+        if kind in {"server", "report"}:
+            opener = self._open_server_detail if kind == "server" else self._open_log_report
+            return lambda: opener(data)
+        if kind == "past":
+            run, report = data
+            return lambda: self._show_past_check(run, report)
+        if kind == "pastcards":
+            mode, title, headline, content, text = data
+            if mode == "cards":
+                return lambda: self._open_past_cards(title, headline, content, text)
+            return lambda: self._open_past_content(title, headline, content, text)
+        if kind == "pastcard":
+            past_screen, card = data
+            past_kind, _, past_name = past_screen.key.partition(":")
+            past_tab, past_data = past_screen.payload
+            reopen_past = self._screen_opener(past_kind, past_name, past_data)
+            if reopen_past is None:
+                return None
+
+            def reopen() -> None:
+                reopen_past()
+                self._open_card_detail(card)
+
+            return reopen
+        return None
 
     def _restore_over_tabs_scroll(self) -> None:
         self.verticalScrollBar().setValue(self._over_tabs_return_scroll)
@@ -1093,7 +1174,7 @@ class BlockcheckPage(BasePage):
     def _open_report(self) -> None:
         self._open_log_report(
             LogReport(
-                title="Подробный отчёт BlockCheck",
+                title=_LIVE_REPORT_TITLE,
                 text=self._report_text(),
                 root_title="BlockCheck",
                 empty_text="Проверка ещё не запускалась.",
@@ -1124,6 +1205,8 @@ class BlockcheckPage(BasePage):
         self._show_over_tabs(self._past_cards_view)
         self._past_cards_view.show_run(title, headline, list(cards), text, root_title=root)
         self._past_cards_view.setFocus()
+        # Прошлая проверка не меняется: её данные можно открыть из журнала как есть.
+        self._note_over_tabs_screen("pastcards", title, title, ("cards", title, headline, tuple(cards), text))
 
     def _open_past_content(self, title: str, headline: str, widget, text: str) -> None:
         """Прошлая проверка «DNS подмены» или «DNS-серверов»: тот же вид, что у вкладки, по сохранённому отчёту."""
@@ -1131,6 +1214,7 @@ class BlockcheckPage(BasePage):
         tab_item = self._tabs_pivot.items.get(self.TAB_ORDER[self._active_tab_index])
         root = tab_item.text() if tab_item is not None and tab_item.text() else "BlockCheck"
         self._past_cards_view.show_content(title, headline, widget, text, root_title=root)
+        self._note_over_tabs_screen("pastcards", title, title, ("content", title, headline, widget, text))
 
     def _ensure_past_check_view(self):
         if self._past_check_view is None:
@@ -1159,6 +1243,8 @@ class BlockcheckPage(BasePage):
         self._show_over_tabs(view)
         view.show_run(run, report)
         view.setFocus()
+        name = str(run.get("log_file") or run.get("started_at") or "")
+        self._note_over_tabs_screen("past", name, view.title(), (run, report))
 
     # ------------------------------------------------------------------
     # Обучающая экскурсия

@@ -164,11 +164,12 @@ class HistoryButtons(QObject):
 
             refresh_titlebar_layout(self._window)
 
-    def menu_entries(self, *, forward: bool) -> tuple[HistoryEntry, ...]:
+    def menu_entries(self, *, forward: bool) -> tuple[tuple[int, HistoryEntry], ...]:
+        """Экраны для списка истории: (номер записи в журнале, запись)."""
         self._navigation.commit()
         history = self._navigation.history
         pairs = history.forward_entries() if forward else history.back_entries()
-        return tuple(entry for _index, entry in pairs[:MENU_LIMIT])
+        return tuple(pairs[:MENU_LIMIT])
 
     def show_menu(self, *, forward: bool) -> None:
         entries = self.menu_entries(forward=forward)
@@ -177,28 +178,35 @@ class HistoryButtons(QObject):
             return
         session = get_window_ui_session(self._window)
         menu = RoundMenu(parent=self._window)
-        targets: dict[object, HistoryEntry] = {}
-        for entry in entries:
+        # Пока меню открыто, журнал мог переписаться: выбор сверяется с записью по номеру.
+        targets: dict[object, tuple[int, HistoryEntry]] = {}
+        for index, entry in entries:
             icon = None
             if session is not None:
                 icon = session.nav_icons.get(entry.page) or session.default_nav_icon
             text = self._navigation.describe(entry)
             action = Action(icon, text, menu) if icon is not None else Action(text, menu)
             menu.addAction(action)
-            targets[action] = entry
+            targets[action] = (index, entry)
         position = button.mapToGlobal(QPoint(0, button.height() + 2))
         chosen = exec_popup_menu(menu, position, owner=self._window, capture_action=True)
-        entry = targets.get(chosen)
-        if entry is not None:
-            self._navigation.go_to(entry)
+        target = targets.get(chosen)
+        if target is None:
+            return
+        index, entry = target
+        entries_now = self._navigation.history.entries()
+        if 0 <= index < len(entries_now) and entries_now[index].same_screen(entry):
+            self._navigation.go_to_index(index)
 
 
 def install_history_buttons(window) -> HistoryButtons | None:
     session = get_window_ui_session(window)
     if session is None or getattr(window, "navigationInterface", None) is None:
         return None
-    buttons = HistoryButtons(window, session.page_host.navigation_history)
+    navigation = session.page_host.navigation_history
+    buttons = HistoryButtons(window, navigation)
     session.history_buttons = buttons
+    navigation.install(window.stackedWidget)
     return buttons
 
 

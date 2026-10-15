@@ -88,10 +88,59 @@ class BasePage(_FluentScrollArea):
     # правки получил новую ссылку): журнал переписывает записи old → new
     # через rename_navigation_screen.
     navigation_screens_renamed = pyqtSignal(str, str)
+    # Страница сама уточнила экран, на котором человек уже стоит (пришли данные,
+    # раздел недоступен, предмет исчез): журнал заменяет текущую запись, а не
+    # добавляет шаг — «вперёд» не теряется.
+    navigation_screen_corrected = pyqtSignal()
+    # Открытого экрана больше нет (профиль удалён): журнал выбрасывает запись
+    # и ведёт на соседний экран.
+    navigation_screen_unavailable = pyqtSignal()
 
     def set_navigation_back(self, go_back) -> None:
         """Журнал экранов окна даёт странице свой шаг «назад»: им отвечает Esc."""
         self._navigation_back = go_back
+
+    def set_navigation_up(self, go_up) -> None:
+        """Журнал даёт странице шаг «наверх» для закрытия вложенных экранов."""
+        self._navigation_up = go_up
+
+    def navigation_step_up(self, key, open_screen) -> None:
+        """Закрыть вложенный экран и вернуться к экрану ``key`` этой страницы
+        (``None`` — к тому экрану этой страницы, с которого человек пришёл).
+
+        Если человек пришёл как раз оттуда, это шаг «назад» по журналу; иначе
+        ``open_screen`` открывает его как новый шаг. Так закрытие подробностей не
+        оставляет за собой запись, в которую «назад» вернул бы снова."""
+        go_up = getattr(self, "_navigation_up", None)
+        if callable(go_up):
+            go_up(key, open_screen)
+        else:
+            open_screen()
+
+    def bind_navigation_tabs(
+        self,
+        keys,
+        *,
+        current_index,
+        open_index,
+        changed,
+        title=None,
+        pending_key=None,
+    ) -> None:
+        """Объявляет вкладки страницы экранами журнала (см. ``ui.navigation.page_tabs``).
+
+        ``changed`` — сигнал смены вкладки (например, ``currentChanged`` стека):
+        по нему журнал узнаёт о каждой смене, кто бы её ни сделал."""
+        from ui.navigation.page_tabs import NavigationTabs
+
+        self._navigation_tabs = NavigationTabs(
+            keys,
+            current_index=current_index,
+            open_index=open_index,
+            title=title,
+            pending_key=pending_key,
+        )
+        changed.connect(lambda *_args: self.navigation_screen_changed.emit())
 
     def navigation_step_back(self) -> bool:
         """Вернуться на экран, где человек был до этого. False — возвращаться некуда."""
@@ -254,11 +303,16 @@ class BasePage(_FluentScrollArea):
             return None
 
     def navigation_screen(self) -> ScreenState:
-        """Что сейчас открыто внутри страницы. Страницы без вложенных экранов не переопределяют."""
-        return ScreenState()
+        """Что сейчас открыто внутри страницы. Страницы без вложенных экранов не
+        переопределяют; страницы с вкладками объявляют их через bind_navigation_tabs."""
+        tabs = self.__dict__.get("_navigation_tabs")
+        return tabs.screen() if tabs is not None else ScreenState()
 
     def restore_navigation_screen(self, screen: ScreenState) -> bool:
         """Открывает записанный экран заново; False — такого экрана больше нет."""
+        tabs = self.__dict__.get("_navigation_tabs")
+        if tabs is not None:
+            return tabs.restore(screen)
         return not screen.key
 
     def rename_navigation_screen(self, screen: ScreenState, old: str, new: str) -> ScreenState:

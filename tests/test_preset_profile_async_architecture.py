@@ -3932,7 +3932,8 @@ class PresetProfileAsyncArchitectureTests(unittest.TestCase):
         show_source = inspect.getsource(OrchestraSettingsPage.showEvent)
 
         self.assertNotIn("self._switch_tab(0)", init_source)
-        self.assertIn("self._switch_tab(0)", show_source)
+        # Первый показ собирает открытую вкладку: её мог заказать поиск или кнопка «назад».
+        self.assertIn("self._switch_tab(self.stacked.currentIndex())", show_source)
 
     def test_orchestra_settings_language_uses_warmed_cache_not_settings_read(self) -> None:
         source = inspect.getsource(OrchestraSettingsPage._resolve_ui_language)

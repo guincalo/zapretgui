@@ -316,9 +316,9 @@ class WindowNavigationHistoryTests(unittest.TestCase):
         host.user_opens(B)
         host.user_opens_inside("card")
         host.user_opens(C)
-        back = [entry for _index, entry in nav.history.back_entries()]
+        back = [index for index, _entry in nav.history.back_entries()]
 
-        self.assertTrue(nav.go_to(back[-1]))
+        self.assertTrue(nav.go_to_index(back[-1]))
 
         self.assertEqual(host.where(), (A, ""))
         self.assertEqual(len(nav.history.forward_entries()), 3)
@@ -393,7 +393,7 @@ class HistoryButtonsTests(unittest.TestCase):
 
         behind = buttons.menu_entries(forward=False)
 
-        self.assertEqual([(e.page, e.screen.key) for e in behind], [(B, "card"), (B, ""), (A, "")])
+        self.assertEqual([(e.page, e.screen.key) for _index, e in behind], [(B, "card"), (B, ""), (A, "")])
         self.assertEqual(buttons.menu_entries(forward=True), ())
 
     def _mouse(self, button, kind, mouse_button=Qt.MouseButton.LeftButton) -> None:

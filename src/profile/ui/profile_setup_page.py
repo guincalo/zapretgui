@@ -1238,7 +1238,11 @@ class ProfileSetupPageBase(BasePage):
         finally:
             self._breadcrumb.blockSignals(False)
         # Строка пути меняется вместе с экраном: профиль, раздел, подробности стратегии.
-        screen_changed = getattr(self, "navigation_screen_changed", None)
+        # Пока применяются пришедшие данные профиля, смена экрана — поправка самой
+        # страницы (раздел недоступен, стратегии больше нет, открылся заказанный
+        # журналом экран), а не шаг человека: «вперёд» в журнале не теряется.
+        signal_name = "navigation_screen_corrected" if self.__dict__.get("_loading") else "navigation_screen_changed"
+        screen_changed = getattr(self, signal_name, None)
         if screen_changed is not None:
             screen_changed.emit()
 
@@ -1593,6 +1597,13 @@ class ProfileSetupPageBase(BasePage):
             self._list_file_server_text_snapshot = None
         # Другой профиль, а не новая ссылка на этот: мимо сеттера _profile_key.
         self.__dict__["_profile_key"] = next_key
+        if next_key != current_key:
+            # Другой профиль — другой экран журнала, даже пока его данные грузятся.
+            try:
+                self.navigation_screen_changed.emit()
+            except RuntimeError:
+                # Страница без Qt-части (собрана в обход __init__): журнала у неё нет.
+                pass
         self.reload_current_profile()
 
     def onboarding_target(self, name: str):

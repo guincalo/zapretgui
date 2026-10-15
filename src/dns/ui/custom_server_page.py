@@ -53,6 +53,7 @@ from ui.accessibility import (
 )
 from ui.fluent_widgets import style_semantic_caption_label
 from ui.latest_worker_lane import LatestWorkerLane
+from ui.navigation.history import ScreenState
 from ui.pages.base_page import BasePage
 from ui.widgets.win11_controls import Win11ControlRow
 
@@ -272,6 +273,36 @@ class CustomDnsServerPage(BasePage):
 
     def open_server(self, server: dict | None) -> None:
         """Показывает запись сервера в полях; None — чистая форма нового сервера."""
+        self._show_server(server)
+        # Другой сервер — другой экран журнала: «назад» вернёт к прежнему.
+        self.navigation_screen_changed.emit()
+
+    # ── журнал экранов окна: какой сервер открыт ────────────
+
+    def navigation_screen(self) -> ScreenState:
+        server_id = str(self._server.get("id") or "")
+        if not server_id:
+            return ScreenState(key="new", title=self._t("page.network.custom_server.new", "Новый сервер"))
+        return ScreenState(key=f"server:{server_id}", title=str(self._server.get("name") or ""))
+
+    def restore_navigation_screen(self, screen: ScreenState) -> bool:
+        if screen.key == "new":
+            # Уже открыта форма нового сервера — черновик не стираем.
+            if self.is_editing():
+                self._show_server(None)
+            return True
+        kind, _, server_id = screen.key.partition(":")
+        if kind != "server" or not server_id:
+            return False
+        if server_id == str(self._server.get("id") or ""):
+            return True
+        server = self._dns.find_custom_server(server_id)
+        if server is None:
+            return False
+        self._show_server(server)
+        return True
+
+    def _show_server(self, server: dict | None) -> None:
         self._abandon_save()
         self._server = custom_servers.copy_server(server)
         self._settled_detail = ""
@@ -544,9 +575,13 @@ class CustomDnsServerPage(BasePage):
             duration=8000 if notice else 5000,
             parent=self.window(),
         )
-        # Кнопка «назад» может вернуть сюда: форма уже показывает сохранённый сервер, а не черновик.
-        self.open_server(server)
-        self._open_dns_page()
+        # Форма нового сервера стала формой сохранённого: тот же экран, уточнённый.
+        # «Вперёд» с «Настройки DNS» вернёт сюда уже к сохранённому серверу.
+        self._show_server(server)
+        self.navigation_screen_corrected.emit()
+        # Человек мог уйти, пока шло сохранение: уводить его отсюда уже не нужно.
+        if self.isVisible():
+            self._open_dns_page()
 
     def _on_save_failed(self, error: str) -> None:
         if self._closed or not self._busy:

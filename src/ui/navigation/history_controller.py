@@ -1,20 +1,40 @@
-"""Ведёт журнал экранов окна и открывает экраны из него.
+"""Навигатор окна: ведёт журнал экранов и открывает экраны из него.
 
-Цепочка такая: страница открылась или сменила вложенный экран → журнал
-узнаёт об этом через ``note_screen_changed`` → в конце текущего витка
-событий спрашивает у открытой страницы, что на ней сейчас показано, и
-записывает это. Кнопки «назад» и «вперёд» зовут ``go_back`` / ``go_forward``:
-журнал показывает нужную страницу и просит её открыть записанный экран.
+Одно место решает, что считать шагом:
 
-Страница участвует такими вещами (все есть в ``BasePage``):
-``navigation_screen()`` — что открыто сейчас,
-``restore_navigation_screen(screen)`` — открыть это заново,
-сигнал ``navigation_screen_changed`` — вложенный экран сменился,
-сигнал ``navigation_screens_renamed(old, new)`` и ``rename_navigation_screen`` —
-открытый предмет сменил ключ, оставшись тем же: журнал переписывает свои записи.
+* Смена страницы — всегда по сигналу самого стека страниц окна
+  (``currentChanged``). Неважно, кто переключил страницу: боковое меню,
+  кнопка на другой странице, поиск или библиотечный ``switchTo``.
+* Смена экрана внутри страницы — по сигналам страницы (все есть в ``BasePage``):
+
+  - ``navigation_screen_changed`` — человек открыл другой экран: новый шаг;
+  - ``navigation_screen_corrected`` — страница сама уточнила экран, на котором
+    человек уже стоит (пришли данные, раздел оказался недоступен, подробности
+    закрылись, потому что предмета больше нет): текущая запись заменяется,
+    «вперёд» не теряется;
+  - ``navigation_screen_unavailable`` — открытого экрана больше нет (профиль
+    удалён): запись выбрасывается, шаг продолжается к соседней;
+  - ``navigation_screens_renamed(old, new)`` + ``rename_navigation_screen`` —
+    открытый предмет сменил ключ, оставшись тем же: записи переписываются.
+
+Запись откладывается до конца витка событий: страница и её вложенный экран
+часто меняются подряд, а в журнал должен попасть один шаг.
+
+Что открыто на странице, страница сообщает через ``navigation_screen()``, а
+открывает записанное через ``restore_navigation_screen(screen)``. Ключ экрана
+строится из устойчивого имени предмета (uid профиля, имя файла пресета, ключ
+вкладки), а не из снимка данных: открывая запись, страница находит предмет
+заново и отвечает False, если его больше нет.
+
+Ссылки «наверх» (строка пути, «Отмена», закрытие подробностей) идут через
+``navigate_up``: если человек пришёл как раз оттуда, это шаг «назад», а не новый
+шаг вперёд. Иначе «назад» после такой ссылки возвращал бы в только что
+закрытый экран.
 """
 
 from __future__ import annotations
+
+from collections.abc import Callable
 
 from PyQt6.QtCore import QTimer
 
@@ -43,28 +63,72 @@ class WindowNavigationHistory:
         self.history = NavigationHistory()
         self._restoring = False
         self._commit_pending = False
+        # Хоть одно изменение в этом витке — новый шаг; иначе только поправка.
+        self._commit_as_step = False
+        # Экскурсия по программе водит человека по страницам сама: это не его шаги.
+        self._suspended = 0
+        # Куда шёл последний переход по журналу: туда же продолжать, если
+        # открытый экран оказался недоступен.
+        self._last_step = -1
+
+    # ------------------------------------------------------------------
+    # Подключение
+    # ------------------------------------------------------------------
+    def install(self, stacked_widget) -> None:
+        """Стек страниц окна — единственный источник правды о смене страницы."""
+        signal = getattr(stacked_widget, "currentChanged", None)
+        if signal is not None:
+            signal.connect(lambda _index: self.note_screen_changed())
+        # Стартовая страница — первый экран журнала.
+        self.note_screen_changed()
+
+    def attach_page(self, page) -> None:
+        for name, slot in (
+            ("navigation_screen_changed", self.note_screen_changed),
+            ("navigation_screen_corrected", self.note_screen_corrected),
+            ("navigation_screen_unavailable", lambda page=page: self.screen_unavailable(page)),
+            ("navigation_screens_renamed", lambda old, new, page=page: self.rename_screens(page, old, new)),
+        ):
+            signal = getattr(page, name, None)
+            connect = getattr(signal, "connect", None)
+            if callable(connect):
+                connect(slot)
+        # Esc на странице — тот же шаг «назад», что и кнопка в шапке окна;
+        # закрытие вложенного экрана — шаг «наверх».
+        give_back = getattr(page, "set_navigation_back", None)
+        if callable(give_back):
+            give_back(self.go_back)
+        give_up = getattr(page, "set_navigation_up", None)
+        if callable(give_up):
+            give_up(lambda key, open_screen, page=page: self.navigate_up_within(page, key, open_screen))
+
+    def suspend(self) -> None:
+        """Пока идёт экскурсия, переходы не пишутся в журнал и кнопки истории молчат."""
+        self._suspended += 1
+
+    def resume(self) -> None:
+        """Экскурсия закончилась: в журнал попадает один шаг — экран, где человек остался."""
+        if self._suspended:
+            self._suspended -= 1
+            if not self._suspended:
+                self.note_screen_changed()
 
     # ------------------------------------------------------------------
     # Запись
     # ------------------------------------------------------------------
-    def attach_page(self, page) -> None:
-        signal = getattr(page, "navigation_screen_changed", None)
-        connect = getattr(signal, "connect", None)
-        if callable(connect):
-            connect(self.note_screen_changed)
-        renamed = getattr(page, "navigation_screens_renamed", None)
-        connect_renamed = getattr(renamed, "connect", None)
-        if callable(connect_renamed):
-            connect_renamed(lambda old, new, page=page: self.rename_screens(page, old, new))
-        # Esc на странице — тот же шаг «назад», что и кнопка в шапке окна.
-        give_back = getattr(page, "set_navigation_back", None)
-        if callable(give_back):
-            give_back(self.go_back)
-
     def note_screen_changed(self) -> None:
-        """Что-то открылось. Запись откладывается до конца витка событий: страница
-        и её вложенный экран часто меняются подряд, а в журнал должен попасть один шаг."""
-        if self._restoring or self._commit_pending:
+        """Человек открыл другой экран: новый шаг."""
+        self._schedule_commit(as_step=True)
+
+    def note_screen_corrected(self) -> None:
+        """Страница уточнила экран, на котором человек уже стоит: та же запись."""
+        self._schedule_commit(as_step=False)
+
+    def _schedule_commit(self, *, as_step: bool) -> None:
+        if self._restoring or self._suspended:
+            return
+        self._commit_as_step = self._commit_as_step or as_step
+        if self._commit_pending:
             return
         self._commit_pending = True
         QTimer.singleShot(0, self._commit_if_pending)
@@ -75,20 +139,36 @@ class WindowNavigationHistory:
 
     def commit(self) -> None:
         """Записывает экран, который открыт прямо сейчас."""
+        as_step = self._commit_as_step
         self._commit_pending = False
+        self._commit_as_step = False
+        if self._suspended:
+            return
         entry = self._current_entry()
-        if entry is not None:
+        if entry is None:
+            return
+        current = self.history.current()
+        if not as_step and current is not None and current.page == entry.page:
+            self.history.replace_current(entry)
+        else:
             self.history.visit(entry)
+
+    def _current_entry(self) -> HistoryEntry | None:
+        try:
+            page = self._page_host.current_page()
+            page_name = self._page_host.page_name_of(page)
+        except Exception:
+            return None
+        if page_name is None:
+            return None
+        return HistoryEntry(page_name, read_page_screen(page))
 
     def rename_screens(self, page, old: str, new: str) -> None:
         """Предмет на странице сменил ключ: записи этой страницы переходят на новый."""
         rename = getattr(page, "rename_navigation_screen", None)
         if not callable(rename):
             return
-        try:
-            page_name = self._page_host.page_name_of(page)
-        except Exception:
-            return
+        page_name = self._page_name(page)
         if page_name is None:
             return
 
@@ -100,15 +180,16 @@ class WindowNavigationHistory:
 
         self.history.rewrite(transform)
 
-    def _current_entry(self) -> HistoryEntry | None:
+    def prune_unavailable(self) -> None:
+        """Режим сменился: страницы, которых в нём нет, уходят из журнала сразу,
+        чтобы кнопка «назад» не горела там, где шагать некуда."""
+        self.history.prune(lambda entry: self._page_host.is_page_allowed(entry.page))
+
+    def _page_name(self, page) -> PageName | None:
         try:
-            page = self._page_host.current_page()
-            page_name = self._page_host.page_name_of(page)
+            return self._page_host.page_name_of(page)
         except Exception:
             return None
-        if page_name is None:
-            return None
-        return HistoryEntry(page_name, read_page_screen(page))
 
     # ------------------------------------------------------------------
     # Переходы
@@ -125,20 +206,93 @@ class WindowNavigationHistory:
     def go_forward(self) -> bool:
         return self._travel(1)
 
-    def go_to(self, entry: HistoryEntry) -> bool:
+    def go_to_index(self, index: int) -> bool:
         """Открывает экран, выбранный в списке истории."""
+        if self._suspended:
+            return False
         self.commit()
-        for index, candidate in enumerate(self.history.entries()):
-            if candidate is entry:
-                if self._open(index):
-                    return True
-                self.history.drop(index)
-                self.commit()
-                return False
+        if not 0 <= index < len(self.history.entries()) or index == self.history.index:
+            return False
+        self._last_step = 1 if index > self.history.index else -1
+        if self._open(index):
+            return True
+        self.history.drop(index)
+        self.commit()
         return False
 
-    def _travel(self, step: int) -> bool:
+    def navigate_up(self, page_name: PageName, open_page: Callable[[], object]) -> bool:
+        """Ссылка «наверх» на другую страницу. Если человек пришёл как раз с неё,
+        это шаг «назад» к ней — через все экраны покидаемой страницы (профиль →
+        его текст → «Настройка пресета»): журнал не растёт, и «назад» не вернёт в
+        закрытый экран, а «вперёд» — вернёт."""
+        index = self._index_before_current_page()
+        entries = self.history.entries()
+        if index is not None and entries[index].page == page_name and self.go_to_index(index):
+            return True
+        return bool(open_page())
+
+    def _index_before_current_page(self) -> int | None:
+        """Запись, с которой человек пришёл на текущую страницу (её экраны пропускаются)."""
+        if self._suspended:
+            return None
         self.commit()
+        entries = self.history.entries()
+        index = self.history.index
+        if not 0 <= index < len(entries):
+            return None
+        current_page = entries[index].page
+        index -= 1
+        while index >= 0 and entries[index].page == current_page:
+            index -= 1
+        return index if index >= 0 else None
+
+    def navigate_up_within(self, page, key: str | None, open_screen: Callable[[], object]) -> bool:
+        """Закрытие вложенного экрана страницы (подробности, отчёт) — к экрану ``key``;
+        ``None`` — к любому экрану этой страницы, с которого человек пришёл."""
+        page_name = self._page_name(page)
+        if page_name is not None and self._previous_is(
+            lambda entry: entry.page == page_name and (key is None or entry.screen.key == key)
+        ) and self.go_back():
+            return True
+        open_screen()
+        return True
+
+    def _previous_is(self, match: Callable[[HistoryEntry], bool]) -> bool:
+        if self._suspended:
+            return False
+        self.commit()
+        index = self.history.index - 1
+        entries = self.history.entries()
+        return 0 <= index < len(entries) and match(entries[index])
+
+    def screen_unavailable(self, page) -> None:
+        """Страница не смогла показать свой экран (предмета больше нет). Запись
+        выбрасывается, и человек попадает на соседний экран в ту же сторону, куда шёл."""
+        if self._suspended or self._page_name(page) is None:
+            return
+        if not self._restoring:
+            # Экран мог ещё не попасть в журнал (ответ пришёл в том же витке).
+            self.commit()
+        current = self.history.current()
+        if current is None or current.page != self._page_name(page):
+            return
+        index = self.history.index
+        step = self._last_step
+        self.history.drop(index)
+        # После удаления позади текущей записи стоит index - 1, впереди — index.
+        target = index if step > 0 else index - 1
+        while 0 <= target < len(self.history.entries()):
+            if self._open(target):
+                return
+            self.history.drop(target)
+            if step < 0:
+                target -= 1
+
+    def _travel(self, step: int) -> bool:
+        if self._suspended:
+            return False
+        self.commit()
+        self._last_step = step
         while True:
             # Экран, который уже нельзя открыть (страница недоступна в этом режиме,
             # отчёт устарел), выбрасывается, и шаг делается к следующему за ним.
@@ -169,6 +323,7 @@ class WindowNavigationHistory:
         finally:
             self._restoring = False
             self._commit_pending = False
+            self._commit_as_step = False
         self.history.move_to(index)
         return True
 

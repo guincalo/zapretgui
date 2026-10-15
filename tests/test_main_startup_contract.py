@@ -2175,7 +2175,7 @@ class StartupRuntimeSetupTests(unittest.TestCase):
             )
             self.assertTrue(actions.show_page(PageName.ABOUT, allow_internal=True))
 
-        routed_show_page.assert_called_once_with(window, PageName.ABOUT, allow_internal=True)
+        routed_show_page.assert_called_once_with(window, PageName.ABOUT, allow_internal=True, up=False)
 
     def test_profile_setup_change_invalidates_loaded_order_page_without_ensuring_it(self) -> None:
         from app.page_names import PageName
