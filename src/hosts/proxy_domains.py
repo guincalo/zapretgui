@@ -460,8 +460,18 @@ def load_user_hosts_selection() -> dict[str, str]:
             service_name = names_casefold.get(key_text.casefold())
         if service_name is None:
             continue
-        if profile_id in _get_service_available_dns_profiles_from_catalog(catalog, service_name):
+        available = _get_service_available_dns_profiles_from_catalog(catalog, service_name)
+        if profile_id in available:
             result[service_name] = profile_id
+        elif available:
+            # Профиль убрали из каталога (посредник умер или перестал открывать сервис):
+            # сервис не выключается молча, а переходит на первый доступный профиль.
+            # Блок hosts переписывается при запуске (refresh_applied_selection).
+            result[service_name] = available[0]
+            _log(
+                f"Hosts: у «{service_name}» больше нет профиля {profile_id}, выбран {available[0]}",
+                "INFO",
+            )
     return result
 
 
