@@ -308,11 +308,13 @@ def install_by_files(
         return False
     on_downloaded()
     token.checkpoint()
-    if file_update.keeps_engine(plan_path):
+    if not dpi.is_running():
+        pass  # обход выключен — ни останавливать, ни передавать нечего
+    elif file_update.keeps_engine(plan_path):
         # Движок в обновлении не меняется: обход работает всё обновление, а
         # новая версия передаст работу своему движку без разрыва.
         log("Обход не останавливается: новая версия примет движок без разрыва", UPDATE_LOG_LEVEL)
-    elif dpi.is_running():
+    else:
         on_stage("Остановка DPI перед установкой…")
         dpi.stop(reason="updater_installer_handoff", update_runtime_state=False)
     token.checkpoint()

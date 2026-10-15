@@ -17,6 +17,7 @@ from pathlib import Path
 from config.build_info import CHANNEL
 from config.runtime_layout import APPLICATION_PATHS, resolve_update_state_dir
 from log.log import log
+from zapret_update import rescue
 
 
 CACHED_INSTALLER_NAME = "Zapret2Setup.exe"
@@ -36,11 +37,6 @@ UPDATE_APP_READY_NAME = "app_ready.json"
 # Имя скрипта наблюдателя в прежних версиях. Нужно только затем, чтобы найти
 # и остановить зависший старый наблюдатель после первого обновления.
 LEGACY_WATCHDOG_SCRIPT_NAME = "update_watchdog.ps1"
-
-# Хорошо известные SID: они одинаковы в любой локализации Windows.
-_SID_SYSTEM = "*S-1-5-18"
-_SID_ADMINISTRATORS = "*S-1-5-32-544"
-_SID_USERS = "*S-1-5-32-545"
 
 _resolved_state_dir: Path | None = None
 
@@ -113,22 +109,8 @@ def build_harden_commands(directory: str | Path) -> tuple[tuple[str, ...], ...]:
     списком прав, и прочитать его не может даже администратор. Сбрасывать
     сам каталог тоже нельзя: на мгновение вернулось бы право записи для всех.
     """
-    target = str(directory)
-    return (
-        (
-            "icacls",
-            target,
-            "/inheritance:r",
-            "/grant:r",
-            f"{_SID_SYSTEM}:(OI)(CI)F",
-            f"{_SID_ADMINISTRATORS}:(OI)(CI)F",
-            f"{_SID_USERS}:(OI)(CI)RX",
-            "/C",
-            "/Q",
-        ),
-        ("icacls", target, "/setowner", _SID_ADMINISTRATORS, "/T", "/C", "/Q"),
-        ("icacls", str(Path(target) / "*"), "/reset", "/T", "/C", "/Q"),
-    )
+    # Один источник с ядром обновления: тот же каталог закрывает и страховка замены.
+    return rescue.harden_commands(directory)
 
 
 def _is_inside_program_data(target: Path) -> bool:

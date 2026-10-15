@@ -249,6 +249,7 @@ def prepare(
         failure_file=str(work / FAILURE_FILE_NAME),
         blocker_file=str(work / BLOCKER_FILE_NAME),
         error_log=str(work / "error.log"),
+        rescue_dir=rescue_dir(),
     )
     plan_path = work / "plan.json"
     apply_plan.save(plan_path)
@@ -298,12 +299,21 @@ INTERRUPTED_SWAP_MIN_AGE_SECONDS = 10 * 60
 LEFTOVER_MIN_AGE_SECONDS = 24 * 3600
 
 
+def rescue_dir() -> str:
+    """Каталог страховки замены: рядом с состоянием обновления, закрыт от записи."""
+    if os.name != "nt":
+        return ""
+    from .paths import update_state_dir
+
+    return str(update_state_dir() / "rescue")
+
+
 def housekeeping(*, root: Path | None = None, now: float | None = None) -> None:
     """При запуске: откатить оборванную замену и убрать старые рабочие папки."""
     import shutil
 
     from zapret_update import handoff as core_handoff
-    from zapret_update import swap
+    from zapret_update import rescue, swap
 
     base = root if root is not None else install_root()
     if base is None:
@@ -327,6 +337,7 @@ def housekeeping(*, root: Path | None = None, now: float | None = None) -> None:
                 continue
             if errors is not None:
                 log(f"Оборванная установка v{work.name} откачена: программа вернулась к прежней версии", UPDATE_LOG_LEVEL)
+                rescue.disarm(rescue_dir(), base)
         # Откат не вернул всё — в swap/old единственная копия прежних файлов.
         if swap.pending(work / "swap"):
             continue

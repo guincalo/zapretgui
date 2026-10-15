@@ -352,6 +352,32 @@ def test_old_version_keeps_bypass_running_when_the_engine_survives(tmp_path) -> 
     dpi.stop.assert_not_called()
 
 
+def test_no_promise_to_keep_bypass_when_it_is_off(tmp_path) -> None:
+    plan = apply.ApplyPlan(
+        product="Zapret 2 GUI", version="1.0.0.2", from_version="1.0.0.1", app_dir=str(tmp_path), tree_dir="t",
+        work_dir=str(tmp_path), app_pid=1, app_exe="_internal/Zapret.exe", keep_running=list(file_update.ENGINE_PROCESSES),
+    )
+    plan_path = tmp_path / "plan.json"
+    plan.save(plan_path)
+    dpi = Mock()
+    dpi.is_running.return_value = False
+    artifact = SimpleNamespace(signed=SimpleNamespace(manifest=SimpleNamespace(version="1.0.0.2")))
+    lines = []
+
+    with patch.object(file_update, "is_available", return_value=True), patch.object(
+        flow, "log", side_effect=lambda text, *_a, **_k: lines.append(text)
+    ):
+        flow.install_by_files(
+            artifact, token=CancellationToken(), dpi=dpi, on_stage=lambda _t: None, on_progress=None,
+            on_downloaded=lambda: None, splash=None, show_splash=lambda _s: True, start_in_tray=False,
+            prepare=lambda *_a, **_k: plan_path, launch=lambda _p: True,
+        )
+
+    # Обход выключен — журнал не обещает, что «он не останавливается».
+    assert not any("Обход не останавливается" in line for line in lines)
+    dpi.stop.assert_not_called()
+
+
 def test_new_version_leaves_the_driver_of_a_surviving_engine_alone(tmp_path) -> None:
     hooks = apply_mode._hooks_class()()
     plan = SimpleNamespace(app_dir=str(tmp_path), keep_running=["exe/winws2.exe"])
