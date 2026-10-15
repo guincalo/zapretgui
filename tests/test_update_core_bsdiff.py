@@ -253,3 +253,30 @@ def test_zstandard_unpacks_store_files_where_python_has_no_compression_zstd(monk
     assert store.apply_patch(old, patch, sha256=sha, size=len(new)) == new
     with pytest.raises(store.StoreError):
         store.unpack_blob(blob[:-10] + bytes(10), sha256=sha, size=len(new))
+
+
+def test_zstd_patch_is_not_published_when_bsdiff_of_the_same_pair_is_smaller(tmp_path, monkeypatch) -> None:
+    pytest.importorskip("compression.zstd", reason="сжатие zstd есть только в Python 3.14")
+    from zapret_update import builder, store
+
+    rng = random.Random(4)
+    old = rng.randbytes(400_000)
+    # Половина файла без изменений (zstd находит её — заплатка zstd «выгодна»),
+    # другая половина сдвинута на единицу (её берёт только bsdiff).
+    new = old[:200_000] + bytes((b + 1) & 255 for b in old[200_000:])
+    for version, data in (("1", old), ("2", new)):
+        (tmp_path / version).mkdir()
+        (tmp_path / version / "Zapret.exe").write_bytes(data)
+    cache = tmp_path / "cache"
+    first = builder.build_store(layout={"_internal/Zapret.exe": tmp_path / "1" / "Zapret.exe"}, cache_dir=cache)
+    monkeypatch.setattr(builder, "BSDIFF_WHEN_ZSTD_FROM", 0)
+
+    built = builder.build_store(
+        layout={"_internal/Zapret.exe": tmp_path / "2" / "Zapret.exe"}, cache_dir=cache,
+        previous=[manifest.parse(_payload(files=first.files))], make_bsdiff=_same_length_patch,
+    )
+
+    assert [item.get("kind", "zstd") for item in built.patches] == ["bsdiff"]
+    sha_old, sha_new = first.files[0]["sha256"], hashlib.sha256(new).hexdigest()
+    assert store.patch_name(sha_old, sha_new) not in built.names
+    assert store.patch_name(sha_old, sha_new, "bsdiff") in built.names

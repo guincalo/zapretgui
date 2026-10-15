@@ -65,3 +65,42 @@ def test_manifest_names_cover_files_and_patches() -> None:
     })
 
     assert publish.manifest_names(loaded) == {"a" * 64 + ".zst", "b" * 64 + "-" + "a" * 64 + ".zst"}
+
+
+def _listed(files, patches=()):
+    from zapret_update import manifest
+
+    return manifest.parse({
+        "schema": 1, "product": "zapret-gui", "channel": "dev", "version": "1.0.0.2", "created": 1, "key": "k",
+        "files": [{"path": f"f{n}", "size": 1, "sha256": sha, "zsize": 1} for n, sha in enumerate(files)],
+        "patches": [{"from": a, "to": b, "size": 1} for a, b in patches],
+    })
+
+
+def test_prune_removes_only_store_files_nobody_needs(monkeypatch) -> None:
+    a, b, c, d = "a" * 64, "b" * 64, "c" * 64, "d" * 64
+    current, previous = _listed([a], [(d, a)]), _listed([b])
+    remote = {name: (1, "") for name in (f"{a}.zst", f"{d}-{a}.zst", f"{b}.zst", f"{c}.zst", f"{d}-{b}.zst", "README")}
+    deleted = []
+
+    def urlopen(request, timeout):
+        assert request.get_method() == "DELETE" and request.headers.get("Authorization") == "token t"
+        deleted.append(request.full_url.rsplit("/", 1)[1])
+        return _Response()
+
+    monkeypatch.setattr(publish.urllib.request, "urlopen", urlopen)
+
+    removed = publish.prune([current, previous], owner="o", product="p", token="t", listing=lambda: dict(remote))
+
+    assert sorted(deleted) == sorted([f"{c}.zst", f"{d}-{b}.zst"])  # чужое имя README не трогаем
+    assert removed == 2
+
+
+def test_prune_without_manifests_or_before_upload_deletes_nothing(monkeypatch) -> None:
+    monkeypatch.setattr(publish.urllib.request, "urlopen", lambda *_a, **_k: pytest.fail("ничего не удаляем"))
+    a = "a" * 64
+
+    with pytest.raises(ValueError):
+        publish.prune([], owner="o", product="p", token="t", listing=lambda: {f"{a}.zst": (1, "")})
+    with pytest.raises(RuntimeError, match="ещё не весь"):
+        publish.prune([_listed([a])], owner="o", product="p", token="t", listing=lambda: {"b" * 64 + ".zst": (1, "")})
