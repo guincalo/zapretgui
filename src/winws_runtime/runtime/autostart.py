@@ -18,11 +18,14 @@ def start_dpi_autostart(
 
     runtime_snapshot = runtime_feature.objects.runtime_service.snapshot()
     initial_phase = str(getattr(runtime_snapshot, "phase", "") or "").strip().lower()
-    if bool(getattr(runtime_snapshot, "running", False)) and initial_phase == "running":
+    published = bool(getattr(runtime_snapshot, "running", False)) and initial_phase == "running"
+    if published or _own_engine_left_running():
         # Работает движок, которого эта программа не запускала: остался от
         # прежней версии после самообновления (обход не останавливался) или
         # после выхода без остановки обхода. Он со старыми lua и запуском —
-        # передаём его работу своему движку из пресета без разрыва.
+        # передаём его работу своему движку из пресета без разрыва. Смотрим
+        # сами, не дожидаясь монитора: при выключенном автозапуске иначе
+        # прежний движок так и работал бы со старыми файлами.
         adopted_method = str(launch_method or getattr(runtime_snapshot, "launch_method", "") or "").strip().lower()
         if adopted_method not in ALL_LAUNCH_METHODS:
             log("Автозапуск DPI: активный процесс уже опубликован монитором", "INFO")
@@ -53,6 +56,16 @@ def start_dpi_autostart(
         launch_method=resolved_method,
         _startup_autostart=True,
     )
+
+
+def _own_engine_left_running() -> bool:
+    """Работает ли движок (winws2/winws) из папки этой программы."""
+    try:
+        from winws_runtime.runtime.process_probe import get_canonical_winws_process_pids
+
+        return any(get_canonical_winws_process_pids().values())
+    except Exception:
+        return False
 
 
 def _mark_runtime_stopped(runtime_feature) -> None:

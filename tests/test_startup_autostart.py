@@ -267,6 +267,40 @@ class StartupAutostartTests(unittest.TestCase):
         runtime_service.mark_stopped.assert_not_called()
         presets_feature.get_launch_snapshot.assert_not_called()
 
+    def test_leftover_engine_is_handed_over_even_when_autostart_is_off(self) -> None:
+        # Стенд win10: автозапуск выключен, монитор ещё не успел заметить
+        # движок от прежней версии — без явной проверки он так и работал бы
+        # со старыми файлами.
+        from winws_runtime.runtime.autostart import start_dpi_autostart
+
+        def _run(engines):
+            runtime_service = SimpleNamespace(
+                snapshot=Mock(return_value=SimpleNamespace(phase="stopped", running=False, launch_method="zapret2_mode")),
+                mark_start_failed=Mock(),
+                mark_stopped=Mock(),
+            )
+            launch_runtime = SimpleNamespace(start_dpi_async=Mock())
+            runtime_feature = SimpleNamespace(
+                objects=SimpleNamespace(runtime_service=runtime_service, launch_runtime=launch_runtime)
+            )
+            with patch(
+                "winws_runtime.runtime.process_probe.get_canonical_winws_process_pids", return_value=engines
+            ):
+                start_dpi_autostart(
+                    SimpleNamespace(dpi_autostart_initiated=False), runtime_feature=runtime_feature, ui_state=object()
+                )
+            return runtime_service, launch_runtime
+
+        service, launch = _run({"winws2.exe": [1360]})
+        launch.start_dpi_async.assert_called_once_with(
+            selected_mode=None, launch_method="zapret2_mode", _startup_autostart=True
+        )
+        service.mark_stopped.assert_not_called()
+
+        service, launch = _run({})
+        launch.start_dpi_async.assert_not_called()
+        service.mark_stopped.assert_called_once()
+
     def test_startup_autostart_skips_expensive_preset_prevalidation_in_gui_thread(self) -> None:
         from winws_runtime.flow import start_preparation
 
