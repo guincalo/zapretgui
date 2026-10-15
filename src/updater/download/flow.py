@@ -154,11 +154,13 @@ def download_and_stage(
             pass
 
 
-def _file_size(path: str) -> int:
+def _note_setup_path(handoff) -> None:
+    """Путь «установщиком» и его размер — для отчёта серверу; установке не мешает никогда."""
     try:
-        return Path(path).stat().st_size if path else 0
-    except OSError:
-        return 0
+        size = Path(str(handoff.installer_path)).stat().st_size
+        outcome.note_path(str(handoff.version or ""), outcome.VIA_SETUP, size)
+    except Exception as exc:  # noqa: BLE001 — сведения для статистики, не для установки
+        log(f"Путь обновления не записан: {exc}", "🔁 UPDATE")
 
 
 def _resolve_and_download(
@@ -236,10 +238,7 @@ def run_update_install(
             )
 
         on_downloaded()
-        # Путь и объём — для отчёта серверу; установке это не мешает никогда.
-        outcome.note_path(
-            str(getattr(handoff, "version", "") or ""), outcome.VIA_SETUP, _file_size(getattr(handoff, "installer_path", ""))
-        )
+        _note_setup_path(handoff)
         token.checkpoint()
         if dpi.is_running():
             on_stage("Остановка DPI перед установкой…")
