@@ -1,9 +1,13 @@
 """В каком порядке проверять стратегии.
 
-1. Сначала те, что уже подтвердились у этого пользователя на этой цели.
-2. Дальше — «разнообразием»: стратегии собраны в группы по приёмам
-   (fake, multisplit, syndata, …), и группы идут по кругу. Так первые 30
-   проверок покрывают разные приёмы, а не 30 вариаций одного.
+1. Сначала те, что уже подтвердились у этого пользователя на этой цели
+   (не больше ``HEAD_CONFIRMED``: остальные идут в общем порядке).
+2. Дальше — «разнообразием»: стратегии собраны в семейства — главный приём
+   (fake, multisplit, hostfakesplit, …) и вид обмана фильтра (md5, ttl,
+   badseq, …). Добавки вроде ``syndata`` и ``send`` семейства не плодят.
+   Семейства идут вперемешку, и большое получает больше мест, чем стратегия-
+   одиночка: первые 30 проверок покрывают все основные приёмы, а не 16
+   вариаций одной добавки.
 3. В конец — те, что недавно не сработали на этой цели. Поэтому повторный
    «Быстрый» подбор сам берёт ещё не проверенные стратегии.
 
@@ -18,6 +22,7 @@
 
 from __future__ import annotations
 
+import math
 import re
 from collections import OrderedDict
 from collections.abc import Iterable, Mapping, Sequence
@@ -37,7 +42,30 @@ MODE_AUTO_CONTINUE_LIMIT = {"quick": 80, "standard": 160}
 
 # Метка стратегии в каталоге → очередь внутри своего приёма: проверенные авторами
 # раньше, опытные и «осторожно» — позже. Ничего не выбрасывается.
-_LABEL_RANK = {"stock": 0, "recommended": 0, "": 1, "experimental": 2, "caution": 2}
+_LABEL_RANK = {"stock": 0, "recommended": 0, "stable": 0, "": 1, "game": 1, "experimental": 2, "caution": 2}
+# Автокопии стратегий из встроенных пресетов: метка «stock» стоит у них по
+# происхождению, а не потому, что авторы их отобрали. Их место определяет
+# популярность в пресетах, а не метка.
+_AUTOCOPY_PREFIXES = ("stock_builtin_coverage_", "stock_missing_")
+# Сколько подтверждённых раньше стратегий ставить в самое начало.
+HEAD_CONFIRMED = 5
+
+# Добавки: сами по себе фильтр не обманывают, а усиливают главный приём.
+# ``dht_dn`` меняет только пакеты DHT — для сайтов, голоса и игр её нет.
+MODIFIER_FUNCTIONS = frozenset({"send", "syndata", "pktmod", "drop", "dht_dn"})
+# Вид обмана фильтра у подделок: от более редкого к более частому — у
+# стратегии с несколькими видами семейство определяет самый редкий.
+_FOOLING_CLASSES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("md5", ("tcp_md5",)),
+    ("badsum", ("badsum",)),
+    ("datanoack", ("datanoack", "tcp_flags_unset")),
+    ("ttl", ("ip_ttl=", "ip6_ttl=")),
+    ("autottl", ("ip_autottl", "ip6_autottl")),
+    ("badseq", ("tcp_seq",)),
+    ("ack", ("tcp_ack",)),
+    ("ts", ("tcp_ts",)),
+    ("seqovl", ("seqovl",)),
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,7 +81,10 @@ class Candidate:
 
 def candidate_rank(candidate: Candidate) -> tuple[int, int]:
     """Чем меньше, тем раньше внутри своего приёма: метка каталога, потом популярность в пресетах."""
-    return _LABEL_RANK.get(str(candidate.label or "").lower(), 1), -int(candidate.usage or 0)
+    label = str(candidate.label or "").lower()
+    if candidate.strategy_id.startswith(_AUTOCOPY_PREFIXES):
+        label = ""
+    return _LABEL_RANK.get(label, 1), -int(candidate.usage or 0)
 
 
 # Простое дробление пакета: куски идут подряд и ничем не прикрыты.
@@ -127,20 +158,32 @@ def is_pass_strategy(candidate: Candidate) -> bool:
 
 
 def technique_key(candidate: Candidate) -> tuple[str, ...]:
-    """Группа приёма: набор функций обхода без повторов и порядка."""
+    """Все функции обхода стратегии без повторов и порядка."""
     return tuple(sorted(set(desync_functions(candidate.args)) - {PASS_FUNCTION}))
 
 
-def interleave_by_technique(candidates: Sequence[Candidate]) -> list[Candidate]:
-    """Приёмы по кругу; внутри приёма и между приёмами — сначала рекомендованные и популярные.
+def main_technique(candidate: Candidate) -> str:
+    """Главный приём: функции без добавок (``MODIFIER_FUNCTIONS``)."""
+    functions = set(technique_key(candidate))
+    main = functions - MODIFIER_FUNCTIONS or functions
+    return "+".join(sorted(main))
 
-    Сортировка устойчивая: при равных метках и популярности остаётся порядок каталога.
-    """
-    groups: OrderedDict[tuple[str, ...], list[Candidate]] = OrderedDict()
-    for candidate in candidates:
-        groups.setdefault(technique_key(candidate), []).append(candidate)
+
+def fooling_class(candidate: Candidate) -> str:
+    args = candidate.args
+    for name, markers in _FOOLING_CLASSES:
+        if any(marker in args for marker in markers):
+            return name
+    return "none"
+
+
+def family_key(candidate: Candidate) -> tuple[str, str]:
+    """Семейство: главный приём и вид обмана фильтра."""
+    return main_technique(candidate), fooling_class(candidate)
+
+
+def _round_robin(queues: list[list[Candidate]]) -> list[Candidate]:
     ordered: list[Candidate] = []
-    queues = sorted((sorted(group, key=candidate_rank) for group in groups.values()), key=lambda group: candidate_rank(group[0]))
     while queues:
         next_round: list[list[Candidate]] = []
         for queue in queues:
@@ -149,6 +192,57 @@ def interleave_by_technique(candidates: Sequence[Candidate]) -> list[Candidate]:
                 next_round.append(queue)
         queues = next_round
     return ordered
+
+
+def _family_queue(candidates: Sequence[Candidate]) -> list[Candidate]:
+    """Стратегии одного главного приёма: виды обмана по кругу, внутри — по метке и популярности."""
+    subgroups: OrderedDict[str, list[Candidate]] = OrderedDict()
+    for candidate in candidates:
+        subgroups.setdefault(fooling_class(candidate), []).append(candidate)
+    queues = sorted((sorted(group, key=candidate_rank) for group in subgroups.values()), key=lambda group: candidate_rank(group[0]))
+    return _round_robin(queues)
+
+
+def interleave_by_technique(candidates: Sequence[Candidate]) -> list[Candidate]:
+    """Главные приёмы вперемешку, в доле по размеру семейства.
+
+    У приёма из N стратегий вес √N (а у отмеченного «опытным» — вдвое меньше):
+    очередное место получает приём с наименьшим «занято / вес». Так fake из
+    ~90 вариантов получает несколько мест в первых 30, а стратегия-одиночка —
+    одно, но не раньше основных приёмов. Сортировка устойчивая: при равенстве
+    решают метка, популярность и порядок каталога.
+    """
+    groups: OrderedDict[str, list[Candidate]] = OrderedDict()
+    for candidate in candidates:
+        groups.setdefault(main_technique(candidate), []).append(candidate)
+    queues: list[list[Candidate]] = []
+    weights: list[float] = []
+    for group in groups.values():
+        queue = _family_queue(group)
+        queues.append(queue)
+        best = min(candidate_rank(item)[0] for item in queue)
+        weights.append(math.sqrt(len(queue)) * (1.0 if best <= 1 else 0.5))
+    taken = [0] * len(queues)
+    ordered: list[Candidate] = []
+    total = sum(len(queue) for queue in queues)
+    while len(ordered) < total:
+        index = min(
+            (i for i, queue in enumerate(queues) if queue),
+            key=lambda i: ((taken[i] + 0.5) / weights[i], candidate_rank(queues[i][0]), i),
+        )
+        ordered.append(queues[index].pop(0))
+        taken[index] += 1
+    return ordered
+
+
+def family_siblings(ordered: Sequence[Candidate], winner: Candidate, *, limit: int = 4) -> list[Candidate]:
+    """Ещё не проверенные стратегии того же семейства, что и открывшая цель.
+
+    Соседи удачной стратегии (тот же приём, тот же вид обмана, другие
+    параметры) открывают цель чаще случайных — так ищут и blockcheck2, и b4.
+    """
+    key = family_key(winner)
+    return [item for item in ordered if item.strategy_id != winner.strategy_id and family_key(item) == key][: max(0, limit)]
 
 
 def order_candidates(
@@ -161,10 +255,16 @@ def order_candidates(
 ) -> list[Candidate]:
     pool = [candidate for candidate in candidates if not is_pass_strategy(candidate)]
     by_id = {candidate.strategy_id: candidate for candidate in pool}
-    first = [by_id[strategy_id] for strategy_id in dict.fromkeys(confirmed_ids) if strategy_id in by_id]
+    failed_at = failed_at or {}
+    # Подтверждённая, а потом не сработавшая стратегия в начало больше не идёт:
+    # история записывает провал после подтверждения, когда провайдер сменил фильтр.
+    first = [
+        by_id[strategy_id]
+        for strategy_id in dict.fromkeys(confirmed_ids)
+        if strategy_id in by_id and not failed_at.get(strategy_id)
+    ][:HEAD_CONFIRMED]
     taken = {candidate.strategy_id for candidate in first}
 
-    failed_at = failed_at or {}
     fresh: list[Candidate] = []
     recently_failed: list[tuple[float, Candidate]] = []
     for candidate in pool:

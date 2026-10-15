@@ -42,6 +42,7 @@ from blockcheck.strategy_search.ordering import (
     Candidate,
     batch_for_mode,
     continuation,
+    family_siblings,
     habit_note,
     order_candidates,
     stop_after_for_mode,
@@ -60,7 +61,10 @@ logger = logging.getLogger(__name__)
 
 PASS_STRATEGY_ARGS = "--lua-desync=pass"
 # Сколько раз перезапускать стратегию, если winws2 упал (гонка драйвера).
+# Падение с тем же выводом второй раз подряд — не гонка, а сама стратегия.
 CRASH_RETRIES = 2
+# Сколько соседей открывшей цель стратегии проверить сразу следом.
+SIBLINGS_AFTER_SUCCESS = 3
 # Сколько ждать возвращения интернета, прежде чем остановить подбор.
 NETWORK_WAIT_SECONDS = 30.0
 NETWORK_POLL_SECONDS = 3.0
@@ -222,6 +226,8 @@ class _StrategyRun:
     reason: str = ""
     # Во время проверки пропал интернет: стратегию надо перепроверить.
     network_lost: bool = False
+    # winws2 дважды подряд упал одинаково: дело в стратегии, а не в драйвере.
+    repeatable_crash: bool = False
 
     @property
     def volume(self) -> str:
@@ -321,22 +327,28 @@ class StrategySearch:
             queue: deque[tuple[Candidate, bool]] = deque((candidate, False) for candidate in batch)
             # Сколько стратегий из общего списка уже в пачке: варианты с именами не в счёт.
             from_catalog += len(batch)
+            seen = {candidate.strategy_id for candidate in batch}
             index = 0
             while not self.cancelled:
                 if not queue:
                     # Пачка кончилась, а надёжной нет — берём следующую, пока есть куда.
-                    more = (
+                    raw = (
                         []
                         if working or self._target.forced
                         else continuation(ordered, self._request.mode, from_catalog)
                     )
+                    from_catalog += len(raw)
+                    # Соседи удачных стратегий могли уже прийти из следующей пачки.
+                    more = [candidate for candidate in raw if candidate.strategy_id not in seen]
+                    seen.update(candidate.strategy_id for candidate in more)
                     if not more:
+                        if raw:
+                            continue  # вся пачка уже проверена как соседи — следующая
                         break
                     self._events.log(
                         f"Из {len(batch)} проверенных ни одна не подошла — проверяем следующие {len(more)}"
                     )
                     batch = [*batch, *more]
-                    from_catalog += len(more)
                     queue.extend((candidate, False) for candidate in more)
                 candidate, rechecked = queue.popleft()
                 self._events.strategy_started(candidate.name, index, len(batch), candidate.args)
@@ -365,8 +377,10 @@ class StrategySearch:
                         break
                 else:
                     failed.append(result)
-                    if run.verdict == rules.VERDICT_FAILED:
+                    if run.verdict == rules.VERDICT_FAILED or run.repeatable_crash:
                         failed_ids.append(candidate.strategy_id)
+                if run.verdict in (rules.VERDICT_WORKING, rules.VERDICT_UNSTABLE) and not self._target.forced:
+                    batch = self._bring_siblings(candidate, ordered, batch, queue, seen)
                 index += 1
                 pause = self._env.strategy_pause_seconds()
                 if pause > 0 and queue:
@@ -394,6 +408,26 @@ class StrategySearch:
             except Exception:
                 logger.exception("strategy search history save failed")
 
+    def _bring_siblings(self, winner, ordered, batch, queue, seen) -> list[Candidate]:
+        """Соседей открывшей цель стратегии — в начало очереди."""
+        waiting = {item.strategy_id for item, _rechecked in queue}
+        tested = seen - waiting
+        siblings = [
+            item
+            for item in family_siblings(ordered, winner, limit=len(ordered))
+            if item.strategy_id not in tested
+        ][:SIBLINGS_AFTER_SUCCESS]
+        if not siblings:
+            return batch
+        ids = {item.strategy_id for item in siblings}
+        rest = [entry for entry in queue if entry[0].strategy_id not in ids]
+        queue.clear()
+        queue.extend([*((item, False) for item in siblings), *rest])
+        new = [item for item in siblings if item.strategy_id not in seen]
+        seen.update(ids)
+        self._events.log(f"  Дальше — соседи этой стратегии ({len(siblings)}): тот же приём с другими параметрами")
+        return [*batch, *new]
+
     def _finish(self, report, working, failed, started, *, cancelled: bool) -> StrategyScanReport:
         report.working_strategies = list(working)
         report.failed_strategies = list(failed)
@@ -419,7 +453,7 @@ class StrategySearch:
 
         return history_key(self._protocol, self._request.target, self._request.udp_games_scope)
 
-    def _select_batch(self, key: str) -> tuple[list[Candidate], int]:
+    def _select_batch(self, key: str) -> tuple[list[Candidate], int, list[Candidate]]:
         candidates = self._env.load_candidates(self._protocol)
         history = self._env.load_history(key)
         candidates = [*candidates, *_remembered_variants(candidates, getattr(history, "confirmed", ()) or ())]
@@ -728,6 +762,7 @@ class StrategySearch:
         profile = self._profile(candidate.args)
         config_text = build_probe_config_text(profile, self._env.blob_lines(candidate.args))
         crash_reason = ""
+        previous_crash = ""
         for crash_try in range(1 + CRASH_RETRIES):
             if self.cancelled:
                 return _StrategyRun(rules.VERDICT_CANCELLED)
@@ -737,6 +772,10 @@ class StrategySearch:
                 crash_reason = self._crash_text(start)
                 self._events.log(f"  winws2 не запустился: {crash_reason}")
                 session.stop()
+                if crash_reason and crash_reason == previous_crash:
+                    # Второй раз то же самое: перезапуски не помогут, стратегию запомним.
+                    return _StrategyRun(rules.VERDICT_CRASH, [], crash_reason, repeatable_crash=True)
+                previous_crash = crash_reason
                 self._env.recover_after_crash()
                 continue
             attempts: list[_Attempt] = []

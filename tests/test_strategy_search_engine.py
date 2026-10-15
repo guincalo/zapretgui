@@ -400,9 +400,19 @@ class StrategyVerdictTests(unittest.TestCase):
         report, events = run(env)
 
         self.assertEqual(events.results[0].verdict, rules.VERDICT_CRASH)
-        # Сбой winws2 не записывается в «не сработала».
-        self.assertEqual(env.history_saved[2], [])
+        # Одинаковое падение второй раз подряд — дело в стратегии: третий запуск
+        # не нужен, а в следующий раз она пойдёт в конец очереди.
+        self.assertEqual(len(env.sessions), 1 + 2)  # pass + два запуска «broken»
+        self.assertEqual(env.history_saved[2], ["broken"])
         self.assertEqual(report.working_strategies, [])
+
+    def test_one_time_start_failure_is_retried_and_not_remembered(self) -> None:
+        env = FakeEnv(network=blocked_unless(), candidates=[cand("racy")])
+        env.start_fails["racy"] = 1
+        _report, events = run(env)
+
+        self.assertEqual(events.results[0].verdict, rules.VERDICT_FAILED)
+        self.assertEqual(env.recovered, 1)
 
     def test_network_drop_rechecks_strategy_instead_of_failing_it(self) -> None:
         state = {"down": True}
@@ -821,3 +831,73 @@ class HonestCheckTests(unittest.TestCase):
         self.assertIn("--wf-tcp-in=443", result.apply_lines)
         self.assertIn("--in-range=a", result.apply_lines)
         self.assertNotIn("--out-range=-d8", result.apply_lines)
+
+
+class FamilyOrderTests(unittest.TestCase):
+    """Семейства приёмов, соседи удачной стратегии, история после смены фильтра."""
+
+    def test_modifiers_do_not_make_their_own_family(self) -> None:
+        from blockcheck.strategy_search.ordering import family_key
+
+        plain = Candidate("a", "a", "--lua-desync=multidisorder:pos=1")
+        boosted = Candidate("b", "b", "--lua-desync=send:repeats=2\n--lua-desync=syndata\n--lua-desync=multidisorder:pos=1")
+        md5 = Candidate("c", "c", "--lua-desync=fake:blob=tls1:tcp_md5:tcp_ts=-1000")
+        self.assertEqual(family_key(plain), family_key(boosted))
+        self.assertEqual(family_key(md5), ("fake", "md5"))
+
+    def test_big_family_gets_more_early_places_than_a_single(self) -> None:
+        from blockcheck.strategy_search.ordering import interleave_by_technique, main_technique
+
+        fakes = [Candidate(f"f{i}", "f", f"--lua-desync=fake:n={i}") for i in range(16)]
+        singles = [Candidate(f"s{i}", "s", f"--lua-desync=custom{i}") for i in range(8)]
+        first = interleave_by_technique([*singles, *fakes])[:8]
+        self.assertGreaterEqual(sum(1 for item in first if main_technique(item) == "fake"), 2)
+        self.assertLess(sum(1 for item in first if main_technique(item) == "fake"), 8)
+
+    def test_siblings_of_unstable_strategy_are_checked_next(self) -> None:
+        def network(running, number):
+            if running == "fam1":
+                return OK if number == 0 else RESET  # открылась один раз — нестабильно
+            return OK if running == "fam3" else RESET
+
+        candidates = [
+            cand("fam1", "fake"),
+            cand("other1", "multisplit"),
+            cand("other2", "hostfakesplit"),
+            cand("other3", "multidisorder"),
+            cand("fam2", "fake"),
+            cand("fam3", "fake"),
+        ]
+        env = FakeEnv(network=network, candidates=candidates)
+        _report, events = run(env)
+
+        order = [args_id(args) for args in events.started_args if args_id(args) not in (None, "pass")]
+        self.assertEqual(order[:3], ["fam1", "fam2", "fam3"])
+        self.assertEqual(len(order), len(set(order)))
+        self.assertTrue(any("соседи" in line for line in events.logs))
+
+    def test_confirmed_then_failed_strategy_leaves_the_head(self) -> None:
+        from blockcheck.strategy_search.ordering import order_candidates
+
+        items = [cand("a"), cand("b", "multisplit"), cand("c", "hostfakesplit")]
+        ordered = order_candidates(items, confirmed_ids=["c", "b"], failed_at={"c": 999_000.0}, now=1_000_000.0)
+        self.assertEqual([item.strategy_id for item in ordered][0], "b")
+        self.assertEqual([item.strategy_id for item in ordered][-1], "c")
+
+    def test_record_results_drops_failed_from_confirmed(self) -> None:
+        from unittest import mock
+
+        from blockcheck.strategy_search import history
+
+        store = {"strategy_history": {"k": {"confirmed": ["a", "b"], "failed": {}}}}
+        with mock.patch("settings.store.update_blockcheck_settings", side_effect=lambda mutate: mutate(store)):
+            history.record_results("k", confirmed=["c"], failed=["a"], now=5.0)
+        entry = store["strategy_history"]["k"]
+        self.assertEqual(entry["confirmed"], ["c", "b"])
+        self.assertEqual(entry["failed"], {"a": 5.0})
+
+    def test_continuation_does_not_loop_when_next_batch_is_already_seen(self) -> None:
+        env = FakeEnv(network=blocked_unless(), candidates=[cand(f"x{i}") for i in range(35)])
+        report, _events = run(env)
+
+        self.assertEqual(report.total_tested, 35)

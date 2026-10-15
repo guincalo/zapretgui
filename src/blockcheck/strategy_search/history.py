@@ -92,7 +92,8 @@ def record_results(key: str, *, confirmed: list[str], failed: list[str], now: fl
     """Дописать итоги подбора одной транзакцией.
 
     Подтверждённая стратегия поднимается в начало списка и снимается с
-    «не сработала»; провал запоминается со временем.
+    «не сработала»; провал запоминается со временем и снимает отметку
+    «подтверждена».
     """
     from settings import store as settings_store
 
@@ -102,7 +103,9 @@ def record_results(key: str, *, confirmed: list[str], failed: list[str], now: fl
     def _mutate(section: dict) -> None:
         history = section.setdefault("strategy_history", {})
         entry = history.pop(key, None) or {"confirmed": [], "failed": {}}
-        confirmed_list = [item for item in entry.get("confirmed", []) if item not in confirmed]
+        # Не сработавшая сейчас стратегия больше не «подтверждена»: провайдер
+        # сменил фильтр, и в начале очереди ей не место.
+        confirmed_list = [item for item in entry.get("confirmed", []) if item not in confirmed and item not in failed]
         entry["confirmed"] = [*confirmed, *confirmed_list][:MAX_CONFIRMED]
         failed_map = dict(entry.get("failed", {}))
         for strategy_id in confirmed:
