@@ -1,4 +1,4 @@
-"""Окно появляется на экране уже нарисованным.
+"""Окно появляется на экране уже нарисованным — при запуске и из трея.
 
 Между show() и первой отрисовкой проходит время: Qt сначала выполняет всё, что
 стоит в очереди событий, и только потом рисует окно. Всё это время Windows
@@ -6,6 +6,11 @@
 это видно как белая вспышка при запуске (снимки окна на win10: белый кадр
 держался от 30 до 100 мс даже после того, как окно стали показывать уже
 собранным).
+
+То же при каждом возврате окна из трея: скрытое окно Qt рисует заново целиком,
+и Windows сначала выводит его белым (замер на win10: белое через 9–42 мс после
+щелчка по значку, готовое — через 31–146 мс; на обычном компьютере в разы
+дольше, а после долгого лежания в трее ещё и подкачка памяти).
 
 У Windows для этого есть штатное средство — скрытие окна от экрана (cloak):
 окно считается показанным, получает события и рисуется, но на экран не
@@ -25,7 +30,24 @@ from PyQt6.QtCore import QEvent, QObject, QTimer
 DWMWA_CLOAK = 13
 # Дольше этого окно скрытым не остаётся, даже если отрисовка так и не пришла:
 # белое окно лучше невидимой программы.
-FIRST_FRAME_WAIT_MAX_MS = 1_500
+FRAME_WAIT_MAX_MS = 1_500
+
+
+def wait_for_composition() -> None:
+    """Ждёт, пока Windows соберёт уже нарисованный кадр окна для экрана.
+
+    Без этого шторка снималась раньше, чем кадр доходил до экрана: на стенде
+    win10 окно после снятия шторки ещё ~20 мс было белым в 4 случаях из 6, с
+    ожиданием — ни разу из 5. Ждать приходится не дольше одного кадра экрана.
+    """
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+
+        ctypes.windll.dwmapi.DwmFlush()
+    except Exception:
+        pass
 
 
 def set_window_cloaked(hwnd: int, cloaked: bool) -> bool:
@@ -48,19 +70,21 @@ def set_window_cloaked(hwnd: int, cloaked: bool) -> bool:
         return False
 
 
-class FirstFrameReveal(QObject):
-    """Держит окно скрытым от экрана от первого show() до первой отрисовки."""
+class FrameReveal(QObject):
+    """Держит окно скрытым от экрана от show() до его отрисовки; годится на каждый показ."""
 
     def __init__(
         self,
         window,
         *,
         cloak: Callable[[int, bool], bool] = set_window_cloaked,
-        wait_max_ms: int = FIRST_FRAME_WAIT_MAX_MS,
+        wait_composed: Callable[[], None] = wait_for_composition,
+        wait_max_ms: int = FRAME_WAIT_MAX_MS,
     ) -> None:
         super().__init__(window)
         self._window = window
         self._cloak = cloak
+        self._wait_composed = wait_composed
         self._hwnd = 0
         self._cloaked = False
         self._deadline = QTimer(self)
@@ -91,7 +115,8 @@ class FirstFrameReveal(QObject):
         if self._cloaked and watched is self._window and event.type() == QEvent.Type.Paint:
             watched.removeEventFilter(self)
             # Событие приходит до самой отрисовки. Открываем окно следующим
-            # проходом цикла событий — когда кадр уже нарисован и отдан системе.
+            # проходом цикла событий — когда кадр уже нарисован и отдан системе —
+            # и после того, как Windows соберёт его для экрана.
             QTimer.singleShot(0, self.reveal)
         return False
 
@@ -104,20 +129,25 @@ class FirstFrameReveal(QObject):
             self._window.removeEventFilter(self)
         except Exception:
             pass
+        self._wait_composed()
         self._cloak(self._hwnd, False)
 
 
-def begin_first_frame_reveal(window) -> FirstFrameReveal:
-    """Прячет окно от экрана до первой отрисовки. Вызывается из showEvent."""
-    reveal = FirstFrameReveal(window)
+def cloak_until_painted(window) -> FrameReveal:
+    """Прячет окно от экрана до отрисовки. Вызывается из showEvent при каждом show()."""
+    reveal = getattr(window, "_frame_reveal", None)
+    if not isinstance(reveal, FrameReveal):
+        reveal = FrameReveal(window)
+        window._frame_reveal = reveal
     reveal.start()
     return reveal
 
 
 __all__ = [
     "DWMWA_CLOAK",
-    "FIRST_FRAME_WAIT_MAX_MS",
-    "FirstFrameReveal",
-    "begin_first_frame_reveal",
+    "FRAME_WAIT_MAX_MS",
+    "FrameReveal",
+    "cloak_until_painted",
     "set_window_cloaked",
+    "wait_for_composition",
 ]

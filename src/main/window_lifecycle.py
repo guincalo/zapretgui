@@ -15,7 +15,7 @@ from main.runtime_state import (
     startup_elapsed_ms,
 )
 from ui.frame_clock import frame_clock
-from ui.window_first_frame import begin_first_frame_reveal
+from ui.window_first_frame import cloak_until_painted
 from ui.window_preset_file_drop import handle_native_preset_file_drop
 from ui.windows_file_drop import WM_DROPFILES
 from ui.windows_screen_presence import (
@@ -23,6 +23,18 @@ from ui.windows_screen_presence import (
     handle_native_screen_presence,
     native_message_id,
 )
+
+
+def _is_system_show_event(event) -> bool:
+    """Показ по команде Windows (окно развернули из панели задач), а не наш show().
+
+    Такое окно Windows выводит сама, с его прежней картинкой; прятать его
+    нельзя — Qt может не перерисовать окно, и оно пропало бы до запасного срока.
+    """
+    try:
+        return bool(event.spontaneous())
+    except Exception:
+        return False
 
 
 class _FirstPaintProbe(QObject):
@@ -245,7 +257,7 @@ class WindowLifecycleMixin:
             log(f"Не удалось синхронизировать визуальные эффекты при изменении размера окна: {e}", "DEBUG")
 
     def showEvent(self, event):
-        """Первый показ окна."""
+        """Показ окна: при запуске и при возврате из трея."""
         super().showEvent(event)
         self._note_window_presence()
 
@@ -256,9 +268,12 @@ class WindowLifecycleMixin:
             emit_startup_metric("StartupTTFF", "first showEvent")
             self._first_paint_probe = _FirstPaintProbe()
             self.installEventFilter(self._first_paint_probe)
-            # showEvent приходит до вывода окна на экран: прячем окно от экрана
-            # до первой отрисовки, иначе Windows покажет его пустым и белым.
-            self._first_frame_reveal = begin_first_frame_reveal(self)
+
+        if not _is_system_show_event(event):
+            # Наш show() (запуск, значок в трее): событие приходит до вывода
+            # окна на экран. Прячем окно от экрана до отрисовки, иначе Windows
+            # покажет его пустым и белым — скрытое окно Qt рисует заново целиком.
+            cloak_until_painted(self)
 
         geometry_runtime = self._get_window_geometry_runtime()
         if geometry_runtime is not None:

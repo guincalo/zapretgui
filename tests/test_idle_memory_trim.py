@@ -1,5 +1,6 @@
 import os
 import unittest
+from pathlib import Path
 from unittest.mock import Mock
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -49,6 +50,19 @@ class IdleMemoryTrimTests(unittest.TestCase):
 
     def test_trim_runs_without_windows_api(self) -> None:
         trim_process_memory()
+
+    def test_trim_keeps_window_ready_to_open_from_tray(self) -> None:
+        # Сброс кэша картинок и выгрузка страниц замедляли открытие из трея.
+        import ui.idle_memory_trim as idle_memory_trim
+        from unittest.mock import patch
+
+        with patch("PyQt6.QtGui.QPixmapCache.clear") as clear_pixmaps:
+            trim_process_memory()
+
+        clear_pixmaps.assert_not_called()
+        source = Path(idle_memory_trim.__file__).read_text(encoding="utf-8")
+        self.assertNotIn("SetProcessWorkingSetSize", source)
+        self.assertNotIn("EmptyWorkingSet", source)
 
 
 if __name__ == "__main__":

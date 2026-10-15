@@ -1,9 +1,14 @@
 """Освобождение памяти, пока окно программы долго скрыто в трее или свёрнуто.
 
-Пока окно открыто, кэши не трогаем — иначе интерфейс подтормаживал бы.
-Когда окно убрано дольше IDLE_TRIM_DELAY_MS, окно никто не видит: можно
-собрать мусор, сбросить общий кэш картинок Qt и вернуть Windows страницы
-памяти, которые сейчас не нужны. При возврате окна нужное подгрузится само.
+Когда окно убрано дольше IDLE_TRIM_DELAY_MS, собираем мусор и возвращаем
+системе пустые блоки кучи — это настоящая экономия памяти.
+
+Рабочий набор (страницы в оперативной памяти) и кэш картинок Qt не трогаем.
+Раньше здесь всё выгружалось принудительно, и окно открывалось из трея
+медленно: Qt заново рисовал значки, а Windows подтягивала страницы обратно.
+Выгрузка ничего не экономила: Windows и сама за пару минут отдаёт страницы
+скрытого окна другим программам (замер на win10: 48 → 8 МБ без нашей
+команды), а занятая память программы от этого не меняется.
 """
 
 from __future__ import annotations
@@ -13,15 +18,14 @@ import sys
 import time
 
 from PyQt6.QtCore import QEvent, QObject, QTimer
-from PyQt6.QtGui import QPixmapCache
 
 from log.log import log
 
 
 # Сколько окно должно пробыть скрытым, прежде чем чистить память.
 IDLE_TRIM_DELAY_MS = 2 * 60 * 1000
-# Пока окно скрыто, фоновая работа (оркестратор, прокси) снова набирает
-# страницы — повторяем очистку с таким интервалом.
+# Пока окно скрыто, фоновая работа (оркестратор, прокси) снова копит
+# мусор — повторяем очистку с таким интервалом.
 IDLE_TRIM_REPEAT_MS = 30 * 60 * 1000
 
 _WATCHED_EVENTS = (QEvent.Type.Hide, QEvent.Type.Show, QEvent.Type.WindowStateChange)
@@ -36,39 +40,21 @@ def _working_set_mb() -> float | None:
         return None
 
 
-def _release_memory_to_windows() -> None:
+def _release_free_heap_to_windows() -> None:
     import ctypes
-    from ctypes import wintypes
 
-    try:
-        # Возвращает системе пустые блоки кучи C-рантайма после крупных освобождений.
-        ctypes.cdll.ucrtbase._heapmin()
-    except Exception:
-        pass
-
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-    kernel32.GetCurrentProcess.restype = wintypes.HANDLE
-    kernel32.SetProcessWorkingSetSizeEx.argtypes = (
-        wintypes.HANDLE,
-        ctypes.c_size_t,
-        ctypes.c_size_t,
-        wintypes.DWORD,
-    )
-    kernel32.SetProcessWorkingSetSizeEx.restype = wintypes.BOOL
-    # (SIZE_T)-1 в обоих лимитах — «убрать из рабочего набора всё, что можно».
-    unlimited = ctypes.c_size_t(-1).value
-    kernel32.SetProcessWorkingSetSizeEx(kernel32.GetCurrentProcess(), unlimited, unlimited, 0)
+    # Возвращает системе пустые блоки кучи C-рантайма после крупных освобождений.
+    ctypes.cdll.ucrtbase._heapmin()
 
 
 def trim_process_memory() -> None:
-    """Собирает мусор, чистит кэш картинок Qt и отдаёт Windows лишние страницы."""
+    """Собирает мусор и возвращает системе пустые блоки кучи."""
     started = time.perf_counter()
     before = _working_set_mb()
     collected = gc.collect()
-    QPixmapCache.clear()
     if sys.platform == "win32":
         try:
-            _release_memory_to_windows()
+            _release_free_heap_to_windows()
         except Exception as exc:
             log(f"Не удалось вернуть память системе: {exc}", "DEBUG")
     after = _working_set_mb()

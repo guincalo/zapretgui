@@ -3100,7 +3100,7 @@ class WindowLifecycleEarlyEventTests(unittest.TestCase):
     def setUp(self) -> None:
         # Окна в этих тестах — заготовки без настоящего HWND; скрытие окна до
         # первого кадра проверяет tests/test_window_first_frame.py.
-        patcher = patch("main.window_lifecycle.begin_first_frame_reveal")
+        patcher = patch("main.window_lifecycle.cloak_until_painted")
         patcher.start()
         self.addCleanup(patcher.stop)
 

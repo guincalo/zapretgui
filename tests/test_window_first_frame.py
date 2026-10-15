@@ -1,4 +1,4 @@
-"""Окно появляется на экране уже нарисованным, без белой вспышки."""
+"""Окно появляется на экране уже нарисованным, без белой вспышки: при запуске и из трея."""
 
 from __future__ import annotations
 
@@ -15,15 +15,16 @@ from PyQt6.QtGui import QPaintEvent  # noqa: E402
 from PyQt6.QtWidgets import QApplication, QWidget  # noqa: E402
 
 from ui import window_first_frame  # noqa: E402
-from ui.window_first_frame import FirstFrameReveal, set_window_cloaked  # noqa: E402
+from ui.window_first_frame import FrameReveal, cloak_until_painted, set_window_cloaked  # noqa: E402
 
 
 _APP = QApplication.instance() or QApplication([])
 
 
-class FirstFrameRevealTests(unittest.TestCase):
+class FrameRevealTests(unittest.TestCase):
     def setUp(self) -> None:
         self.calls: list[bool] = []
+        self.order: list[str] = []
         self.accept = True
         self.window = QWidget()
         self.addCleanup(self.window.deleteLater)
@@ -31,10 +32,14 @@ class FirstFrameRevealTests(unittest.TestCase):
     def _cloak(self, hwnd: int, cloaked: bool) -> bool:
         self.assertTrue(hwnd)
         self.calls.append(cloaked)
+        self.order.append("cloak" if cloaked else "uncloak")
         return self.accept
 
-    def _reveal(self, **kwargs) -> FirstFrameReveal:
-        return FirstFrameReveal(self.window, cloak=self._cloak, **kwargs)
+    def _composed(self) -> None:
+        self.order.append("composed")
+
+    def _reveal(self, **kwargs) -> FrameReveal:
+        return FrameReveal(self.window, cloak=self._cloak, wait_composed=self._composed, **kwargs)
 
     def _send_paint(self) -> None:
         _APP.sendEvent(self.window, QPaintEvent(self.window.rect()))
@@ -66,6 +71,40 @@ class FirstFrameRevealTests(unittest.TestCase):
 
         self.assertEqual(self.calls, [True, False])
 
+    def test_shade_lifts_only_after_windows_composed_the_frame(self) -> None:
+        # Иначе окно ещё ~20 мс показывалось белым уже без шторки.
+        reveal = self._reveal()
+        reveal.start()
+        self._send_paint()
+        _APP.processEvents()
+
+        self.assertEqual(self.order, ["cloak", "composed", "uncloak"])
+
+    def test_window_is_hidden_again_on_next_show(self) -> None:
+        # Возврат из трея: окно снова прячется до своей отрисовки.
+        reveal = self._reveal()
+        reveal.start()
+        self._send_paint()
+        _APP.processEvents()
+
+        self.assertTrue(reveal.start())
+        self.assertTrue(reveal.is_cloaked())
+        self._send_paint()
+        _APP.processEvents()
+
+        self.assertEqual(self.calls, [True, False, True, False])
+
+    def test_one_reveal_serves_every_show_of_a_window(self) -> None:
+        self.window._frame_reveal = self._reveal()
+
+        first = cloak_until_painted(self.window)
+        self._send_paint()
+        _APP.processEvents()
+        second = cloak_until_painted(self.window)
+
+        self.assertIs(first, second)
+        self.assertEqual(self.calls, [True, False, True])
+
     def test_window_is_revealed_when_paint_never_comes(self) -> None:
         # Белое окно лучше невидимой программы.
         reveal = self._reveal(wait_max_ms=0)
@@ -92,25 +131,12 @@ class FirstFrameRevealTests(unittest.TestCase):
         self.assertFalse(set_window_cloaked(1, True))
 
     def test_deadline_is_bounded(self) -> None:
-        self.assertLessEqual(window_first_frame.FIRST_FRAME_WAIT_MAX_MS, 2_000)
+        self.assertLessEqual(window_first_frame.FRAME_WAIT_MAX_MS, 2_000)
 
 
-class FirstFrameWiringTests(unittest.TestCase):
-    def test_first_show_event_starts_the_reveal(self) -> None:
-        import inspect
-
-        from main.window_lifecycle import WindowLifecycleMixin
-
-        source = inspect.getsource(WindowLifecycleMixin.showEvent)
-        call = "begin_first_frame_reveal(self)"
-        self.assertIn(call, source)
-        # Только при первом показе: дальше окно уже нарисовано.
-        self.assertLess(source.index("ttff_logged = True"), source.index(call))
-        self.assertLess(source.index(call), source.index("geometry_runtime = self._get_window_geometry_runtime()"))
-
-    def test_first_show_event_cloaks_only_once(self) -> None:
+class FrameRevealWiringTests(unittest.TestCase):
+    def _window(self):
         from types import SimpleNamespace
-        from unittest.mock import patch
 
         from main.window_lifecycle import WindowLifecycleMixin
 
@@ -125,16 +151,41 @@ class FirstFrameWiringTests(unittest.TestCase):
             def __init__(self) -> None:
                 self.startup_state = SimpleNamespace(ttff_logged=False, ttff_ms=None)
 
-        window = Window()
+        return Window()
+
+    def _show_events(self, window, *events):
+        from unittest.mock import patch
+
         with (
             patch("main.window_lifecycle.QTimer.singleShot"),
             patch("main.window_lifecycle.emit_startup_metric"),
-            patch("main.window_lifecycle.begin_first_frame_reveal") as begin,
+            patch("main.window_lifecycle.cloak_until_painted") as cloak,
         ):
-            window.showEvent(object())
-            window.showEvent(object())
+            for event in events:
+                window.showEvent(event)
+        return cloak
 
-        begin.assert_called_once_with(window)
+    def test_every_own_show_hides_window_until_painted(self) -> None:
+        from types import SimpleNamespace
+
+        own_show = SimpleNamespace(spontaneous=lambda: False)
+        window = self._window()
+
+        # Запуск и два возврата из трея.
+        cloak = self._show_events(window, own_show, own_show, own_show)
+
+        self.assertEqual(cloak.call_count, 3)
+        cloak.assert_called_with(window)
+
+    def test_window_restored_by_windows_is_not_hidden(self) -> None:
+        from types import SimpleNamespace
+
+        system_show = SimpleNamespace(spontaneous=lambda: True)
+        window = self._window()
+
+        cloak = self._show_events(window, system_show)
+
+        cloak.assert_not_called()
 
 
 class SidebarHeaderSettleTests(unittest.TestCase):
