@@ -20,6 +20,12 @@ from blockcheck.googlevideo_discovery import (  # noqa: E402
 
 
 class GoogleVideoDiscoveryTests(unittest.TestCase):
+    def setUp(self) -> None:
+        # Эти тесты — про страницу ролика: redirector «не отвечает».
+        patcher = patch("blockcheck.googlevideo_discovery._fetch_report_mapping", return_value="")
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_extracts_encoded_rr_hosts_and_rejects_service_hosts(self) -> None:
         page = (
             "https%3A%2F%2Frr8---sn-user-a.googlevideo.com%2Fvideoplayback "
@@ -97,3 +103,43 @@ class GoogleVideoDiscoveryTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ReportMappingTests(unittest.TestCase):
+    def test_node_name_becomes_video_server_name(self) -> None:
+        from blockcheck.googlevideo_discovery import cluster_to_host, parse_report_mapping
+
+        # Проверено вживую 15.10.2026: имя отвечает адресом кэша Google.
+        self.assertEqual(cluster_to_host("muc12s10"), "rr1---sn-h0jelne7.googlevideo.com")
+        self.assertEqual(
+            parse_report_mapping("144.31.107.88 => muc12s10 (144.31.107.0/24)\n"),
+            "rr1---sn-h0jelne7.googlevideo.com",
+        )
+        # Страница-заглушка провайдера или мусор — не видеосервер.
+        self.assertEqual(parse_report_mapping("<html>Доступ ограничен</html>"), "")
+        self.assertEqual(cluster_to_host("muc_12"), "")
+
+    def test_redirector_answer_is_used_before_the_youtube_page(self) -> None:
+        with (
+            patch(
+                "blockcheck.googlevideo_discovery._fetch_report_mapping",
+                return_value="1.2.3.4 => muc12s10 (1.2.3.0/24)",
+            ),
+            patch("blockcheck.googlevideo_discovery._fetch_watch_page") as page,
+        ):
+            result = discover_googlevideo_host()
+
+        self.assertEqual(result.host, "rr1---sn-h0jelne7.googlevideo.com")
+        page.assert_not_called()
+
+    def test_failed_redirector_falls_back_to_the_youtube_page(self) -> None:
+        with (
+            patch("blockcheck.googlevideo_discovery._fetch_report_mapping", side_effect=OSError("сброс")),
+            patch(
+                "blockcheck.googlevideo_discovery._fetch_watch_page",
+                return_value="https://rr4---sn-fresh-user.googlevideo.com/videoplayback",
+            ),
+        ):
+            result = discover_googlevideo_host()
+
+        self.assertEqual(result.host, "rr4---sn-fresh-user.googlevideo.com")

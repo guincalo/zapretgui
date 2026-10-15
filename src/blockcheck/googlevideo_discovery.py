@@ -3,6 +3,14 @@
 YouTube выбирает видеосерверы по провайдеру, региону и маршруту. Поэтому
 ``rr*...googlevideo.com`` нельзя хранить во встроенном списке BlockCheck:
 адрес, подходящий одному пользователю сегодня, у другого уже не существует.
+
+Сначала спрашиваем ``redirector.googlevideo.com/report_mapping`` (обычный HTTP,
+один короткий ответ вида ``1.2.3.4 => muc12s10``): имя узла переводится в имя
+видеосервера ``rr1---sn-….googlevideo.com`` таблицей подстановки (так делают
+GoodCheck и zapret4rocket; проверено 15.10.2026: muc12s10 → sn-h0jelne7, имя
+отвечает адресом кэша Google). Это работает и тогда, когда сам youtube.com
+закрыт фильтром — а без Zapret в России он закрыт почти всегда. Если ответа
+нет, берём адрес из страницы ролика YouTube, как раньше.
 """
 
 from __future__ import annotations
@@ -35,6 +43,39 @@ class GoogleVideoDiscoveryResult:
     candidates: tuple[str, ...] = ()
     source_url: str = ""
     detail: str = ""
+
+
+_REPORT_MAPPING_URLS: tuple[str, ...] = (
+    "http://redirector.googlevideo.com/report_mapping?di=no",
+    "https://redirector.gvt1.com/report_mapping?di=no",
+)
+_REPORT_MAPPING_LINE_RE = re.compile(r"=>\s*([a-z0-9-]+)")
+# Имя узла (``muc12s10``) → часть имени видеосервера (``sn-h0jelne7``): посимвольная подстановка.
+_CLUSTER_FROM = "uzpkfa50vqlgb61wrmhc72xsnid83ytoje94-"
+_CLUSTER_TO = "0123456789abcdefghijklmnopqrstuvwxyz-"
+_CLUSTER_TABLE = str.maketrans(_CLUSTER_FROM, _CLUSTER_TO)
+
+
+def cluster_to_host(cluster: str) -> str:
+    """``muc12s10`` → ``rr1---sn-h0jelne7.googlevideo.com``; пусто — имя узла не похоже на настоящее."""
+    name = str(cluster or "").strip().lower()
+    if not name or any(char not in _CLUSTER_FROM for char in name):
+        return ""
+    return normalize_googlevideo_host(f"rr1---sn-{name.translate(_CLUSTER_TABLE)}.googlevideo.com")
+
+
+def parse_report_mapping(text: str) -> str:
+    match = _REPORT_MAPPING_LINE_RE.search(str(text or "").lower())
+    return cluster_to_host(match.group(1)) if match else ""
+
+
+def _fetch_report_mapping(url: str, timeout: float) -> str:
+    import requests
+
+    with requests.get(url, timeout=timeout, allow_redirects=False, stream=True) as response:
+        if response.status_code != 200:
+            return ""
+        return response.raw.read(2048, decode_content=True).decode("utf-8", errors="ignore")
 
 
 # Apex-домен не является видеосервером: прямая проверка всегда падает,
@@ -139,6 +180,23 @@ def discover_googlevideo_host(
 
     deadline = time.monotonic() + max(0.1, float(timeout))
     errors: list[str] = []
+    for url in _REPORT_MAPPING_URLS:
+        if is_cancelled():
+            return GoogleVideoDiscoveryResult(detail="проверка остановлена")
+        try:
+            host = parse_report_mapping(_fetch_report_mapping(url, min(3.0, max(0.1, deadline - time.monotonic()))))
+        except ImportError:
+            return GoogleVideoDiscoveryResult(detail="компонент requests недоступен")
+        except Exception as exc:  # заглушка провайдера или обрыв — пробуем дальше
+            errors.append(str(exc).strip()[:120] or type(exc).__name__)
+            continue
+        if host:
+            return GoogleVideoDiscoveryResult(
+                host=host,
+                candidates=(host,),
+                source_url=url,
+                detail="видеосервер вашей сети по ответу redirector.googlevideo.com",
+            )
     for url in _WATCH_URLS:
         if is_cancelled():
             return GoogleVideoDiscoveryResult(detail="проверка остановлена")
