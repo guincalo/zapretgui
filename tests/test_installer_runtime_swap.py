@@ -216,3 +216,42 @@ class AutoUpdateRelaunchTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@unittest.skipUnless(INNO_SCRIPT.is_file(), "нужен закрытый репозиторий со сборкой установщика")
+class InterruptedInstallRecoveryTests(unittest.TestCase):
+    """Обрыв установки не оставляет программу без _internal и без папок поставки."""
+
+    def setUp(self) -> None:
+        self.iss = INNO_SCRIPT.read_text(encoding="utf-8-sig")
+
+    def test_interrupted_runtime_swap_is_undone_before_a_new_install(self) -> None:
+        recover = _routine(self.iss, "RecoverInterruptedInstall")
+        prepare = _routine(self.iss, "PrepareToInstall")
+
+        self.assertIn("(not RuntimeDirectoryContainsExe(LiveDir)) and RuntimeDirectoryContainsExe(BackupDir)", recover)
+        self.assertIn("TryRenameRuntimeDirectory(BackupDir, LiveDir)", recover)
+        self.assertIn("RestoreStashedDataDirs(AppRoot)", recover)
+        # После проверки папки, но до остановки процессов и переноса данных.
+        self.assertLess(prepare.index("PrepareDestinationOwnership"), prepare.index("RecoverInterruptedInstall("))
+        self.assertLess(prepare.index("RecoverInterruptedInstall("), prepare.index("StopRelocationInstallProcesses"))
+
+    def test_backup_runtime_is_dropped_only_next_to_a_working_one(self) -> None:
+        swap = _routine(self.iss, "CommitRuntimeSwap")
+        # Раньше хватало, что папка _internal есть, — даже пустая; тогда стиралась единственная копия.
+        self.assertIn("if DirExists(BackupDir) and RuntimeDirectoryContainsExe(LiveDir) then", swap)
+        self.assertNotIn("if DirExists(BackupDir) and DirExists(LiveDir) then", swap)
+
+    def test_shipped_folders_are_stashed_and_come_back_unless_the_install_succeeds(self) -> None:
+        steps = _routine(self.iss, "CurStepChanged")
+        stash = steps.index("StashDataDirs(")
+        post = steps.index("(CurStep = ssPostInstall)")
+        swap = steps.index("CommitRuntimeSwap(FailureReason)")
+
+        self.assertIn("if (CurStep = ssInstall) then", steps[:stash])
+        self.assertLess(stash, post)
+        after_swap = steps[swap:steps.index("if not RuntimeSwapSucceeded then", swap)]
+        self.assertIn("DropStashedDataDirs(", after_swap)
+        self.assertIn("RestoreStashedDataDirs(", after_swap)
+        self.assertIn("RestoreStashedDataDirs(", _routine(self.iss, "DeinitializeSetup"))
+        self.assertIn("if DataDirsStashed then", _routine(self.iss, "DeinitializeSetup"))

@@ -183,6 +183,20 @@ class WatchdogExecutionTests(unittest.TestCase):
         # Короткая причина для сервера очереди: в записи этого поля не было.
         self.assertEqual(stored["failure"], "exit5")
 
+    def test_installer_killed_between_renames_leaves_the_previous_version_working(self) -> None:
+        """Установщик убран в _internal.old и оборвался: прежняя версия возвращается на место."""
+        self._write_state(
+            version="99.0.0.0",
+            installer_arguments=["/c", "ren", str(self.install_root / "_internal"), "_internal.old", "&", "exit", "5"],
+        )
+
+        self.assertEqual(self._run_watchdog(), 1)
+
+        self.assertTrue((self.install_root / "_internal" / "Zapret.exe").is_file())
+        self.assertFalse((self.install_root / "_internal.old").exists())
+        # Версия на диске есть — значит, наблюдатель запустил бы её, а не мастер установки.
+        self.assertEqual(self._stored_state()["installed_version"], self.installed_version)
+
     def test_crash_code_of_the_installer_is_written_as_hex(self) -> None:
         self._write_state(
             version=self.installed_version,

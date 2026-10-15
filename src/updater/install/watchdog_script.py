@@ -153,6 +153,24 @@ function Show-Message([string]$text) {
     }
 }
 
+# Установщик убили между двумя переименованиями: рабочей _internal нет (или
+# она без exe), а прежняя версия целиком лежит в _internal.old. Вернуть её на
+# место — иначе программа не запустится, а «версии на диске нет».
+function Restore-InterruptedSwap([string]$root) {
+    if ([string]::IsNullOrWhiteSpace($root)) { return }
+    $live = Join-Path $root '_internal'
+    $backup = Join-Path $root '_internal.old'
+    if (Test-Path -LiteralPath (Join-Path $live 'Zapret.exe')) { return }
+    if (-not (Test-Path -LiteralPath (Join-Path $backup 'Zapret.exe'))) { return }
+    try {
+        if (Test-Path -LiteralPath $live) { Remove-Item -LiteralPath $live -Recurse -Force }
+        Rename-Item -LiteralPath $backup -NewName '_internal'
+        Write-Line 'Прерванная замена _internal: прежняя версия возвращена из _internal.old'
+    } catch {
+        Write-Line "Не удалось вернуть прежнюю версию из _internal.old: $($_.Exception.Message)"
+    }
+}
+
 function Start-InstalledApplication([string]$root) {
     if ($Unattended) { return }
     $exe = Join-Path $root '_internal\Zapret.exe'
@@ -189,6 +207,7 @@ if ($state.arguments) {
 
 if ($Recovery) {
     Write-Line 'Режим восстановления после перезагрузки'
+    Restore-InterruptedSwap $targetRoot
     # Доводим только установку, которую уже начали и не закончили. Итог
     # succeeded/failed уже известен, а prepared значит, что установщик так и
     # не запускался: ставить его молча при входе в систему нельзя.
@@ -286,6 +305,7 @@ for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
     Start-Sleep -Seconds 2
 }
 
+Restore-InterruptedSwap $targetRoot
 $installedVersion = Get-InstalledVersion $targetRoot
 
 if ($succeeded) {

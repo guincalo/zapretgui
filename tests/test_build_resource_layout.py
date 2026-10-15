@@ -1776,22 +1776,19 @@ class BuildResourceLayoutTests(unittest.TestCase):
             iss,
         )
         self.assertNotIn(r'Source: "{#SOURCEPATH}\json\hosts_catalog\*"', iss)
-        self.assertIn(
-            r'Type: filesandordirs; Name: "{app}\system\strategy_catalogs"',
-            install_delete,
-        )
-        self.assertIn(
-            r'Type: filesandordirs; Name: "{app}\system\templates"',
-            install_delete,
-        )
-        self.assertIn(
-            r'Type: files; Name: "{app}\system\hosts_catalog.sqlite3"',
-            install_delete,
-        )
-        self.assertIn(
-            r'Type: files; Name: "{app}\system\fakes_catalog.sqlite3"',
-            install_delete,
-        )
+        # Папки поставки не удаляются до копирования (обрыв оставлял их пустыми):
+        # их откладывает StashDataDirs, а удачная установка убирает «.old».
+        names = iss[iss.index("function DataDirName"):iss.index("function TryRenameRuntimeDirectory")]
+        for folder in (
+            r"system\strategy_catalogs", r"system\templates", r"system\themes", r"system\ico",
+            r"presets\winws1_builtin", r"presets\winws2_builtin",
+        ):
+            with self.subTest(folder=folder):
+                self.assertNotIn(f'Name: "{{app}}\\{folder}"', install_delete)
+                self.assertIn(f"'{folder}'", names)
+        # Базы перезаписываются флагом ignoreversion — удалять их заранее незачем.
+        self.assertNotIn("hosts_catalog.sqlite3", install_delete)
+        self.assertNotIn("fakes_catalog.sqlite3", install_delete)
         # system\ целиком в [InstallDelete] нельзя: там уже лежит
         # system\install-owner, записанный до начала копирования.
         self.assertNotIn(r'Type: filesandordirs; Name: "{app}\system"', install_delete)
@@ -1855,7 +1852,12 @@ class BuildResourceLayoutTests(unittest.TestCase):
         # кавычками вокруг путей с пробелами и ожидание без потомков.
         self.assertIn("function Join-InstallerArguments", watchdog_script)
         self.assertIn("$process.WaitForExit()", watchdog_script)
-        self.assertNotIn("procedure DeinitializeSetup;", iss)
+        # Запуск программы после автообновления — только на шаге ssDone; при
+        # выходе установщик лишь возвращает отложенные папки поставки.
+        if "procedure DeinitializeSetup;" in iss:
+            deinit = iss[iss.index("procedure DeinitializeSetup;"):]
+            self.assertNotIn("Exec(", deinit)
+            self.assertNotIn("Zapret.exe", deinit)
         self.assertIn("if (CurStep = ssDone) and IsAutoUpdate() then", iss)
         self.assertIn(
             "Log('Post-install finalization incomplete; launching application anyway.');",
