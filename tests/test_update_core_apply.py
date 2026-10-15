@@ -210,3 +210,30 @@ def test_plan_names_the_programs_that_survive(tmp_path) -> None:
     ) as stop:
         apply.Hooks().close_application(loaded)
     assert stop.call_args.kwargs["spare"] == loaded.kept_paths
+
+
+def test_rollback_that_hit_a_locked_file_is_repeated(tmp_path) -> None:
+    plan = _plan(tmp_path)
+    hooks = _Hooks()
+    started = [_process(exits=True), _process(exits=False)]
+    real_move = apply.FileSwap._move
+    exe = Path(plan.app_dir) / "_internal" / "Zapret.exe"
+    locks = {"left": 1}
+
+    def move(self, source, destination):
+        # Откат: новый exe держит антивирус — первый раз вынести его нельзя.
+        if Path(source) == exe and "new" in Path(destination).parts and locks["left"]:
+            locks["left"] -= 1
+            raise PermissionError(13, "занят антивирусом", str(source))
+        real_move(self, source, destination)
+
+    with patch.object(apply.processes, "start_detached", side_effect=lambda *a, **k: started.pop(0)), patch.object(
+        apply, "OLD_VERSION_READY_WAIT_S", 0.2
+    ), patch.object(apply, "ROLLBACK_RETRY_PAUSE_S", 0.0), patch.object(
+        apply.processes, "stop_processes_under", return_value=[]
+    ), patch.object(apply.FileSwap, "_move", move):
+        assert apply.run_apply(plan, hooks) is False
+
+    assert locks["left"] == 0
+    assert _read(Path(plan.app_dir)) == OLD
+    assert "Прежняя версия возвращена" in Path(plan.error_log).read_text(encoding="utf-8")

@@ -157,6 +157,18 @@ def test_old_work_folders_are_removed(tmp_path) -> None:
     assert not old.exists()
 
 
+def test_folder_with_a_rollback_that_could_not_finish_is_never_removed(tmp_path, monkeypatch) -> None:
+    app = _interrupted(tmp_path)
+    monkeypatch.delenv("ZAPRET_UPDATE_HOLD", raising=False)
+    # Файл всё ещё занят: вернуть прежний exe и сейчас не выходит.
+    monkeypatch.setattr(swap.FileSwap, "_move", lambda self, s, d: (_ for _ in ()).throw(PermissionError(13, "занят")))
+
+    file_update.housekeeping(root=app, now=time.time() + 25 * 3600)
+
+    # Раньше через сутки папка стиралась вместе с последней копией программы.
+    assert (app / ".update" / "1.0.0.2" / "swap" / "old" / "_internal" / "Zapret.exe").read_text() == "old"
+
+
 def test_driver_path_under_the_program_folder() -> None:
     root = Path("C:/Zapret/Dev") if os.name == "nt" else Path("/opt/zapret/dev")
     inside = str(root / "exe" / "WinDivert64.sys")

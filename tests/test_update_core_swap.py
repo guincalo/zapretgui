@@ -104,3 +104,130 @@ def test_hardlinked_stage_files_count_as_unchanged(tmp_path) -> None:
     files.prepare()
 
     assert (files.unchanged, files.replaced) == (1, 0)
+
+
+def _lock_once(files, path: Path):
+    """Первый перенос ``path`` падает «файл занят» (антивирус), дальше — как обычно."""
+    real_move = files._move
+    state = {"locked": True}
+
+    def move(source, destination):
+        if state["locked"] and Path(source) == path:
+            state["locked"] = False
+            raise PermissionError(13, "занят антивирусом", str(source))
+        real_move(source, destination)
+
+    files._move = move
+
+
+def test_rollback_that_hit_a_locked_file_keeps_it_in_the_journal(tmp_path) -> None:
+    app, files = _swap(tmp_path)
+    files._lock_wait_s = 0.0
+    files.prepare()
+    files.commit()
+    _lock_once(files, app / "_internal" / "Zapret.exe")
+
+    errors = files.rollback()
+
+    assert errors and "Zapret.exe" in errors[0]
+    work = app / ".update" / "2" / "swap"
+    # Прежний exe ещё в old: журнал его помнит, уборка папку не тронет.
+    assert (work / "old" / "_internal" / "Zapret.exe").read_bytes() == b"old exe"
+    assert swap.pending(work)
+    # Повтор доделывает только оставшееся — и программа целиком прежняя.
+    assert files.rollback() == []
+    assert _read(app) == OLD
+    assert not swap.pending(work)
+
+
+def test_recover_repeats_only_what_failed(tmp_path, monkeypatch) -> None:
+    app, files = _swap(tmp_path)
+    files._lock_wait_s = 0.0
+    files.prepare()
+    files.commit()
+    _lock_once(files, app / "_internal" / "Zapret.exe")
+    assert files.rollback()
+
+    work = app / ".update" / "2" / "swap"
+    # Раньше журнал после такого отката был пуст: recover() ничего не делал,
+    # а уборка через сутки стирала old с последней копией программы.
+    assert swap.recover(work) == []
+    assert _read(app) == OLD
+    assert swap.recover(work) is None
+
+
+def test_next_attempt_finishes_the_old_rollback_before_wiping_old(tmp_path) -> None:
+    app, files = _swap(tmp_path)
+    files._lock_wait_s = 0.0
+    files.prepare()
+    files.commit()
+    _lock_once(files, app / "_internal" / "Zapret.exe")
+    assert files.rollback()
+
+    again = swap.FileSwap(tmp_path / "stage", app, app / ".update" / "2" / "swap", preserve=("user",), remove=["lua/gone.lua"])
+    again.prepare()
+
+    # Прежний exe не стёрт вместе с old, а возвращён на место до новой попытки.
+    assert (app / "_internal" / "Zapret.exe").read_bytes() == b"old exe"
+    again.commit()
+    assert _read(app) == {**NEW, "user/settings.sqlite3": b"mine"}
+
+
+def test_next_attempt_stops_when_the_old_rollback_still_cannot_finish(tmp_path, monkeypatch) -> None:
+    app, files = _swap(tmp_path)
+    files._lock_wait_s = 0.0
+    files.prepare()
+    files.commit()
+    _lock_once(files, app / "_internal" / "Zapret.exe")
+    assert files.rollback()
+    monkeypatch.setattr(swap.FileSwap, "_move", lambda self, s, d: (_ for _ in ()).throw(PermissionError(13, "занят")))
+
+    again = swap.FileSwap(tmp_path / "stage", app, app / ".update" / "2" / "swap", preserve=("user",))
+    with pytest.raises(swap.InstallError, match="не откачено"):
+        again.prepare()
+
+    assert (app / ".update" / "2" / "swap" / "old" / "_internal" / "Zapret.exe").read_bytes() == b"old exe"
+
+
+def test_old_journal_does_not_undo_a_reinstall(tmp_path) -> None:
+    app, files = _swap(tmp_path)
+    files.prepare()
+    files.commit()  # журнал остался: «питание пропало» до уборки
+    # Человек переустановил программу установщиком поверх.
+    (app / "_internal" / "Zapret.exe").write_bytes(b"reinstalled exe")
+    os.utime(app / "_internal" / "Zapret.exe", ns=(1, 1))
+
+    swap.recover(app / ".update" / "2" / "swap")
+
+    assert (app / "_internal" / "Zapret.exe").read_bytes() == b"reinstalled exe"
+
+
+def test_program_is_without_its_exe_for_one_rename_only(tmp_path) -> None:
+    app, files = _swap(tmp_path)
+    files.prepare()
+    exe = app / "_internal" / "Zapret.exe"
+    missing_after = []
+    real_move = files._move
+
+    def move(source, destination):
+        real_move(source, destination)
+        missing_after.append(not exe.exists())
+
+    files._move = move
+    files.commit()
+
+    # Раньше exe отсутствовал, пока выносились все заменяемые и лишние файлы.
+    assert sum(missing_after) == 1
+
+
+def test_own_files_in_a_shipped_folder_survive(tmp_path) -> None:
+    app = _tree(tmp_path / "app", {**OLD, "presets/Default.txt": b"builtin", "presets/My own.txt": b"mine"})
+    stage = _tree(tmp_path / "stage", {**NEW, "presets/Default.txt": b"builtin v2"})
+    files = swap.FileSwap(stage, app, app / ".update" / "x", preserve=("user",), keep=("presets",))
+
+    files.prepare()
+    files.commit()
+
+    assert (app / "presets" / "My own.txt").read_bytes() == b"mine"
+    assert (app / "presets" / "Default.txt").read_bytes() == b"builtin v2"
+    assert not (app / "lua" / "gone.lua").exists()  # остальная поставка убирается как прежде

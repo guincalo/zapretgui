@@ -327,6 +327,9 @@ def housekeeping(*, root: Path | None = None, now: float | None = None) -> None:
                 continue
             if errors is not None:
                 log(f"Оборванная установка v{work.name} откачена: программа вернулась к прежней версии", UPDATE_LOG_LEVEL)
+        # Откат не вернул всё — в swap/old единственная копия прежних файлов.
+        if swap.pending(work / "swap"):
+            continue
         try:
             if moment - work.stat().st_mtime >= LEFTOVER_MIN_AGE_SECONDS:
                 shutil.rmtree(work, ignore_errors=True)
