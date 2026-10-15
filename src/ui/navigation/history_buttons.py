@@ -2,8 +2,8 @@
 
 «Назад» — стрелка самой библиотеки в углу бокового меню: здесь она отвязана
 от библиотечного списка страниц и ходит по журналу экранов окна
-(``ui.navigation.history_controller``). «Вперёд» стоит рядом и видна, только
-пока есть куда вернуться после «назад». Долгое нажатие или правая кнопка мыши
+(``ui.navigation.history_controller``). «Вперёд» стоит рядом. Каждая стрелка
+видна, только пока есть куда идти: ненужная скрывается, а не стоит серой. Долгое нажатие или правая кнопка мыши
 показывают список экранов, как в браузере.
 """
 
@@ -121,6 +121,11 @@ class HistoryButtons(QObject):
         self._window = window
         self._navigation = navigation_history
         self.back_button = window.navigationInterface.panel.returnButton
+        # Скрытая стрелка «назад» держит своё место: иначе боковое меню прыгало бы
+        # вверх-вниз каждый раз, когда она появляется и исчезает.
+        policy = self.back_button.sizePolicy()
+        policy.setRetainSizeWhenHidden(True)
+        self.back_button.setSizePolicy(policy)
         self.forward_button = None
         self._take_over_back_button()
         self._build_forward_button()
@@ -173,8 +178,12 @@ class HistoryButtons(QObject):
         return tr_catalog(key, language=language, default=default)
 
     def sync(self) -> None:
-        """Приводит кнопки к журналу: «назад» активна, «вперёд» видна — когда есть куда идти."""
-        self.back_button.setEnabled(self._navigation.can_go_back())
+        """Приводит кнопки к журналу: каждая стрелка видна, только когда есть куда идти.
+        Ненужная кнопка скрывается, а не стоит серой."""
+        can_go_back = self._navigation.can_go_back()
+        self.back_button.setEnabled(can_go_back)
+        if self.back_button.isHidden() == can_go_back:
+            self.back_button.setVisible(can_go_back)
         back_text = self._text("nav.history.back.tooltip", "Назад. Удерживайте, чтобы увидеть историю")
         self.back_button.setToolTip(back_text)
         set_control_accessibility(self.back_button, name=back_text)

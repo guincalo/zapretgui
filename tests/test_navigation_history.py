@@ -355,11 +355,14 @@ class HistoryButtonsTests(unittest.TestCase):
 
     def test_back_button_follows_the_window_history_instead_of_the_library_one(self) -> None:
         window, host, buttons, qrouter = self._window()
-        self.assertFalse(buttons.back_button.isEnabled())
+        # Шагать некуда — стрелки нет совсем, а не серая; её место остаётся за ней.
+        self.assertTrue(buttons.back_button.isHidden())
+        self.assertTrue(buttons.back_button.sizePolicy().retainSizeWhenHidden())
 
         host.user_opens(A)
         host.user_opens(B)
         host.user_opens_inside("card")
+        self.assertFalse(buttons.back_button.isHidden())
         self.assertTrue(buttons.back_button.isEnabled())
 
         with patch.object(type(qrouter), "pop") as library_pop:
@@ -370,6 +373,13 @@ class HistoryButtonsTests(unittest.TestCase):
         # Библиотечный список страниц больше не решает, активна ли стрелка.
         qrouter.emptyChanged.emit(True)
         self.assertTrue(buttons.back_button.isEnabled())
+        self.assertFalse(buttons.back_button.isHidden())
+
+        # Вернулись к первому экрану — стрелка «назад» исчезает, «вперёд» появляется.
+        buttons.back_button.click()
+        buttons.back_button.click()
+        self.assertTrue(buttons.back_button.isHidden())
+        self.assertFalse(buttons.forward_button.isHidden())
 
     def test_back_button_has_one_handler_even_if_the_library_one_is_not_recognized(self) -> None:
         """Сборка Nuitka: отписка по методу не находила подписку библиотеки, у
