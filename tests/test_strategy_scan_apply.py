@@ -230,6 +230,16 @@ class StrategyScanApplyTests(unittest.TestCase):
         self.assertNotIn("--lua-desync=fake:blob=tls_google", feature.saved_text)
         self.assertIn("--hostlist-domains=youtube.com,vimeo.com\n--lua-desync=pass", feature.saved_text)
 
+    def test_profile_written_for_www_target_is_the_same_site(self) -> None:
+        # Старый profile на www.youtube.com и новая цель youtube.com — один сайт: обновить, а не плодить.
+        with TemporaryDirectory() as temp_dir:
+            feature = _PresetFeature("--new\n--name=Общий\n--filter-tcp=443\n--hostlist-domains=vimeo.com\n--lua-desync=pass\n")
+            first = _apply(feature, temp_dir, scan_target="www.youtube.com")
+            second = _apply(feature, temp_dir, scan_target="youtube.com", strategy_args="--lua-desync=multisplit:pos=2")
+
+        self.assertEqual((first.operation, second.operation), ("created", "updated"))
+        self.assertEqual(second.applied_profile, "youtube.com")
+
     def test_apply_to_composite_profile_writes_one_union_payload_and_resolves(self) -> None:
         from core.paths import AppPaths
         from profile.derived_cache import basic_strategy_entries, resolve_strategy

@@ -9,16 +9,23 @@
 
 Вывод читается отдельным потоком всё время работы: если трубу не читать, она
 переполнится, и winws2 зависнет на записи в неё.
+
+Процесс пробы сидит в объекте задания Windows с «завершить при закрытии»:
+если программа упадёт или её закроют посреди подбора, Windows сама
+завершит winws2 пробы, и он не останется резать трафик без хозяина.
 """
 
 from __future__ import annotations
 
+import logging
 import subprocess
 import threading
 import time
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
+
+logger = logging.getLogger(__name__)
 
 READY_MARKER = "windivert initialized"
 # Сколько ждать строки готовности.
@@ -49,6 +56,8 @@ class WinwsSession:
         popen: Callable[..., subprocess.Popen] | None = None,
         clock: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], None] = time.sleep,
+        cancelled: Callable[[], bool] = lambda: False,
+        bind_job: Callable[[subprocess.Popen], object] | None = None,
     ) -> None:
         self._command = list(command)
         self._cwd = cwd
@@ -60,6 +69,9 @@ class WinwsSession:
         self._ready = threading.Event()
         self._reader: threading.Thread | None = None
         self._lock = threading.Lock()
+        self._cancelled = cancelled
+        self._bind_job = bind_job or _bind_kill_on_close_job
+        self._job: object = None
 
     # --- Запуск ------------------------------------------------------------------
 
@@ -73,11 +85,15 @@ class WinwsSession:
         )
         with self._lock:
             self._process = process
+        self._job = self._bind_job(process)
         self._reader = threading.Thread(target=self._read_output, args=(process,), daemon=True)
         self._reader.start()
 
         deadline = started + READY_TIMEOUT
         while self._clock() < deadline:
+            if self._cancelled():
+                # «Стоп»: ждать готовности незачем, процесс остановит вызывающий.
+                return SessionStart(False, output_tail="остановлено")
             if self._ready.is_set():
                 self._sleep(LUA_SETTLE_SECONDS)
                 break
@@ -167,7 +183,35 @@ class WinwsSession:
                 process.stdout.close()
         except OSError:
             pass
+        _close_job(self._job)
+        self._job = None
         return stopped
+
+
+def _bind_kill_on_close_job(process: subprocess.Popen):
+    """Посадить процесс в объект задания «завершить при закрытии». None — не вышло (не Windows)."""
+    from winws_runtime.engine import winapi
+
+    handle = getattr(process, "_handle", None)
+    if not handle or not winapi.is_available():
+        return None
+    job = None
+    try:
+        job = winapi.create_kill_on_close_job()
+        winapi.assign_process_to_job(job, int(handle))
+        return job
+    except Exception:
+        logger.debug("probe winws2 job object failed", exc_info=True)
+        winapi.close_handle(job)
+        return None
+
+
+def _close_job(job) -> None:
+    if not job:
+        return
+    from winws_runtime.engine import winapi
+
+    winapi.close_handle(int(job))
 
 
 def _hidden_popen(command, **kwargs) -> subprocess.Popen:

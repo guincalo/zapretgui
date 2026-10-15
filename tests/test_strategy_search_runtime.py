@@ -74,6 +74,44 @@ class WinwsSessionTests(unittest.TestCase):
         self.assertEqual(start.exit_code, 1)
         self.assertIn("fakee", start.output_tail)
 
+    def test_stop_during_start_does_not_wait_for_readiness(self) -> None:
+        process = FakeProcess([])  # строки готовности нет, процесс жив
+        stop = {"now": False}
+        session = WinwsSession(
+            ["winws2.exe", "@cfg"],
+            cwd=".",
+            popen=lambda *a, **k: process,
+            cancelled=lambda: stop["now"],
+            bind_job=lambda _process: None,
+        )
+        stop["now"] = True
+
+        start = session.start()
+
+        self.assertFalse(start.ok)
+        self.assertEqual(start.exit_code, None)
+        session.stop()
+
+    def test_probe_process_lives_in_a_job_closed_on_stop(self) -> None:
+        from blockcheck.strategy_search import winws_session
+
+        process = FakeProcess([b"windivert initialized\n"])
+        bound = []
+        session = WinwsSession(
+            ["winws2.exe", "@cfg"], cwd=".", popen=lambda *a, **k: process, bind_job=lambda proc: bound.append(proc) or 77
+        )
+        with patch.object(winws_session, "_close_job") as close_job:
+            self.assertTrue(session.start().ok)
+            self.assertEqual(bound, [process])
+            session.stop()
+        close_job.assert_called_once_with(77)
+
+    def test_job_binding_without_windows_is_skipped(self) -> None:
+        from blockcheck.strategy_search import winws_session
+
+        with patch("winws_runtime.engine.winapi.is_available", return_value=False):
+            self.assertIsNone(winws_session._bind_kill_on_close_job(SimpleNamespace(_handle=5)))
+
     def test_output_is_merged_and_hidden(self) -> None:
         captured = {}
 
@@ -194,7 +232,7 @@ class RealEnvironmentTests(unittest.TestCase):
         with (
             patch("winws_runtime.runtime.system_ops.stop_own_winws_processes_runtime") as stop_own,
             patch.object(env, "strategy_pause_seconds", return_value=0.0),
-            patch.object(environment.time, "sleep") as sleep,
+            patch.object(env._cancel, "sleep") as sleep,
         ):
             env.recover_after_crash()
         stop_own.assert_called_once_with()
@@ -209,7 +247,7 @@ class RealEnvironmentTests(unittest.TestCase):
             patch.object(
                 env, "strategy_pause_seconds", return_value=environment.KASPERSKY_STRATEGY_COOLDOWN_SECONDS
             ),
-            patch.object(environment.time, "sleep") as sleep,
+            patch.object(env._cancel, "sleep") as sleep,
         ):
             env.recover_after_crash()
         sleep.assert_called_once_with(environment.KASPERSKY_STRATEGY_COOLDOWN_SECONDS)
@@ -232,3 +270,16 @@ class RealEnvironmentTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CancellableWaitTests(unittest.TestCase):
+    def test_stop_breaks_environment_pause_at_once(self) -> None:
+        import time
+
+        from blockcheck.strategy_search.environment import RealEnvironment
+
+        env = RealEnvironment(shutdown_sync=lambda **_kw: SimpleNamespace(still_running=False))
+        env.cancel_probes()
+        started = time.monotonic()
+        env.sleep(5.0)
+        self.assertLess(time.monotonic() - started, 0.5)

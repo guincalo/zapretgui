@@ -19,6 +19,15 @@ def fail_start_preparation(runtime_owner, message: str) -> None:
     runtime_owner._mark_runtime_failed(text)
 
 
+def _strategy_scan_owns_winws() -> bool:
+    try:
+        from winws_runtime.runtime.scan_guard import is_external_winws_scan_active
+
+        return bool(is_external_winws_scan_active())
+    except Exception:
+        return False
+
+
 def prepare_start_preflight(
     runtime_owner,
     *,
@@ -33,6 +42,17 @@ def prepare_start_preflight(
             return False
     except RuntimeError:
         runtime_owner._dpi_start_thread = None
+
+    if _strategy_scan_owns_winws():
+        # Подбор сам держит winws2 пробы: второй winws2 сорвал бы и подбор, и
+        # запуск, а конец подбора погасил бы новый процесс вместе со своим.
+        # Главная кнопка «Запустить» сначала останавливает подбор и запускает
+        # Zapret уже после этого флага; сюда попадают обходные пути.
+        text = "Идёт подбор стратегии. Zapret запустится сам, когда подбор закончится, — или остановите подбор."
+        log(f"Запуск DPI отложен: {text}", "WARNING")
+        set_runtime_owner_status(runtime_owner, text)
+        show_launch_error_top(runtime_owner, text)
+        return False
 
     if not skip_conflict_prompt and not handle_conflicting_processes_before_start(
         runtime_owner,

@@ -5,7 +5,7 @@ from blockcheck.strategy_search.probe_profile import PROTOCOL_STUN_VOICE, PROTOC
 from blockcheck.strategy_scan_state import StrategyApplyResult
 from blockcheck.strategy_scan_targeting import (
     default_target_for_protocol,
-    normalize_target_domain,
+    profile_domain,
 )
 
 
@@ -38,11 +38,11 @@ def _is_targets_own_profile(profile, target: str) -> bool:
     if match is None or getattr(match, "hostlist_lines", None):
         return False
     names = {
-        normalize_target_domain(value) or ""
+        profile_domain(value) or ""
         for line in getattr(match, "hostlist_domains_lines", ()) or ()
         for value in _option_values(line)
     }
-    wanted = normalize_target_domain(target) or ""
+    wanted = profile_domain(target) or ""
     return bool(wanted) and names == {wanted} and _accepts_port(getattr(match, "filter_lines", ()), 443)
 
 
@@ -349,7 +349,7 @@ def apply_strategy(
     elif scan_protocol == PROTOCOL_UDP_GAMES:
         applied_profile = f"игры UDP, проверка {target}"
     else:
-        applied_profile = normalize_target_domain(target) or target
+        applied_profile = profile_domain(target) or target
 
     selected_file_name, operation, blob_warnings = apply_profile_to_selected_preset(
         profile_feature=profile_feature,

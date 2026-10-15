@@ -145,6 +145,7 @@ class BlockcheckPage(BasePage):
         open_dns_settings=None,
         ensure_zapret_for_strategy=None,
         start_zapret=None,
+        zapret_is_running=None,
     ):
         super().__init__(
             title=tr_catalog("page.blockcheck.title", default="BlockCheck"),
@@ -164,6 +165,7 @@ class BlockcheckPage(BasePage):
         self._create_geo_sites_worker = create_geo_sites_worker
         self._open_dns_settings = open_dns_settings
         self._ensure_zapret_for_strategy = ensure_zapret_for_strategy
+        self._zapret_is_running = zapret_is_running
         self._start_zapret = start_zapret
         self._last_report: dict | None = None
         self._report_lines: list[str] = []
@@ -584,6 +586,7 @@ class BlockcheckPage(BasePage):
                 open_hosts_editor=lambda: self._on_problem_action("hosts", ""),
                 open_dns_settings=lambda: self._on_problem_action("dns", ""),
                 ensure_zapret_for_strategy=self._ensure_zapret_for_strategy,
+                zapret_is_running=self._zapret_is_running,
             )
             self._strategy_tab_page.report_requested.connect(self._open_log_report)
             self._strategy_tab_page.setVisible(False)

@@ -493,6 +493,15 @@ class WinApiBindingTests(unittest.TestCase):
         self.assertEqual(ctypes.sizeof(winapi.SERVICE_STATUS), 28)
         self.assertEqual(ctypes.sizeof(winapi.QUERY_SERVICE_CONFIGW), 64)
 
+    def test_job_object_layout_and_bindings(self) -> None:
+        tables = dict(winapi.signature_tables())
+        self.assertEqual(tables["kernel32"]["AssignProcessToJobObject"], (winapi.BOOL, [winapi.HANDLE, winapi.HANDLE]))
+        self.assertEqual(tables["kernel32"]["CreateJobObjectW"][0], winapi.HANDLE)
+        self.assertEqual(winapi.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, 0x2000)
+        if ctypes.sizeof(ctypes.c_size_t) == 8:
+            # Размер JOBOBJECT_EXTENDED_LIMIT_INFORMATION в 64-битной Windows.
+            self.assertEqual(ctypes.sizeof(winapi.JOBOBJECT_EXTENDED_LIMIT_INFORMATION), 144)
+
     def test_closing_handles_never_raises(self) -> None:
         winapi.close_handle(None)
         winapi.close_handle(0)

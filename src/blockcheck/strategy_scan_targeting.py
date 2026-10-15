@@ -123,6 +123,20 @@ def normalize_target_domain(value: str) -> str:
         return raw.lower()
 
 
+def profile_domain(value: str) -> str:
+    """Имя для ``--hostlist-domains`` профиля сайта: хост без ``www.``.
+
+    ``--hostlist-domains`` покрывает и поддомены, поэтому профиль на
+    ``youtube.com`` действует на ``www.``, ``m.`` и ``music.``, а профиль на
+    ``googlevideo.com`` — на любой видеосервер ``rr…googlevideo.com``.
+    Профиль на ``www.googlevideo.com`` не поймал бы ни одного видеосервера.
+    """
+    host = normalize_target_domain(value)
+    while host.startswith("www.") and host.count(".") >= 2:
+        host = host[4:]
+    return host
+
+
 def normalize_target_input(value: str, scan_protocol: str) -> str:
     protocol = (scan_protocol or "").strip().lower()
     if protocol in {PROTOCOL_STUN_VOICE, PROTOCOL_UDP_GAMES}:

@@ -5,7 +5,12 @@ Tests strategies one by one through winws2 + HTTPS probe.
 """
 
 from blockcheck.strategy_scan_page_plans import best_working_index
-from blockcheck.strategy_scan_state import STRATEGY_ZAPRET_FAILED, STRATEGY_ZAPRET_SCAN_RUNNING
+from blockcheck.strategy_scan_state import (
+    STRATEGY_ZAPRET_FAILED,
+    STRATEGY_ZAPRET_RESTARTING,
+    STRATEGY_ZAPRET_SCAN_RUNNING,
+    STRATEGY_ZAPRET_STARTED,
+)
 from blockcheck.strategy_search.probe_profile import PROTOCOL_TCP_HTTPS, PROTOCOL_UDP_GAMES
 import logging
 from collections import deque
@@ -84,10 +89,15 @@ class StrategyScanPage(BasePage):
         open_hosts_editor=None,
         open_dns_settings=None,
         ensure_zapret_for_strategy=None,
+        zapret_is_running=None,
     ):
         self._embedded = bool(embedded)
         # После «Применить»: запустить или перезапустить Zapret, чтобы стратегия заработала сразу.
         self._ensure_zapret_for_strategy = ensure_zapret_for_strategy
+        # …и, когда он запустится, проверить сайт уже через пресет пользователя.
+        self._zapret_is_running = zapret_is_running
+        self._apply_check_worker = None
+        self._apply_check_host = ""
         super().__init__(
             title=tr_catalog("page.blockcheck_public.title", default="Подбор стратегии"),
             subtitle=tr_catalog("page.blockcheck_public.subtitle",
@@ -1164,6 +1174,7 @@ class StrategyScanPage(BasePage):
             "scan_target": str(getattr(result, "target", "") or ""),
             "scan_protocol": str(getattr(result, "scan_protocol", "") or ""),
             "apply_lines": tuple(getattr(result, "apply_lines", ()) or ()),
+            "probe_host": str((getattr(result, "raw_data", None) or {}).get("probe_host") or ""),
         }
         state = self._strategy_apply_state_obj()
         if state.is_busy():
@@ -1173,6 +1184,11 @@ class StrategyScanPage(BasePage):
         self._start_strategy_apply_worker(payload)
 
     def _start_strategy_apply_worker(self, payload: dict) -> None:
+        if str(payload.get("scan_protocol") or "") == PROTOCOL_TCP_HTTPS:
+            self._apply_check_host = str(payload.get("probe_host") or payload.get("scan_target") or "")
+        else:
+            self._apply_check_host = ""
+
         def worker_factory(request_id: int):
             return self.create_strategy_apply_worker(
                 request_id,
@@ -1201,7 +1217,8 @@ class StrategyScanPage(BasePage):
             return
         if self._strategy_apply_state_obj().has_pending():
             return
-        message_plan = self._blockcheck.build_apply_success_plan(result, zapret=self._zapret_after_apply())
+        zapret = self._zapret_after_apply()
+        message_plan = self._blockcheck.build_apply_success_plan(result, zapret=zapret)
 
         show = InfoBarHelper.warning if message_plan.kind == "warning" else InfoBarHelper.success
         show(
@@ -1209,6 +1226,40 @@ class StrategyScanPage(BasePage):
             tr_catalog(message_plan.title_key, default=message_plan.title_default),
             message_plan.body_text,
         )
+        if zapret in (STRATEGY_ZAPRET_STARTED, STRATEGY_ZAPRET_RESTARTING):
+            self._start_apply_check(restarting=zapret == STRATEGY_ZAPRET_RESTARTING)
+
+    def _start_apply_check(self, *, restarting: bool) -> None:
+        """Когда Zapret запустится, открыть сайт через пресет и сказать, как вышло."""
+        host = self._apply_check_host
+        if not host or self._zapret_is_running is None or self._cleanup_in_progress:
+            return
+        from blockcheck.strategy_apply_check import StrategyApplyCheckWorker
+
+        previous = self._apply_check_worker
+        if previous is not None:
+            previous.cancel()
+        worker = StrategyApplyCheckWorker(host, is_running=self._zapret_is_running, restarting=restarting, parent=self)
+        worker.completed.connect(self._on_apply_check_finished)
+        worker.finished.connect(worker.deleteLater)
+        self._apply_check_worker = worker
+        self._on_log(f"Проверяю {host} через ваш пресет, когда Zapret запустится...")
+        worker.start()
+
+    def _on_apply_check_finished(self, host: str, code: str, text: str) -> None:
+        worker = self.sender()
+        if worker is not self._apply_check_worker or self._cleanup_in_progress:
+            return  # итог старой проверки: после неё уже было новое «Применить»
+        self._apply_check_worker = None
+        from blockcheck.strategy_apply_check import apply_check_message
+
+        self._on_log(f"Проверка через пресет: {host} — {code}{f' ({text})' if text else ''}")
+        message = apply_check_message(host, code, text)
+        if message is None:
+            return
+        kind, title, body = message
+        show = InfoBarHelper.warning if kind == "warning" else InfoBarHelper.success
+        show(self.window(), title, body)
 
     def _zapret_after_apply(self) -> str:
         """Запускает Zapret для применённой стратегии; во время подбора его не трогает."""
@@ -1512,6 +1563,9 @@ class StrategyScanPage(BasePage):
 
     def cleanup(self) -> None:
         self._cleanup_in_progress = True
+        if self._apply_check_worker is not None:
+            self._apply_check_worker.cancel()
+            self._apply_check_worker = None
         self._geo_sites_runtime.stop(
             blocking=False,
             warning_prefix="strategy scan geo sites worker",

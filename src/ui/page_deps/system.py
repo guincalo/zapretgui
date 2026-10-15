@@ -354,6 +354,8 @@ def build_blockcheck_page_kwargs(
         "create_strategy_scan_worker": _create_strategy_scan_worker,
         "create_geo_sites_worker": _create_geo_sites_worker,
         "ensure_zapret_for_strategy": _ensure_zapret_for_strategy,
+        # После «Применить» подбор ждёт запуска Zapret, чтобы проверить сайт через пресет.
+        "zapret_is_running": runtime_feature.is_running,
         # Кнопка «Запустить Zapret» у проблем итога запускает выбранный способ запуска.
         "start_zapret": runtime_feature.start,
         # «Поймали провайдера на подмене DNS» → кнопка ведёт на «Настройка DNS».

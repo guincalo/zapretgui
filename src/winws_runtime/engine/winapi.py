@@ -105,6 +105,48 @@ class QUERY_SERVICE_CONFIGW(ctypes.Structure):
     ]
 
 
+# Объект задания: процессы в нём завершаются, когда закрыт последний хэндл задания —
+# в том числе когда процесс программы упал или был убит.
+JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
+JOB_OBJECT_EXTENDED_LIMIT_INFORMATION_CLASS = 9
+
+
+class JOBOBJECT_BASIC_LIMIT_INFORMATION(ctypes.Structure):
+    _fields_ = [
+        ("PerProcessUserTimeLimit", ctypes.c_int64),
+        ("PerJobUserTimeLimit", ctypes.c_int64),
+        ("LimitFlags", DWORD),
+        ("MinimumWorkingSetSize", ctypes.c_size_t),
+        ("MaximumWorkingSetSize", ctypes.c_size_t),
+        ("ActiveProcessLimit", DWORD),
+        ("Affinity", ctypes.c_size_t),
+        ("PriorityClass", DWORD),
+        ("SchedulingClass", DWORD),
+    ]
+
+
+class IO_COUNTERS(ctypes.Structure):
+    _fields_ = [
+        ("ReadOperationCount", ctypes.c_uint64),
+        ("WriteOperationCount", ctypes.c_uint64),
+        ("OtherOperationCount", ctypes.c_uint64),
+        ("ReadTransferCount", ctypes.c_uint64),
+        ("WriteTransferCount", ctypes.c_uint64),
+        ("OtherTransferCount", ctypes.c_uint64),
+    ]
+
+
+class JOBOBJECT_EXTENDED_LIMIT_INFORMATION(ctypes.Structure):
+    _fields_ = [
+        ("BasicLimitInformation", JOBOBJECT_BASIC_LIMIT_INFORMATION),
+        ("IoInfo", IO_COUNTERS),
+        ("ProcessMemoryLimit", ctypes.c_size_t),
+        ("JobMemoryLimit", ctypes.c_size_t),
+        ("PeakProcessMemoryUsed", ctypes.c_size_t),
+        ("PeakJobMemoryUsed", ctypes.c_size_t),
+    ]
+
+
 class WinApiError(OSError):
     """Отказ вызова WinAPI с кодом ошибки Windows."""
 
@@ -135,6 +177,9 @@ _KERNEL32_SIGNATURES: dict[str, tuple[object, list]] = {
     "WaitForSingleObject": (DWORD, [HANDLE, DWORD]),
     "WaitForMultipleObjects": (DWORD, [DWORD, ctypes.POINTER(HANDLE), BOOL, DWORD]),
     "QueryFullProcessImageNameW": (BOOL, [HANDLE, DWORD, LPWSTR, ctypes.POINTER(DWORD)]),
+    "CreateJobObjectW": (HANDLE, [ctypes.c_void_p, LPCWSTR]),
+    "SetInformationJobObject": (BOOL, [HANDLE, ctypes.c_int32, ctypes.c_void_p, DWORD]),
+    "AssignProcessToJobObject": (BOOL, [HANDLE, HANDLE]),
 }
 
 _ADVAPI32_SIGNATURES: dict[str, tuple[object, list]] = {
@@ -204,6 +249,39 @@ def close_handle(handle: Optional[int]) -> None:
         _kernel32.CloseHandle(int(handle))
     except Exception:
         pass
+
+
+def create_kill_on_close_job() -> int:
+    """Объект задания, который завершает свои процессы при закрытии хэндла.
+
+    Хэндл держит процесс программы: упадёт программа — Windows закроет хэндл
+    и сама завершит процессы задания. Бросает WinApiError.
+    """
+    _require()
+    ctypes.set_last_error(0)
+    job = _kernel32.CreateJobObjectW(None, None)
+    if not job:
+        raise _fail("CreateJobObjectW")
+    info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION()
+    info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+    ctypes.set_last_error(0)
+    if not _kernel32.SetInformationJobObject(
+        job,
+        JOB_OBJECT_EXTENDED_LIMIT_INFORMATION_CLASS,
+        ctypes.byref(info),
+        ctypes.sizeof(info),
+    ):
+        error = _fail("SetInformationJobObject")
+        close_handle(job)
+        raise error
+    return int(job)
+
+
+def assign_process_to_job(job: int, process_handle: int) -> None:
+    _require()
+    ctypes.set_last_error(0)
+    if not _kernel32.AssignProcessToJobObject(int(job), int(process_handle)):
+        raise _fail("AssignProcessToJobObject")
 
 
 def terminate_process(handle: int, exit_code: int) -> None:

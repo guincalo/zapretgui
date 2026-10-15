@@ -65,6 +65,9 @@ PASS_STRATEGY_ARGS = "--lua-desync=pass"
 CRASH_RETRIES = 2
 # Сколько соседей открывшей цель стратегии проверить сразу следом.
 SIBLINGS_AFTER_SUCCESS = 3
+# История пишется по ходу, каждые столько итогов: упадёт программа посреди
+# долгого подбора — проверенное не пропадёт.
+HISTORY_FLUSH_EVERY = 10
 # Сколько ждать возвращения интернета, прежде чем остановить подбор.
 NETWORK_WAIT_SECONDS = 30.0
 NETWORK_POLL_SECONDS = 3.0
@@ -381,6 +384,8 @@ class StrategySearch:
                         failed_ids.append(candidate.strategy_id)
                 if run.verdict in (rules.VERDICT_WORKING, rules.VERDICT_UNSTABLE) and not self._target.forced:
                     batch = self._bring_siblings(candidate, ordered, batch, queue, seen)
+                if len(confirmed_ids) + len(failed_ids) >= HISTORY_FLUSH_EVERY:
+                    self._save_history(key, confirmed_ids, failed_ids)
                 index += 1
                 pause = self._env.strategy_pause_seconds()
                 if pause > 0 and queue:
@@ -400,13 +405,20 @@ class StrategySearch:
                 self._env.post_cleanup()
             except Exception:
                 logger.exception("strategy search post-cleanup failed")
-            try:
-                # Если цель открывалась без обхода, «работают» все стратегии —
-                # такой подбор ничего не говорит о них и в историю не идёт.
-                if not self._target.forced:
-                    self._env.record_history(key, confirmed=confirmed_ids, failed=failed_ids)
-            except Exception:
-                logger.exception("strategy search history save failed")
+            self._save_history(key, confirmed_ids, failed_ids)
+
+    def _save_history(self, key: str, confirmed_ids: list[str], failed_ids: list[str]) -> None:
+        """Дописать накопленное в историю и начать копить заново."""
+        # Если цель открывалась без обхода, «работают» все стратегии —
+        # такой подбор ничего не говорит о них и в историю не идёт.
+        if self._target.forced or not (confirmed_ids or failed_ids):
+            return
+        try:
+            self._env.record_history(key, confirmed=list(confirmed_ids), failed=list(failed_ids))
+        except Exception:
+            logger.exception("strategy search history save failed")
+        confirmed_ids.clear()
+        failed_ids.clear()
 
     def _bring_siblings(self, winner, ordered, batch, queue, seen) -> list[Candidate]:
         """Соседей открывшей цель стратегии — в начало очереди."""
@@ -710,10 +722,12 @@ class StrategySearch:
         games_paths: list[str] = []
         if self._protocol == PROTOCOL_UDP_GAMES:
             games_paths = self._env.games_ipset_paths(self._request.udp_games_scope)
+        from blockcheck.strategy_scan_targeting import profile_domain
+
         return build_probe_profile(
             self._protocol,
             strategy_args=strategy_args,
-            match_domain=self._request.target,
+            match_domain=profile_domain(self._request.target) if self._protocol == PROTOCOL_TCP_HTTPS else self._request.target,
             games_ipset_paths=games_paths,
             games_addresses=self._target.games_addresses,
             games_ports=self._target.games_ports,
@@ -768,6 +782,9 @@ class StrategySearch:
                 return _StrategyRun(rules.VERDICT_CANCELLED)
             session = self._env.start_session(config_text)
             start = session.start()
+            if self.cancelled:
+                session.stop()
+                return _StrategyRun(rules.VERDICT_CANCELLED)
             if not getattr(start, "ok", False):
                 crash_reason = self._crash_text(start)
                 self._events.log(f"  winws2 не запустился: {crash_reason}")
@@ -860,7 +877,12 @@ class StrategySearch:
             attempts_ok=len(passed),
             attempts_total=len(run.attempts),
             apply_lines=tuple(self._profile(candidate.args).apply_lines()) if success else (),
-            raw_data={"forced": self._target.forced, "volume": run.volume},
+            raw_data={
+                "forced": self._target.forced,
+                "volume": run.volume,
+                # Какой хост открывали: у googlevideo.com это видеосервер rr…, а не сама цель.
+                "probe_host": self._target.host,
+            },
         )
 
     def _log_result(self, index: int, total: int, candidate: Candidate, run: _StrategyRun) -> None:

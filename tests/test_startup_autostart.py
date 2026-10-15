@@ -495,3 +495,33 @@ class StartupAutostartTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class StrategyScanStartGuardTests(unittest.TestCase):
+    """Пока подбор держит winws2 пробы, обходной запуск Zapret не создаёт второй winws2."""
+
+    def test_start_is_refused_while_strategy_scan_owns_winws(self) -> None:
+        from winws_runtime.runtime import start_flow
+        from winws_runtime.runtime.scan_guard import mark_external_winws_scan_active
+
+        owner = SimpleNamespace(_dpi_start_thread=None)
+        mark_external_winws_scan_active(True)
+        try:
+            with (
+                patch.object(start_flow, "set_runtime_owner_status") as status,
+                patch.object(start_flow, "show_launch_error_top") as error_top,
+                patch.object(start_flow, "handle_conflicting_processes_before_start") as conflicts,
+            ):
+                self.assertFalse(start_flow.prepare_start_preflight(owner))
+        finally:
+            mark_external_winws_scan_active(False)
+        self.assertIn("подбор", status.call_args.args[1])
+        error_top.assert_called_once()
+        conflicts.assert_not_called()
+
+    def test_start_goes_on_after_the_scan_released_winws(self) -> None:
+        from winws_runtime.runtime import start_flow
+
+        owner = SimpleNamespace(_dpi_start_thread=None)
+        with patch.object(start_flow, "handle_conflicting_processes_before_start", return_value=True):
+            self.assertTrue(start_flow.prepare_start_preflight(owner))

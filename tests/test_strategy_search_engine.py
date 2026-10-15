@@ -95,6 +95,7 @@ class FakeEnv:
         self.slept = 0.0
         self.hellos: list = []
         self.volume_calls: list = []
+        self.history_saves: list = []
         self.clock = 0.0
         self.control = list(self.control or [])
 
@@ -107,6 +108,7 @@ class FakeEnv:
 
     def record_history(self, key, *, confirmed, failed):
         self.history_saved = (key, list(confirmed), list(failed))
+        self.history_saves.append(self.history_saved)
 
     def blob_lines(self, strategy_args):
         return []
@@ -625,6 +627,16 @@ class BatchTests(unittest.TestCase):
         self.assertEqual(set(seen_hosts), {"rr1---sn-abc.googlevideo.com"})
         self.assertIn("--hostlist-domains=googlevideo.com", events.results[0].apply_lines)
 
+    def test_www_target_profile_covers_the_whole_site(self) -> None:
+        # Профиль на www.googlevideo.com не ловил ни одного видеосервера rr…googlevideo.com.
+        env = FakeEnv(network=blocked_unless("good"), candidates=[cand("good")])
+        _report, events = run(env, target="www.googlevideo.com", probe_host="rr1---sn-abc.googlevideo.com")
+
+        self.assertIn("--hostlist-domains=googlevideo.com", events.results[0].apply_lines)
+        env = FakeEnv(network=blocked_unless("good"), candidates=[cand("good")])
+        _report, events = run(env, target="https://www.youtube.com/")
+        self.assertIn("--hostlist-domains=youtube.com", events.results[0].apply_lines)
+
 
 class UdpTests(unittest.TestCase):
     def test_games_success_ignores_probes_open_without_bypass(self) -> None:
@@ -901,3 +913,36 @@ class FamilyOrderTests(unittest.TestCase):
         report, _events = run(env)
 
         self.assertEqual(report.total_tested, 35)
+
+
+class HistoryProgressTests(unittest.TestCase):
+    def test_history_is_saved_along_the_way(self) -> None:
+        env = FakeEnv(network=blocked_unless(), candidates=[cand(f"x{i}") for i in range(25)])
+        run(env)
+
+        self.assertEqual([len(saved[2]) for saved in env.history_saves], [10, 10, 5])
+
+
+class StopDuringStartTests(unittest.TestCase):
+    def test_stop_while_winws2_starts_is_not_a_crash(self) -> None:
+        events = FakeEvents()
+        env = FakeEnv(network=blocked_unless(), candidates=[cand("a"), cand("b")])
+        original = env.start_session
+
+        def start_session(config_text):
+            session = original(config_text)
+            if session.strategy == "a":
+                def start():
+                    events.cancel_after_results = 0  # «Стоп» нажали, пока winws2 запускался
+                    return SessionStart(False, output_tail="остановлено")
+
+                session.start = start
+            return session
+
+        env.start_session = start_session
+        report, _events = run(env, events)
+
+        self.assertTrue(report.cancelled)
+        self.assertEqual(events.results, [])
+        self.assertEqual(env.recovered, 0)
+        self.assertEqual(env.history_saves, [])

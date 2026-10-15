@@ -201,7 +201,10 @@ class RealEnvironment:
         path = os.path.join(self._root, PROBE_CONFIG_NAME)
         with open(path, "w", encoding="utf-8") as handle:
             handle.write(config_text)
-        return _ManagedSession(WinwsSession([exe, f"@{path}"], cwd=self._root), self)
+        return _ManagedSession(
+            WinwsSession([exe, f"@{path}"], cwd=self._root, cancelled=lambda: self._cancel.cancelled),
+            self,
+        )
 
     def _on_stop_failed(self) -> None:
         self._log("  winws2 не завершился — принудительная остановка")
@@ -222,7 +225,7 @@ class RealEnvironment:
         # разрядка между запусками, чтобы фильтры антивируса успели отработать.
         pause = self.strategy_pause_seconds()
         if pause > 0:
-            time.sleep(pause)
+            self._cancel.sleep(pause)
         self._needs_readiness_check = True
 
     def _ensure_windivert_ready(self) -> None:
@@ -295,7 +298,8 @@ class RealEnvironment:
         return time.time()
 
     def sleep(self, seconds: float) -> None:
-        time.sleep(max(0.0, float(seconds)))
+        # «Стоп» обрывает паузу сразу: ожидание сети и пауза при Kaspersky не держат подбор.
+        self._cancel.sleep(seconds)
 
 
 class _ManagedSession:
