@@ -174,7 +174,7 @@ class UpdateInstallService(QObject):
         if error:
             self.failed.emit(error)
             return
-        log("Установщик запущен; приложение закрывается штатно", "🔁 UPDATE")
+        log("Установка новой версии запущена; приложение закрывается штатно", "🔁 UPDATE")
         self.launched.emit()
         # Без прощального экрана: человек видит окно обновления, а не «до встречи».
         QTimer.singleShot(0, lambda: self._runtime_actions.request_exit(stop_dpi=False, farewell=False))

@@ -121,6 +121,17 @@ def removal_list(new, root: Path, installed) -> list[str]:
     return sorted(path for path in owned if path.casefold() not in wanted)
 
 
+FAILURE_FILE_NAME = "failure.txt"
+
+
+def _previous_failure(work: Path) -> str:
+    """Код неудачи прошлой установки этой версии по файлам или пусто."""
+    try:
+        return (work / FAILURE_FILE_NAME).read_text(encoding="utf-8").strip() or "неизвестно"
+    except OSError:
+        return ""
+
+
 def plan_summary(planned, manifest) -> str:
     """Строка журнала: сколько качать и чем — по ней видно, сработали ли заплатки."""
     kinds: dict[str, int] = {}
@@ -155,6 +166,14 @@ def prepare(
         raise FileUpdateUnavailable("папка программы неизвестна")
     manifest = signed.manifest
     work = root / UPDATE_DIR_NAME / manifest.version
+    failed = _previous_failure(work)
+    if failed:
+        # Новая версия уже пробовала встать по файлам и откатилась (чаще
+        # всего файл программы держит другой процесс — код «lock»). Второй
+        # раз тот же путь упрётся в то же; установщик умеет закрыть
+        # мешающее и показать, кто держит папку. Через сутки уборка уберёт
+        # рабочую папку, и путь по файлам снова будет пробоваться.
+        raise FileUpdateUnavailable(f"прошлая установка v{manifest.version} по файлам не удалась ({failed})")
     on_stage("Сравнение с установленной версией…")
     try:
         planned = plan.make_plan(manifest, root, hashes=plan.HashCache(root / UPDATE_DIR_NAME / "hashes.json"))
@@ -193,7 +212,7 @@ def prepare(
         restart_args=["--tray"] if start_in_tray else [],
         preserve=list(PRESERVE),
         remove=removal_list(manifest, root, installed_manifest(root, channel=channel)),
-        failure_file=str(work / "failure.txt"),
+        failure_file=str(work / FAILURE_FILE_NAME),
         error_log=str(work / "error.log"),
     )
     plan_path = work / "plan.json"

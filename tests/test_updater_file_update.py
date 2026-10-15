@@ -283,3 +283,17 @@ def test_plan_summary_names_patch_kinds() -> None:
         "Обновление по файлам до v1.0.0.2: скачать 5 байт (файлов 2, заплаток 1 (bsdiff 1), "
         "без изменений 1), установщик целиком — 40 байт"
     )
+
+
+def test_version_that_failed_by_files_goes_to_the_installer_next_time(tmp_path) -> None:
+    from updater.release.signed import SignedRelease
+
+    root = tmp_path / "Zapret"
+    work = root / file_update.UPDATE_DIR_NAME / "1.0.0.2"
+    work.mkdir(parents=True)
+    (work / file_update.FAILURE_FILE_NAME).write_text("lock", encoding="utf-8")
+    listed = manifest.parse({"schema": 1, "product": "zapret-gui", "channel": "dev", "version": "1.0.0.2", "created": 1, "key": "k",
+                             "files": [{"path": "a", "size": 1, "sha256": "a" * 64, "zsize": 1}]})
+
+    with patch.object(file_update, "install_root", return_value=root), pytest.raises(file_update.FileUpdateUnavailable, match="lock"):
+        file_update.prepare(SignedRelease(listed, b"{}", b"sig"), channel="dev", current_version="1.0.0.1", start_in_tray=False)
