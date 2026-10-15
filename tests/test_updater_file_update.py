@@ -260,3 +260,26 @@ def test_prepare_builds_the_new_version_tree_from_the_store(tmp_path) -> None:
     assert not (tree / "user").exists()
     assert plan.restart_args == ["--tray"] and plan.app_exe == "_internal/Zapret.exe"
     assert "user" in plan.preserve
+
+
+def test_plan_summary_names_patch_kinds() -> None:
+    from types import SimpleNamespace
+
+    from updater.install import file_update
+    from zapret_update import manifest, plan
+
+    exe = manifest.FileEntry("_internal/Zapret.exe", 80, "a" * 64, 20)
+    lua = manifest.FileEntry("lua/a.lua", 5, "b" * 64, 3)
+    planned = plan.UpdatePlan(
+        version="1.0.0.2",
+        keep=[manifest.FileEntry("x", 1, "c" * 64, 1)],
+        want=[plan.Want(exe, manifest.PatchEntry("d" * 64, "a" * 64, 2, "bsdiff")), plan.Want(lua)],
+    )
+    text = file_update.plan_summary(
+        planned, SimpleNamespace(version="1.0.0.2", installer=SimpleNamespace(size=40))
+    )
+
+    assert text == (
+        "Обновление по файлам до v1.0.0.2: скачать 5 байт (файлов 2, заплаток 1 (bsdiff 1), "
+        "без изменений 1), установщик целиком — 40 байт"
+    )

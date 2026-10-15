@@ -121,6 +121,22 @@ def removal_list(new, root: Path, installed) -> list[str]:
     return sorted(path for path in owned if path.casefold() not in wanted)
 
 
+def plan_summary(planned, manifest) -> str:
+    """Строка журнала: сколько качать и чем — по ней видно, сработали ли заплатки."""
+    kinds: dict[str, int] = {}
+    for want in planned.want:
+        if want.patch is not None:
+            kinds[want.patch.kind] = kinds.get(want.patch.kind, 0) + 1
+    patches = sum(kinds.values())
+    detail = f" ({', '.join(f'{kind} {count}' for kind, count in sorted(kinds.items()))})" if kinds else ""
+    return (
+        f"Обновление по файлам до v{manifest.version}: скачать {planned.download_size} байт "
+        f"(файлов {len(planned.want)}, заплаток {patches}{detail}, "
+        f"без изменений {len(planned.keep)}), установщик целиком — "
+        f"{manifest.installer.size if manifest.installer else 0} байт"
+    )
+
+
 def prepare(
     signed: SignedRelease,
     *,
@@ -144,14 +160,7 @@ def prepare(
         planned = plan.make_plan(manifest, root, hashes=plan.HashCache(root / UPDATE_DIR_NAME / "hashes.json"))
     except plan.PlanError as exc:
         raise FileUpdateUnavailable(str(exc)) from None
-    total = planned.download_size
-    log(
-        f"Обновление по файлам до v{manifest.version}: скачать {total} байт "
-        f"(файлов {len(planned.want)}, заплаток {sum(1 for w in planned.want if w.patch)}, "
-        f"без изменений {len(planned.keep)}), установщик целиком — "
-        f"{manifest.installer.size if manifest.installer else 0} байт",
-        UPDATE_LOG_LEVEL,
-    )
+    log(plan_summary(planned, manifest), UPDATE_LOG_LEVEL)
     on_stage("Скачивание изменений…")
     ready = fetch.fetch_plan(
         planned,
@@ -278,6 +287,7 @@ __all__ = [
     "installed_manifest",
     "is_available",
     "launch",
+    "plan_summary",
     "prepare",
     "removal_list",
     "store_sources",
