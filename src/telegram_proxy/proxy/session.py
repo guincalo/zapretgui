@@ -13,7 +13,12 @@
    нет, клиенту не уходит ни одного байта, поэтому молчащий маршрут можно
    незаметно сменить на следующий: Desktop не видит сбоев и не выключает
    MTProxy как «неправильно настроенный».
-5. После первого ответа — обычная пересылка в обе стороны с перекодировкой
+5. Пока релей не ответил ни разу с запуска прокси или сбоит, через
+   FRONT_RACE_DELAY рядом с ним открывается фронт Cloudflare, и побеждает тот,
+   кто ответит первым (ZaStoGram, «гнать фронт наперегонки с релеем»).
+   Работающий релей успевает раньше, и фронт не открывается вовсе. Релей,
+   проигравший без TCP, считается отказавшим и вскоре подавляется.
+6. После первого ответа — обычная пересылка в обе стороны с перекодировкой
    пакетов сервера в формат клиента.
 """
 
@@ -22,7 +27,7 @@ from __future__ import annotations
 import asyncio
 import ssl
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Protocol
 
 from telegram_proxy.proxy import ws as ws_transport
@@ -59,6 +64,13 @@ WATCHDOG_SECONDS = 5.5
 MEDIA_WATCHDOG_SECONDS = 20.0
 FIRST_PACKET_TIMEOUT = 15.0
 DIRECT_CONNECT_TIMEOUT = 3.0
+# Через сколько после релея, ещё не доказавшего себя, к нему в гонку
+# добавляется фронт. Рабочий релей отвечает раньше (Happy Eyeballs, RFC 8305
+# берёт 250 мс; ZaStoGram kWssFrontRaceDelay — 500 мс).
+FRONT_RACE_DELAY = 0.5
+# Релей без TCP винится за проигрыш, только если ждал хотя бы столько: фронт из
+# пула отвечает почти сразу, а медленной сети SYN нужно больше полсекунды.
+RACE_LOSS_MIN_WAIT = 1.0
 READ_CHUNK = 128 * 1024
 # Пока маршрут не выбран, пакеты клиента копятся для повтора. Больше этого
 # чтение клиента приостанавливается.
@@ -164,6 +176,19 @@ class _ServerConn:
 
 
 @dataclass(slots=True)
+class _Probe:
+    """Состояние попытки, видимое снаружи: нужно гонке, чтобы оценить проигравшего."""
+
+    tcp_reached: bool = False
+    conn: "_ServerConn | None" = None
+    # До какого момента идёт срок сторожа для уже отправленных пакетов.
+    deadline: float | None = None
+    # Гонка отменила попытку, потому что другой маршрут ответил раньше.
+    lost_to: str = ""
+    started: float = field(default_factory=time.monotonic)
+
+
+@dataclass(slots=True)
 class _Committed:
     route: Route
     conn: _ServerConn
@@ -199,6 +224,9 @@ class TelegramSession:
         self._packets: list[bytes] = []
         self._buffered = 0
         self._packet_event = asyncio.Event()
+        # Свои события у каждой ждущей попытки: в гонке их две, и общий
+        # clear() одной стёр бы сигнал о новых пакетах для другой.
+        self._packet_listeners: set[asyncio.Event] = set()
         self._client_eof = False
         self._committed = False
         self._client_reader = PacketReader(client.framing)
@@ -213,6 +241,11 @@ class TelegramSession:
     @property
     def _media_tag(self) -> str:
         return " media" if self._is_media else ""
+
+    def _notify_packets(self) -> None:
+        self._packet_event.set()
+        for event in self._packet_listeners:
+            event.set()
 
     # ---- насос клиента ----
 
@@ -230,14 +263,14 @@ class TelegramSession:
                 if packets:
                     self._packets.extend(packets)
                     self._buffered += sum(len(item) for item in packets)
-                    self._packet_event.set()
+                    self._notify_packets()
         except ObfsProtocolError as exc:
             self._host.log(f"[{self._label}] client stream error: {exc}")
         except (asyncio.IncompleteReadError, ConnectionError, OSError):
             pass
         finally:
             self._client_eof = True
-            self._packet_event.set()
+            self._notify_packets()
 
     # ---- основной ход ----
 
@@ -253,10 +286,18 @@ class TelegramSession:
                 target_port=self._target_port,
             )
             plan = build_plan(request, self._host.route_health)
-            for index, route in enumerate(plan):
+            index = 0
+            while index < len(plan):
+                route = plan[index]
                 next_route = plan[index + 1] if index + 1 < len(plan) else None
                 try:
-                    committed = await self._attempt(route, next_route)
+                    if self._should_race(route, next_route):
+                        after_front = plan[index + 2] if index + 2 < len(plan) else None
+                        committed, raced = await self._race(route, next_route, after_front)
+                        index += 2 if raced else 1
+                    else:
+                        committed = await self._attempt(route, next_route)
+                        index += 1
                 except _ClientGone:
                     return
                 if committed is not None:
@@ -294,17 +335,26 @@ class TelegramSession:
 
     # ---- попытка маршрута ----
 
-    async def _open(self, route: Route, *, use_pool: bool = True) -> _ServerConn:
+    async def _open(self, route: Route, probe: _Probe, *, use_pool: bool = True) -> _ServerConn:
         host = self._host
         if route.is_ws:
             pooled = host.ws_pool.take(route) if (use_pool and route.pool_key) else None
             if pooled is not None:
+                probe.tcp_reached = True
                 conn = _ServerConn(ws=pooled)
                 conn.pooled = True
                 return conn
             target = ws_transport.WsTarget(connect_host=route.connect_host, sni=route.sni, path=route.path)
+
+            def tcp_connected() -> None:
+                probe.tcp_reached = True
+
             try:
-                ws = await ws_transport.connect(target, buffer_size=host.buffer_size)
+                ws = await ws_transport.connect(
+                    target,
+                    buffer_size=host.buffer_size,
+                    on_tcp_connected=tcp_connected,
+                )
             except ws_transport.WsConnectError as exc:
                 raise _RouteFailed(
                     f"{exc.stage}: {exc}",
@@ -337,20 +387,27 @@ class TelegramSession:
             raise
         except Exception as exc:
             raise _RouteFailed(_error_text(exc), tcp_reached=False) from exc
+        probe.tcp_reached = True
         ws_transport.apply_socket_options(writer.transport, host.buffer_size)
         return _ServerConn(reader=reader, writer=writer)
 
     def _encrypt_packets(self, cipher: StreamCipher, packets: list[bytes]) -> list[bytes]:
         return [cipher.encryptor.update(encode_packet(ABRIDGED, packet)) for packet in packets]
 
-    async def _attempt(self, route: Route, next_route: Route | None) -> _Committed | None:
-        started = time.monotonic()
+    async def _attempt(
+        self,
+        route: Route,
+        next_route: Route | None,
+        probe: _Probe | None = None,
+    ) -> _Committed | None:
+        probe = probe or _Probe()
+        started = probe.started
         conn: _ServerConn | None = None
         try:
-            conn = await self._open(route)
+            conn = probe.conn = await self._open(route, probe)
             if conn.pooled:
                 try:
-                    return await self._await_answer(route, conn, started)
+                    return await self._await_answer(route, conn, started, probe)
                 except _RouteFailed as exc:
                     if exc.silent:
                         # Сервер молчал весь срок сторожа: это отказ маршрута,
@@ -360,9 +417,9 @@ class TelegramSession:
                     # а один раз открыть свежее соединение.
                     self._host.log(f"[{self._label}] pooled {route.describe()} failed: {exc}; retry fresh")
                     await self._abandon(conn)
-                    conn = None
-                    conn = await self._open(route, use_pool=False)
-            return await self._await_answer(route, conn, started)
+                    conn = probe.conn = None
+                    conn = probe.conn = await self._open(route, probe, use_pool=False)
+            return await self._await_answer(route, conn, started, probe)
         except _ClientGone as gone:
             if conn is not None:
                 if gone.deadline is not None:
@@ -379,7 +436,9 @@ class TelegramSession:
             self._note_failure(route, exc, started, next_route)
             return None
         except asyncio.CancelledError:
-            if conn is not None:
+            if probe.lost_to:
+                self._judge_race_loser(route, conn, probe, next_route)
+            elif conn is not None:
                 await self._abandon(conn)
             raise
         except Exception as exc:
@@ -388,29 +447,116 @@ class TelegramSession:
             self._note_failure(route, _RouteFailed(_error_text(exc)), started, next_route)
             return None
 
-    async def _await_answer(self, route: Route, conn: _ServerConn, started: float) -> _Committed:
+    def _judge_race_loser(self, route: Route, conn: _ServerConn | None, probe: _Probe, next_route: Route | None) -> None:
+        """Оценить релей, у которого фронт выиграл гонку.
+
+        Без TCP — отказ, как истёкший срок у ZaStoGram: через несколько таких
+        раундов релей подавляется, и фронты набираются сразу, без гонки. Пакеты
+        уже ушли — релей досматривается до конца срока сторожа в фоне. Застрял
+        на TLS или апгрейде — не судим: он мог быть просто медленнее.
+        """
+        why = f"{probe.lost_to} answered first"
+        if conn is not None and probe.deadline is not None:
+            self._host.spawn_background(self._judge_abandoned(route, conn, probe.deadline, probe.started, why=why))
+            return
+        if conn is not None:
+            self._host.spawn_background(self._abandon(conn))
+            return
+        waited = time.monotonic() - probe.started
+        if not probe.tcp_reached and waited >= RACE_LOSS_MIN_WAIT:
+            self._note_failure(
+                route,
+                _RouteFailed(f"no TCP in {waited:.1f}s; {why}", tcp_reached=False),
+                probe.started,
+                next_route,
+            )
+
+    def _should_race(self, route: Route, next_route: Route | None) -> bool:
+        return (
+            route.kind == KIND_RELAY
+            and next_route is not None
+            and next_route.kind == KIND_FRONT
+            and self._host.route_health.is_unproven(route.health_key, route.address_health_key)
+        )
+
+    async def _race(
+        self, relay: Route, front: Route, after_front: Route | None
+    ) -> tuple[_Committed | None, bool]:
+        """Релей и через FRONT_RACE_DELAY фронт: кто первым ответит, тот и везёт.
+
+        Возвращает (победитель или None, пробовался ли фронт). Если релей
+        отказал раньше, чем фронт стартовал, фронт идёт обычной очередью.
+        """
+        relay_probe = _Probe()
+        relay_task = asyncio.create_task(self._attempt(relay, front, relay_probe))
+        tasks = {relay_task}
+        winner: _Committed | None = None
+        try:
+            await asyncio.wait(tasks, timeout=FRONT_RACE_DELAY)
+            if relay_task.done():
+                tasks.clear()
+                return relay_task.result(), False
+            front_task = asyncio.create_task(self._attempt(front, after_front))
+            tasks.add(front_task)
+            gone: _ClientGone | None = None
+            while tasks and winner is None:
+                done, tasks = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+                for task in done:
+                    try:
+                        result = task.result()
+                    except _ClientGone as exc:
+                        gone = exc
+                        continue
+                    if result is None:
+                        continue
+                    if winner is None:
+                        winner = result
+                    else:
+                        # Оба ответили в один такт: лишний сокет просто закрыть.
+                        await self._abandon(result.conn)
+            if winner is None and gone is not None:
+                raise gone
+            return winner, True
+        finally:
+            if tasks:
+                if winner is not None and winner.route is front and relay_task in tasks:
+                    relay_probe.lost_to = front.label
+                for task in tasks:
+                    task.cancel()
+                for task in tasks:
+                    try:
+                        await task
+                    except BaseException:
+                        pass
+
+    async def _await_answer(self, route: Route, conn: _ServerConn, started: float, probe: _Probe) -> _Committed:
         header, cipher = build_server_header(dc_field_value(route.dc_field, self._dc, self._is_media))
         sent = 0
         first = True
         deadline = time.monotonic() + self._watchdog
         recv_task = asyncio.create_task(conn.recv())
+        wakeup = asyncio.Event()
+        self._packet_listeners.add(wakeup)
         try:
             while True:
-                self._packet_event.clear()
+                wakeup.clear()
                 if sent < len(self._packets):
-                    chunks = self._encrypt_packets(cipher, self._packets[sent:])
+                    # Граница берётся до отправки: пакеты, пришедшие от Desktop
+                    # во время send(), уйдут следующим кругом, а не потеряются.
+                    upto = len(self._packets)
+                    chunks = self._encrypt_packets(cipher, self._packets[sent:upto])
                     if first:
                         chunks[0] = header + chunks[0]
                         first = False
                     await conn.send(chunks)
-                    sent = len(self._packets)
-                    deadline = time.monotonic() + self._watchdog
+                    sent = upto
+                    deadline = probe.deadline = time.monotonic() + self._watchdog
                 if self._client_eof and not recv_task.done():
                     raise _ClientGone(deadline if sent else None)
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     raise _RouteFailed(f"no answer in {self._watchdog:.1f}s (recv=0)", silent=True)
-                wake = asyncio.create_task(self._packet_event.wait())
+                wake = asyncio.create_task(wakeup.wait())
                 try:
                     done, _ = await asyncio.wait(
                         {recv_task, wake},
@@ -445,9 +591,19 @@ class TelegramSession:
                 except BaseException:
                     pass
             raise
+        finally:
+            self._packet_listeners.discard(wakeup)
 
-    async def _judge_abandoned(self, route: Route, conn: _ServerConn, deadline: float, started: float) -> None:
-        """Досмотреть маршрут, от которого Desktop ушёл раньше срока сторожа."""
+    async def _judge_abandoned(
+        self,
+        route: Route,
+        conn: _ServerConn,
+        deadline: float,
+        started: float,
+        *,
+        why: str = "client left early",
+    ) -> None:
+        """Досмотреть маршрут, брошенный раньше срока сторожа (ушёл Desktop или проиграна гонка)."""
         answered = False
         reason = f"no answer in {self._watchdog:.1f}s (recv=0)"
         try:
@@ -464,11 +620,11 @@ class TelegramSession:
                     reason = f"closed before answer: {_error_text(exc)}"
             if answered:
                 self._note_route_ok(route, conn)
-                self._host.log(f"[{self._label}] client left early; {route.describe()} answered later")
+                self._host.log(f"[{self._label}] {why}; {route.describe()} answered later")
             else:
                 self._note_failure(
                     route,
-                    _RouteFailed(f"{reason}; client left early", silent=True),
+                    _RouteFailed(f"{reason}; {why}", silent=True),
                     started,
                     None,
                 )
@@ -652,4 +808,4 @@ def _error_text(exc: BaseException) -> str:
     return f"{type(exc).__name__}: {text}" if text else type(exc).__name__
 
 
-__all__ = ["TelegramSession", "WATCHDOG_SECONDS", "MEDIA_WATCHDOG_SECONDS"]
+__all__ = ["FRONT_RACE_DELAY", "TelegramSession", "WATCHDOG_SECONDS", "MEDIA_WATCHDOG_SECONDS"]

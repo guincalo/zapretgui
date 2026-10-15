@@ -54,10 +54,19 @@ def rpc_packet(body_len: int) -> bytes:
 class FakeTelegramWs:
     """WebSocket, за которым «Telegram»: принимает заголовок и отвечает эхом пакетов."""
 
-    def __init__(self, target: ws_module.WsTarget, *, answer: bool, answer_delay: float = 0.0):
+    def __init__(
+        self,
+        target: ws_module.WsTarget,
+        *,
+        answer: bool,
+        answer_delay: float = 0.0,
+        send_delay: float = 0.0,
+    ):
         self.target = target
         self.answer = answer
         self.answer_delay = answer_delay
+        # Медленный send(): пока кадр уходит, Desktop успевает прислать ещё.
+        self.send_delay = send_delay
         # Сырой поток сокета: сессия смотрит в него, когда клиент ушёл раньше ответа.
         self.reader = asyncio.StreamReader()
         self.frames: list[bytes] = []
@@ -74,6 +83,8 @@ class FakeTelegramWs:
         return False
 
     async def send_many(self, chunks: list[bytes]) -> None:
+        if self.send_delay:
+            await asyncio.sleep(self.send_delay)
         for chunk in chunks:
             self.frames.append(chunk)
             if self._decrypt is None:
@@ -145,11 +156,16 @@ class SessionScenarioTests(unittest.IsolatedAsyncioTestCase):
         self.logs: list[str] = []
         self.refuse_ws = False
         self.relay_answer_delay: float | None = None
+        # Релей, до которого не доходит даже SYN: connect висит без конца.
+        self.relay_hangs = False
+        self.send_delay = 0.0
         self.quota_hosts: set[str] = set()
         self.dialled: list[str] = []
 
-        async def fake_connect(target, **_kwargs):
+        async def fake_connect(target, *, on_tcp_connected=None, **_kwargs):
             self.dialled.append(target.connect_host)
+            if target.connect_host == RELAY_IP and self.relay_hangs:
+                await asyncio.Event().wait()
             if self.refuse_ws:
                 raise ws_module.WsConnectError(ws_module.STAGE_TCP, "refused")
             if target.connect_host in self.quota_hosts:
@@ -158,9 +174,13 @@ class SessionScenarioTests(unittest.IsolatedAsyncioTestCase):
                 )
             if target.connect_host == RELAY_IP:
                 delay = self.relay_answer_delay
-                sock = FakeTelegramWs(target, answer=delay is not None, answer_delay=delay or 0.0)
+                sock = FakeTelegramWs(
+                    target, answer=delay is not None, answer_delay=delay or 0.0, send_delay=self.send_delay
+                )
             else:
-                sock = FakeTelegramWs(target, answer=True)
+                sock = FakeTelegramWs(target, answer=True, send_delay=self.send_delay)
+            if on_tcp_connected is not None:
+                on_tcp_connected()
             self.sockets.append(sock)
             return sock
 
@@ -374,6 +394,103 @@ class SessionScenarioTests(unittest.IsolatedAsyncioTestCase):
 
         await asyncio.wait_for(proxy.stop(), timeout=3)
         self.assertFalse(proxy.is_running)
+        writer.close()
+
+    def _race_timing(self, *, watchdog: float = 2.0, race_delay: float = 0.05, loss_wait: float = 0.1) -> None:
+        for item in (
+            patch.object(session_module, "WATCHDOG_SECONDS", watchdog),
+            patch.object(session_module, "FRONT_RACE_DELAY", race_delay),
+            patch.object(session_module, "RACE_LOSS_MIN_WAIT", loss_wait),
+        ):
+            item.start()
+            self.addCleanup(item.stop)
+
+    async def _one_dc2_exchange(self) -> float:
+        started = time.monotonic()
+        reader, writer = await self._socks5_connect("149.154.167.51", 443)
+        header, to_server, from_server = make_client_header(b"\xef" * 4, 2)
+        packet = rpc_packet(40)
+        writer.write(header + to_server.update(encode_packet(ABRIDGED, packet)))
+        await writer.drain()
+        self.assertEqual(await self._read_packets(reader, from_server, ABRIDGED, 1), [answer_for(packet)])
+        writer.close()
+        return time.monotonic() - started
+
+    async def test_relay_without_tcp_loses_race_to_front_at_once(self) -> None:
+        self._race_timing(loss_wait=0.0)
+        self.relay_hangs = True
+        proxy = await self._start(mode="socks5")
+
+        elapsed = await self._one_dc2_exchange()
+
+        # Раньше фронт ждал, пока релей не истратит весь свой срок; теперь
+        # он стартует рядом через FRONT_RACE_DELAY и сразу везёт трафик.
+        self.assertLess(elapsed, 1.0)
+        self.assertEqual(self.dialled[0], RELAY_IP)
+        self.assertNotEqual(self.dialled[1], RELAY_IP)
+        self.assertEqual(proxy.stats.cloudflare_connections, 1)
+        await asyncio.sleep(0.05)
+        # Проигрыш без TCP — отказ релея: через несколько раундов он подавится.
+        self.assertTrue(
+            any("route=WSS" in line and "no TCP" in line and "answered first" in line for line in self.logs),
+            self.logs,
+        )
+
+    async def test_relay_is_not_blamed_when_front_answers_before_it_could_connect(self) -> None:
+        # Фронт из пула отвечает почти сразу; полсекунды без SYN ещё не отказ.
+        self._race_timing(loss_wait=5.0)
+        self.relay_hangs = True
+        proxy = await self._start(mode="socks5")
+
+        await self._one_dc2_exchange()
+        await asyncio.sleep(0.05)
+
+        self.assertEqual(proxy.stats.cloudflare_connections, 1)
+        self.assertFalse(any("route=WSS" in line and "result=error" in line for line in self.logs), self.logs)
+
+    async def test_answering_relay_wins_and_front_is_never_dialled(self) -> None:
+        self._race_timing(race_delay=0.3)
+        self.relay_answer_delay = 0.0
+        proxy = await self._start(mode="socks5")
+
+        await self._one_dc2_exchange()
+
+        self.assertEqual(self.dialled, [RELAY_IP])
+        self.assertEqual(proxy.stats.wss_connections, 1)
+        self.assertEqual(proxy.stats.cloudflare_connections, 0)
+
+    async def test_relay_that_answered_once_is_not_raced_any_more(self) -> None:
+        self.relay_answer_delay = 0.0
+        await self._start(mode="socks5")
+        await self._one_dc2_exchange()
+
+        # Релей доказал себя в этой сети; следующий молчащий релей ждёт свой
+        # срок сторожа как раньше, без фронта наперегонки.
+        self._race_timing(watchdog=0.3, race_delay=0.05)
+        self.relay_answer_delay = None
+        self.dialled.clear()
+        await self._one_dc2_exchange()
+        await asyncio.sleep(0.05)
+
+        self.assertFalse(any("answered first" in line for line in self.logs), self.logs)
+        self.assertTrue(any("route=WSS" in line and "no answer in 0.3s" in line for line in self.logs), self.logs)
+
+    async def test_packets_sent_by_client_during_send_are_not_lost(self) -> None:
+        self.relay_answer_delay = 0.0
+        self.send_delay = 0.2
+        await self._start(mode="socks5")
+        reader, writer = await self._socks5_connect("149.154.167.51", 443)
+        header, to_server, from_server = make_client_header(b"\xef" * 4, 2)
+        first, second = rpc_packet(40), rpc_packet(60)
+        writer.write(header + to_server.update(encode_packet(ABRIDGED, first)))
+        await writer.drain()
+        # Второй пакет приходит, пока первый ещё уходит на сервер.
+        await asyncio.sleep(0.05)
+        writer.write(to_server.update(encode_packet(ABRIDGED, second)))
+        await writer.drain()
+
+        answers = await self._read_packets(reader, from_server, ABRIDGED, 2)
+        self.assertEqual(answers, [answer_for(first), answer_for(second)])
         writer.close()
 
     @staticmethod

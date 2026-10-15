@@ -20,6 +20,7 @@ import ssl
 import struct
 import time
 from dataclasses import dataclass
+from typing import Callable
 
 
 WS_GUID = b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
@@ -270,8 +271,13 @@ async def connect(
     busy_retries: int = BUSY_RETRIES,
     ssl_context: ssl.SSLContext | None = None,
     buffer_size: int = 256 * 1024,
+    on_tcp_connected: Callable[[], None] | None = None,
 ) -> WebSocket:
-    """TCP → TLS (SNI = target.sni) → upgrade. Ошибки — WsConnectError с этапом."""
+    """TCP → TLS (SNI = target.sni) → upgrade. Ошибки — WsConnectError с этапом.
+
+    on_tcp_connected зовётся сразу после TCP: по нему сессия отличает релей,
+    до которого не дошёл даже SYN, от медленного на TLS или апгрейде.
+    """
     try:
         reader, writer = await asyncio.wait_for(
             asyncio.open_connection(target.connect_host, target.port),
@@ -283,6 +289,8 @@ async def connect(
         raise WsConnectError(STAGE_TCP, f"{type(exc).__name__}: {exc}".rstrip(": ")) from exc
 
     apply_socket_options(writer.transport, buffer_size)
+    if on_tcp_connected is not None:
+        on_tcp_connected()
     stage = STAGE_TLS
     try:
         async with asyncio.timeout(upgrade_timeout):

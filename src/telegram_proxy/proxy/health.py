@@ -12,7 +12,9 @@
 * воркер, ответивший 429, исчерпал суточный лимит запросов Cloudflare: он
   подавляется с первого же отказа, соединение сразу идёт к следующему воркеру;
 * подавления сохраняются между запусками, но после загрузки держатся не
-  дольше 10 минут, чтобы старая сеть не мешала новой.
+  дольше 10 минут, чтобы старая сеть не мешала новой;
+* пока релей не ответил ни разу с запуска прокси или сбоит, он «не доказан»:
+  сессия гонит рядом с ним фронт (ZaStoGram, socket.cpp WssRelayUnproven).
 
 Ключи: домен релея (kws2.web.telegram.org), адрес релея (addr-149.154.167.220),
 все фронты одного DC (cdn-kws2), туннель (имя хоста воркера, у каждого своё).
@@ -73,6 +75,9 @@ class RouteHealth:
         self._wall = wall_clock
         self._entries: dict[str, _Entry] = {}
         self._tcp_ok_at: dict[str, float] = {}
+        # Маршруты, ответившие с запуска прокси. Только в памяти: новая сеть
+        # после перезапуска доказывает релей заново.
+        self._answered: set[str] = set()
         self._front_slots = max(0, int(front_count)) * 2
         self._front_cursor = int.from_bytes(os.urandom(2), "little") % self._front_slots if self._front_slots else 0
         self._front_family: int | None = None
@@ -121,6 +126,7 @@ class RouteHealth:
 
     def note_answer(self, key: str) -> None:
         """Сервер ответил: серия отказов прервана, но подавления ещё помнятся."""
+        self._answered.add(key)
         entry = self._entries.get(key)
         if entry is not None:
             entry.failures = 0
@@ -130,6 +136,15 @@ class RouteHealth:
         entry = self._entries.pop(key, None)
         if entry is not None and entry.suppressions:
             self._save()
+
+    def is_unproven(self, key: str, address: str = "") -> bool:
+        """Маршрут ещё не отвечал с запуска или в его серии (или у адреса) есть отказ."""
+
+        def failing(name: str) -> bool:
+            entry = self._entries.get(name) if name else None
+            return entry is not None and entry.failures > 0
+
+        return key not in self._answered or failing(key) or failing(address)
 
     # ---- недавний TCP ----
 
