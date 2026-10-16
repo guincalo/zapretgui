@@ -952,6 +952,16 @@ class TelegramSession:
                 self._host.route_health.note_proven(route.health_key)
                 if route.address_health_key:
                     self._host.route_health.note_proven(route.address_health_key)
+            elif route.kind == KIND_DIRECT and route.health_key:
+                # Прямой путь ответил и закрылся раньше доказательства: так ТСПУ
+                # душит прямые соединения к Telegram. Пауза, иначе каждое новое
+                # соединение снова садилось бы на этот путь, а не на фронты.
+                health = self._host.route_health
+                if health.note_failure(route.health_key, threshold=route.health_threshold):
+                    self._host.log(
+                        f"[{self._label}] route {route.health_key} suppressed for "
+                        f"{health.suppressed_for(route.health_key):.0f}s (recv={self._recv_total})"
+                    )
             elapsed = time.monotonic() - started
             suffix = f" error={error}" if error else ""
             self._host.log(

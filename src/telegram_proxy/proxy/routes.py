@@ -10,10 +10,18 @@
 4. туннель через воркеры из TUNNEL_HOSTS по кругу, начиная со своего для
    каждой установки;
 5. внешний SOCKS5 (выбранный сервер страны) — запасной путь;
-6. прямой TCP — только когда внешнего SOCKS нет.
+6. прямой TCP — только когда внешнего SOCKS нет, и только если он не на паузе.
 
-Если все WSS-ступени подавлены, после внешнего SOCKS ещё раз пробуются фронты
-без учёта подавления: DC не должен остаться совсем без маршрута.
+Если все WSS-ступени подавлены, после внешнего SOCKS или прямого TCP ещё раз
+пробуются фронты без учёта подавления: DC не должен остаться совсем без
+маршрута.
+
+Прямой TCP — последняя ступень с охраной, как в ZaStoGram. В сетях с
+блокировкой его закрывают первым: SYN-ACK проходит, а потом соединение душат.
+Поэтому одной неудачи хватает для паузы (2 → 4 → 8 → 16 → 30 мин), неудача —
+это и сессия, закрытая раньше 32 КБ ответа, а снимает историю пауз только
+настоящий объём. Так прямой путь пробуется раз в паузу и не держит DC на
+мёртвом адресе минутами.
 
 Ручной внешний сервер с режимом «always» — явный выбор пользователя: тогда
 весь TCP идёт только через него.
@@ -39,6 +47,7 @@ from telegram_proxy.proxy.health import (
     RouteHealth,
     address_key,
     cdn_key,
+    direct_key,
 )
 from telegram_proxy.proxy.key_clusters import CLUSTER_MEDIA, CLUSTER_REGULAR
 from telegram_proxy.proxy.obfs import DC_FIELD_PLUS, DC_FIELD_RANDOM, DC_FIELD_SIGNED
@@ -76,6 +85,11 @@ TUNNELS_PER_CONNECTION = 3
 RELAY_PROOF_BYTES = 1
 FRONT_PROOF_BYTES = 32 * 1024
 TUNNEL_PROOF_BYTES = 6 * 1024
+# Прямой TCP доказывается тем же объёмом, что и фронт: ТСПУ пропускает начало
+# ответа и душит дальше. Сессия, закрытая раньше, — неудача (session._relay).
+DIRECT_PROOF_BYTES = FRONT_PROOF_BYTES
+# Прямой путь встаёт на паузу после первой же неудачи.
+DIRECT_FAILURES_BEFORE_SUPPRESS = 1
 
 # Названия маршрутов для route_events: страница Telegram Proxy ищет в них
 # подстроки «cloudflare», «внеш», «tcp».
@@ -297,6 +311,15 @@ def _tcp_route(kind: str, target_host: str, target_port: int) -> Route:
     )
 
 
+def _direct_route(dc: int, target_host: str, target_port: int) -> Route:
+    return replace(
+        _tcp_route(KIND_DIRECT, target_host, target_port),
+        health_key=direct_key(dc),
+        health_threshold=DIRECT_FAILURES_BEFORE_SUPPRESS,
+        proof_bytes=DIRECT_PROOF_BYTES,
+    )
+
+
 def _cluster(kind: str, is_media: bool) -> str:
     if is_media and kind not in _REGULAR_CLUSTER_KINDS:
         return CLUSTER_MEDIA
@@ -340,10 +363,11 @@ def _build_plan(request: PlanInput, health: RouteHealth) -> list[Route]:
     all_wss_suppressed = not plan and dc in CDN_FRONT_DCS
     if upstream.enabled:
         plan.append(upstream_route)
+    elif dc not in CDN_FRONT_DCS or not health.is_suppressed(direct_key(dc)):
+        # DC без WSS-путей идёт напрямую всегда: другого маршрута у него нет.
+        plan.append(_direct_route(dc, request.target_host, request.target_port))
     if all_wss_suppressed:
         plan.extend(_front_routes(dc, health, ignore_suppression=True))
-    if not upstream.enabled:
-        plan.append(_tcp_route(KIND_DIRECT, request.target_host, request.target_port))
     return plan
 
 

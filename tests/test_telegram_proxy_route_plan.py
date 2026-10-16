@@ -7,7 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from telegram_proxy.proxy.cloudflare import AUTO_CLOUDFLARE_DOMAINS, CloudflareFallbackConfig
-from telegram_proxy.proxy.health import RouteHealth, address_key, cdn_key
+from telegram_proxy.proxy.health import RouteHealth, address_key, cdn_key, direct_key
 from telegram_proxy.proxy.key_clusters import CLUSTER_MEDIA, CLUSTER_REGULAR, KeyClusters
 from telegram_proxy.proxy import routes as routes_module
 from telegram_proxy.proxy.route_catalog import CDN_FRONTS, TUNNEL_HOSTS
@@ -91,17 +91,17 @@ class RoutePlanTests(unittest.TestCase):
                 self.assertEqual(kinds(plan), [KIND_RELAY, KIND_FRONT, KIND_FRONT, KIND_FRONT, *TUNNELS, KIND_DIRECT])
                 self.assertEqual((plan[0].connect_host, plan[0].sni), (address, f"kws{dc}.web.telegram.org"))
 
-    def test_dc203_goes_through_fronts_then_tunnel_and_never_direct(self) -> None:
+    def test_dc203_goes_through_fronts_then_tunnel_and_direct_only_before_the_front_floor(self) -> None:
         plan = build_plan(PlanInput(dc=203, is_media=False, target_host="91.105.192.100", upstream=PRESET), self.health)
         self.assertEqual(kinds(plan), [KIND_FRONT, KIND_FRONT, KIND_FRONT, *TUNNELS, KIND_UPSTREAM])
         self.assertTrue(plan[0].sni.startswith("kws203.") and plan[0].sni.endswith(".co.uk"))
         self.assertLessEqual({route.sni for route in plan[3:-1]}, set(TUNNEL_HOSTS))
-        # Без внешнего SOCKS и со всем WSS на паузе — снова фронты, а не только прямой TCP.
+        # Без внешнего SOCKS и со всем WSS на паузе — прямой TCP, а за ним снова фронты.
         self._suppress(cdn_key(203))
         for host in TUNNEL_HOSTS:
             self._suppress(host)
         plan = build_plan(PlanInput(dc=203, is_media=False, target_host="91.105.192.100"), self.health)
-        self.assertEqual(kinds(plan), [KIND_FRONT, KIND_FRONT, KIND_FRONT, KIND_DIRECT])
+        self.assertEqual(kinds(plan), [KIND_DIRECT, KIND_FRONT, KIND_FRONT, KIND_FRONT])
 
     def test_tunnels_are_tried_in_a_circle_from_this_install_start(self) -> None:
         hosts = ("a.workers.dev", "b.workers.dev", "c.workers.dev", "d.workers.dev")
@@ -191,6 +191,41 @@ class RoutePlanTests(unittest.TestCase):
             self._suppress(host)
         plan = build_plan(PlanInput(dc=1, is_media=False, target_host="149.154.175.50", upstream=PRESET), self.health)
         self.assertEqual(kinds(plan), [KIND_UPSTREAM, KIND_FRONT, KIND_FRONT, KIND_FRONT])
+
+    def test_direct_tcp_is_the_last_step_before_the_front_floor_and_pauses_after_one_failure(self) -> None:
+        self._suppress("kws1.web.telegram.org")
+        self._suppress(cdn_key(1))
+        for host in TUNNEL_HOSTS:
+            self._suppress(host)
+        request = PlanInput(dc=1, is_media=False, target_host="149.154.175.50")
+        plan = build_plan(request, self.health)
+        self.assertEqual(kinds(plan), [KIND_DIRECT, KIND_FRONT, KIND_FRONT, KIND_FRONT])
+        direct = plan[0]
+        self.assertEqual((direct.target_host, direct.health_key), ("149.154.175.50", direct_key(1)))
+        self.assertEqual((direct.health_threshold, direct.proof_bytes), (1, 32 * 1024))
+        # Одной неудачи хватает: следующее соединение идёт только на фронты.
+        self.assertTrue(self.health.note_failure(direct.health_key, threshold=direct.health_threshold))
+        self.assertEqual(kinds(build_plan(request, self.health)), [KIND_FRONT, KIND_FRONT, KIND_FRONT])
+        # Пауза кончилась — прямой путь снова в плане (как и релей, чья пауза тоже вышла).
+        self.clock.now += 121
+        self.assertEqual(kinds(build_plan(request, self.health))[-1], KIND_DIRECT)
+
+    def test_paused_direct_tcp_drops_out_of_a_working_wss_plan(self) -> None:
+        request = PlanInput(dc=2, is_media=False, target_host="149.154.167.51")
+        self.assertEqual(kinds(build_plan(request, self.health))[-1], KIND_DIRECT)
+        self.assertTrue(self.health.note_failure(direct_key(2), threshold=1))
+        self.assertEqual(kinds(build_plan(request, self.health)), [KIND_RELAY, KIND_FRONT, KIND_FRONT, KIND_FRONT, *TUNNELS])
+
+    def test_direct_tcp_waits_for_country_socks_and_media_shares_the_dc_key(self) -> None:
+        plan = build_plan(PlanInput(dc=2, is_media=True, target_host="149.154.167.222"), self.health)
+        self.assertEqual(plan[-1].health_key, direct_key(2))
+        with_socks = build_plan(PlanInput(dc=2, is_media=False, target_host="149.154.167.51", upstream=PRESET), self.health)
+        self.assertNotIn(KIND_DIRECT, kinds(with_socks))
+
+    def test_dc_without_wss_keeps_direct_tcp_even_when_paused(self) -> None:
+        self.assertTrue(self.health.note_failure(direct_key(7), threshold=1))
+        plan = build_plan(PlanInput(dc=7, is_media=False, target_host="149.154.175.50"), self.health)
+        self.assertEqual(kinds(plan), [KIND_DIRECT])
 
     def _suppress(self, key: str) -> None:
         for _ in range(6):

@@ -57,6 +57,10 @@ def cdn_key(dc: int) -> str:
     return f"cdn-kws{int(dc)}"
 
 
+def direct_key(dc: int) -> str:
+    return f"direct-dc{abs(int(dc))}"
+
+
 @dataclass(slots=True)
 class _Entry:
     failures: int = 0

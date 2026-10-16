@@ -167,6 +167,34 @@ async def serve_fake_socks_telegram(requests: list[tuple[str, int]]):
     return await asyncio.start_server(handler, "127.0.0.1", 0)
 
 
+async def serve_fake_direct_telegram(*, close_after: int | None = None):
+    """«Telegram» по прямому TCP: отвечает на пакеты и закрывается после close_after ответов."""
+
+    async def handler(reader, writer):
+        try:
+            header = await reader.readexactly(64)
+            decrypt = AesCtrStream(header[8:40], header[40:56])
+            decrypt.update(header)
+            reverse = header[8:56][::-1]
+            encrypt = AesCtrStream(reverse[:32], reverse[32:48])
+            packets = PacketReader(ABRIDGED)
+            answered = 0
+            while close_after is None or answered < close_after:
+                data = await reader.read(65536)
+                if not data:
+                    break
+                for packet in packets.feed(decrypt.update(data)):
+                    writer.write(encrypt.update(encode_packet(ABRIDGED, answer_for(packet))))
+                    answered += 1
+                await writer.drain()
+        except (asyncio.IncompleteReadError, ConnectionError):
+            pass
+        finally:
+            writer.close()
+
+    return await asyncio.start_server(handler, "127.0.0.1", 0)
+
+
 class SessionScenarioTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         self.sockets: list[FakeTelegramWs] = []
@@ -384,6 +412,46 @@ class SessionScenarioTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(requests, [("149.154.175.50", 443)])
         self.assertEqual(proxy.stats.upstream_connections, 1)
         writer.close()
+
+    async def _direct_exchange(self, *, close_after: int | None, body_len: int) -> TelegramWSProxy:
+        """DC1 при закрытом WSS и без внешнего SOCKS: соединение доходит до прямого TCP."""
+        server = await serve_fake_direct_telegram(close_after=close_after)
+        self.addAsyncCleanup(self._close_server, server)
+        server_port = server.sockets[0].getsockname()[1]
+        open_connection = asyncio.open_connection
+
+        async def redirect(host, port, *args, **kwargs):
+            if host == "149.154.175.50":
+                return await open_connection("127.0.0.1", server_port, *args, **kwargs)
+            return await open_connection(host, port, *args, **kwargs)
+
+        redirect_patch = patch.object(session_module.asyncio, "open_connection", redirect)
+        redirect_patch.start()
+        self.addCleanup(redirect_patch.stop)
+        self.refuse_ws = True
+        proxy = await self._start(mode="socks5")
+        reader, writer = await self._socks5_connect("149.154.175.50", 443)
+        header, to_server, from_server = make_client_header(b"\xef" * 4, 1)
+        packet = rpc_packet(body_len)
+        writer.write(header + to_server.update(encode_packet(ABRIDGED, packet)))
+        await writer.drain()
+        self.assertEqual(await self._read_packets(reader, from_server, ABRIDGED, 1), [answer_for(packet)])
+        writer.close()
+        deadline = time.monotonic() + 3
+        while not any("relay done: route=TCP" in line for line in self.logs) and time.monotonic() < deadline:
+            await asyncio.sleep(0.02)
+        self.assertTrue(any("relay done: route=TCP" in line for line in self.logs), self.logs[-5:])
+        return proxy
+
+    async def test_direct_tcp_closed_before_proof_is_paused(self) -> None:
+        proxy = await self._direct_exchange(close_after=1, body_len=300)
+        # Ответ пришёл, но соединение закрылось раньше 32 КБ: так ТСПУ душит прямой путь.
+        self.assertTrue(proxy.route_health.is_suppressed("direct-dc1"))
+        self.assertTrue(any("route direct-dc1 suppressed" in line for line in self.logs))
+
+    async def test_direct_tcp_carrying_real_volume_is_not_paused(self) -> None:
+        proxy = await self._direct_exchange(close_after=None, body_len=40000)
+        self.assertFalse(proxy.route_health.is_suppressed("direct-dc1"))
 
     async def test_external_proxy_switched_off_on_the_fly_leaves_mtproxy_on_wss(self) -> None:
         requests: list[tuple[str, int]] = []
