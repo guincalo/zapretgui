@@ -24,6 +24,7 @@ from diagnostics import (
     my_network,
     name_speed,
     net_access,
+    outside_check,
     quic_probe,
     registry,
     report_text,
@@ -35,7 +36,7 @@ from diagnostics import (
     upload_probe,
 )
 from diagnostics import problems as problem_rules
-from diagnostics.limits import FILTER_MAX_TTL, FREEZE_READ_TIMEOUT
+from diagnostics.limits import FILTER_MAX_TTL, FREEZE_READ_TIMEOUT, OUTSIDE_NEEDS_S
 from diagnostics.run_context import Probe, Run, Stopped
 from diagnostics.services import Service
 from diagnostics.tls_probe import KIND_RESET, ProbeResult
@@ -903,3 +904,29 @@ def check_network(run: Run, other_tools) -> dict:
         "local_ip": facts.local_ip,
         "lines": [{"state": line.state, "name": line.name, "text": line.text} for line in lines],
     }
+
+
+def ask_outside(run: Run, services: dict[str, Service], done_probes: list) -> None:
+    """Сайты без дороги и после перепроверки: живы ли они снаружи (сервер Zapret DNS).
+
+    Только по галочке: само соединение с сервером проекта выдаёт программу.
+    Только встроенные сайты: свои домены пользователя (ключ ``user:``) на сервер
+    не уходят. Контрольные не спрашиваются: по ним судят о сети целиком.
+    """
+    failed = [
+        probe
+        for key, _target, probe, _error in done_probes
+        if probe is not None
+        and probe.reach_state in (ReachState.IP_BLOCK, ReachState.DPI)
+        and not key.startswith("user:")
+        and not services[key].control
+    ]
+    if not failed or run.dns_cancelled() or run.deadline - time.monotonic() < OUTSIDE_NEEDS_S:
+        return
+    answers = outside_check.ask(
+        [probe.host for probe in failed],
+        server_ips=lambda: net_access.doh_lookup(run, outside_check.SERVER_HOST)[1],
+        cancel=run.probe_cancel,
+    )
+    for probe in failed:
+        probe.outside = answers.get(probe.host, "")

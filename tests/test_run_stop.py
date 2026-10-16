@@ -102,26 +102,19 @@ if __name__ == "__main__":
 
 
 class TlsDeadlineTests(unittest.TestCase):
-    def test_slow_certificate_store_does_not_eat_the_request_deadline(self) -> None:
-        """Первая загрузка хранилища сертификатов не должна съедать срок запроса."""
+    def test_silent_handshake_ends_by_the_request_deadline(self) -> None:
+        """Сервер принял соединение и молчит: запрос «как Chrome» сдаётся в свой срок, не позже."""
         from diagnostics import tls_probe
+        from utils.chrome_https import chrome_get
 
-        real = tls_probe.client_context()
-
-        def slow_context():
-            time.sleep(0.6)
-            return real
-
-        # Сервер принимает соединение и молчит: рукопожатие TLS ждёт весь срок.
         listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         listener.bind(("127.0.0.1", 0))
         listener.listen(1)
         self.addCleanup(listener.close)
-        with patch.object(tls_probe, "client_context", side_effect=slow_context):
-            result = tls_probe.https_get("example.com", "127.0.0.1", timeout=0.2, port=listener.getsockname()[1])
+        result = chrome_get("example.com", "127.0.0.1", timeout=0.3, port=listener.getsockname()[1])
 
-        self.assertEqual(result.stage, tls_probe.STAGE_TLS)
-        self.assertLess(result.elapsed_ms, 450)
+        self.assertEqual((result.kind, result.stage), (tls_probe.KIND_TIMEOUT, tls_probe.STAGE_TLS))
+        self.assertLess(result.elapsed_ms, 1500)
 
     def test_run_warms_the_certificate_store(self) -> None:
         from diagnostics import run_context

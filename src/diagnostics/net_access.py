@@ -20,7 +20,8 @@ from concurrent.futures import Future
 
 from diagnostics.limits import DNS_TIMEOUT, DOH_TIMEOUT, HTTPS_TIMEOUT, READ_TIMEOUT, REFERENCE_GRACE_S
 from diagnostics.run_context import Run
-from diagnostics.tls_probe import ProbeResult, https_get
+from diagnostics.tls_probe import ProbeResult
+from utils.chrome_https import chrome_get
 from utils.dns_reference import REFERENCE_RESOLVERS, ReferenceResolver
 from utils.dns_wire import TYPE_A, DnsQueryResult, query_doh
 from utils.windows_dns_query import (
@@ -118,9 +119,11 @@ def fetch(
     read_limit: int = 0,
     read_timeout: float = READ_TIMEOUT,
     body_done: Callable[[bytes], bool] | None = None,
+    decode_body: bool = False,
 ) -> ProbeResult:
-    """HTTPS-запрос к сайту ``host`` по адресу ``ip``. Снимается кнопкой «Стоп»."""
-    return https_get(
+    """HTTPS-запрос к сайту ``host`` по адресу ``ip`` — так, как его открыл бы Chrome
+    (``utils.chrome_https``). Снимается кнопкой «Стоп»."""
+    return chrome_get(
         host,
         ip,
         path,
@@ -128,6 +131,7 @@ def fetch(
         read_limit=read_limit,
         read_timeout=read_timeout,
         body_done=body_done,
+        decode_body=decode_body,
         cancel=run.probe_cancel,
     )
 

@@ -73,7 +73,7 @@ class ProbeOutcome:
 
 
 def judge_https(result) -> ProbeOutcome:
-    """Итог HTTPS-запроса ``diagnostics.tls_probe.https_get``.
+    """Итог HTTPS-запроса как у Chrome (``utils.chrome_https.chrome_get``).
 
     Сертификат проверяется для имени сайта, поэтому любой ответ после
     успешного TLS пришёл от настоящего сервера. Провайдер не может подсунуть

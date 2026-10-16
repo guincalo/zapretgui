@@ -442,7 +442,7 @@ class ControlAliveTests(unittest.TestCase):
 
         started = time.monotonic()
         with patch.object(probes, "resolve_target_addresses", return_value=(["192.0.2.1"], "")), patch(
-            "diagnostics.tls_probe.https_get", side_effect=fake_get
+            "utils.chrome_https.chrome_get", side_effect=fake_get
         ):
             self.assertTrue(probes.control_alive())
         self.assertLess(time.monotonic() - started, 1.0)

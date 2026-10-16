@@ -14,7 +14,7 @@ from pathlib import Path
 SRC = Path(__file__).resolve().parents[1] / "src" / "diagnostics"
 
 # Функции, которые открывают соединение или спрашивают DNS.
-NETWORK_CALLS = {"https_get", "query_doh", "query_ipv4", "hosts_file_ipv4", "system_dns_servers"}
+NETWORK_CALLS = {"chrome_get", "query_doh", "query_ipv4", "hosts_file_ipv4", "system_dns_servers"}
 UPPER_LAYERS = ("engine.py", "sections.py", "problems.py", "report_text.py", "registry.py", "filter_place.py", "filter_habits.py")
 
 
@@ -51,6 +51,8 @@ NETWORK_MODULES = {
     "requests",
     "utils.windows_icmp",
     "utils.http2_post",
+    "utils.chrome_https",
+    "curl_cffi",
 }
 # Запросы DNS напрямую по протоколу: проверки DNS-серверов ходят через свои модули, не через этот слой.
 DNS_WIRE_CALLS = {"query_udp", "query_tcp", "query_dot", "query_server"}
@@ -100,7 +102,7 @@ class NetworkGatewayTests(unittest.TestCase):
         self.assertEqual(imported_names(source) & NETWORK_CALLS, NETWORK_CALLS)
 
     def test_the_check_notices_a_direct_import(self) -> None:
-        self.assertEqual(imported_names("from diagnostics.tls_probe import https_get\n") & NETWORK_CALLS, {"https_get"})
+        self.assertEqual(imported_names("from utils.chrome_https import chrome_get\n") & NETWORK_CALLS, {"chrome_get"})
 
     def test_progress_steps_have_one_owner(self) -> None:
         """Шаги хода проверки задаёт ``services``; подписи к ним есть и в тексте, и на экране."""

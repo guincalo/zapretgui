@@ -31,6 +31,7 @@ __all__ = [
     "FAILURE_TLS",
     "FAILURE_UNREACHABLE",
     "classify",
+    "classify_code",
 ]
 
 FAILURE_TIMEOUT = "timeout"          # сервер молчит, пакеты пропадают
@@ -65,6 +66,15 @@ _ERRNO = {
     errno.ENETUNREACH: FAILURE_UNREACHABLE,
     errno.EHOSTUNREACH: FAILURE_UNREACHABLE,
 }
+
+
+def classify_code(code: int) -> str:
+    """Вид сбоя по коду ошибки системы (Winsock или errno), когда исключения нет.
+
+    Так приходит ошибка из чужой сетевой библиотеки (libcurl отдаёт ``OS_ERRNO``).
+    Пусто — код ни о чём определённом не говорит.
+    """
+    return _WINERROR.get(int(code or 0)) or _ERRNO.get(int(code or 0)) or ""
 
 
 def classify(exc: BaseException) -> str:

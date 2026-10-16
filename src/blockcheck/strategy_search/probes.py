@@ -118,16 +118,21 @@ def http_body_complete(response: bytes) -> bool:
 
 
 def probe_https(host: str, address: str, *, cancel=None) -> ProbeOutcome:
-    from diagnostics.tls_probe import https_get
+    """Сайт открывается так, как его открыл бы Chrome: то же рукопожатие и тот же HTTP/2.
 
-    result = https_get(
+    Стратегия режет и подделывает первый пакет соединения, поэтому проверять её
+    нужно на том пакете, который пошлёт браузер (``utils.chrome_https``), а не на
+    приветствии Python.
+    """
+    from utils.chrome_https import chrome_get
+
+    result = chrome_get(
         host,
         address,
         "/",
         timeout=HTTPS_TIMEOUT,
         read_limit=verdict.HTTPS_READ_LIMIT,
         read_timeout=HTTPS_READ_TIMEOUT,
-        body_done=http_body_complete,
         cancel=cancel,
     )
     return verdict.judge_https(result)
@@ -291,13 +296,13 @@ def tcp_port_open(address: str, port: int, *, timeout: float = 3.0) -> bool:
 
 def control_alive(*, cancel=None) -> bool:
     """Жив ли интернет: открывается ли хоть один обычный сайт."""
-    from diagnostics.tls_probe import https_get
+    from utils.chrome_https import chrome_get
 
     def _one(host: str) -> bool:
         addresses, error = resolve_target_addresses(host, 443)
         if error:
             return False
-        result = https_get(host, addresses[0], "/", timeout=CONTROL_TIMEOUT, cancel=cancel)
+        result = chrome_get(host, addresses[0], "/", timeout=CONTROL_TIMEOUT, cancel=cancel)
         return result.status is not None
 
     # Первый открывшийся сайт — ответ: медленные остальные не ждём (раньше выход из

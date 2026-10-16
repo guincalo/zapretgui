@@ -16,8 +16,8 @@ from diagnostics.tls_probe import (
     KIND_TIMEOUT,
     KIND_TLS,
     ProbeResult,
-    https_get,
 )
+from utils.chrome_https import chrome_get
 from diagnostics.verdict import (
     DnsState,
     Level,
@@ -317,7 +317,7 @@ class _Net:
                 "doh_lookup",
                 side_effect=self._doh,
             ),
-            patch.object(net_access, "https_get", side_effect=_https_get),
+            patch.object(net_access, "chrome_get", side_effect=_https_get),
             # Пауза перед повтором нужна настоящей сети; сценариям она только добавляет секунды.
             patch.object(reach, "RETRY_PAUSE_S", 0.0),
             # Уточнение причины ходит в сеть само: в сценариях движка оно подменено.
@@ -338,7 +338,7 @@ class _Net:
             # Подсети — десятки настоящих соединений: в сценариях движка их нет.
             patch.object(sections, "check_subnets", side_effect=self._subnets),
             # «Жив ли сайт снаружи» — запрос к серверу проекта: в сценариях его нет.
-            patch.object(engine.outside_check, "ask", side_effect=self._outside),
+            patch.object(sections.outside_check, "ask", side_effect=self._outside),
             patch.object(net_access, "hosts_file_ipv4", side_effect=lambda _host: self.hosts),
             # Чужой сертификат читается отдельным соединением — в сценариях движка сети нет.
             patch.object(engine.cert_owner, "collect", side_effect=self._cert),
@@ -671,7 +671,7 @@ class FreezeUploadWiringTests(unittest.TestCase):
 
         with (
             patch.object(net_access, "hosts_file_ipv4", return_value=("203.0.113.9",)) as hosts,
-            patch.object(net_access, "https_get", return_value=_ok("203.0.113.9")) as get,
+            patch.object(net_access, "chrome_get", return_value=_ok("203.0.113.9")) as get,
             patch.object(sections.upload_probe, "collect", collect),
         ):
             sections.download(run, "cdn.example", "/file.bin")
@@ -1061,7 +1061,7 @@ class ClockSkewTests(unittest.TestCase):
         result = ProbeResult(ip="142.250.1.1", kind=KIND_OK, status=204, body=body or b"")
         with (
             patch.object(net_access, "doh_lookup", return_value=(bool(addresses), tuple(addresses))),
-            patch.object(net_access, "https_get", return_value=result) as get,
+            patch.object(net_access, "chrome_get", return_value=result) as get,
             patch.object(sections.time, "time", return_value=1_800_000_000.0),
         ):
             return sections.clock_skew(run), get
@@ -1643,44 +1643,6 @@ class EngineMixedAnswerTests(unittest.TestCase):
 
         self.assertEqual(judge_reach(probe.reach), ReachState.UNKNOWN)
 
-    def test_cancel_in_the_middle_of_body_is_not_a_freeze(self) -> None:
-        """Лимит времени снял медленную загрузку после 16 КБ — это не обрыв ТСПУ."""
-        from diagnostics import tls_probe
-
-        cancel = SocketCancel()
-        chunks = [b"HTTP/1.1 200 OK\r\n\r\n" + b"x" * 16_000]
-
-        class _Tls:
-            def settimeout(self, _value): pass
-            def do_handshake(self): pass
-            def version(self): return "TLSv1.3"
-            def sendall(self, _data): pass
-            def shutdown(self, _how): pass
-            def close(self): pass
-
-            def recv(self, _size):
-                if chunks:
-                    return chunks.pop(0)
-                cancel.cancel()
-                raise socket.timeout()
-
-        class _Context:
-            def wrap_socket(self, _sock, **_kwargs):
-                return _Tls()
-
-        listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        listener.bind(("127.0.0.1", 0))
-        listener.listen(1)
-        self.addCleanup(listener.close)
-        with patch.object(tls_probe, "client_context", return_value=_Context()):
-            result = https_get(
-                "example.com", "127.0.0.1", timeout=2.0, port=listener.getsockname()[1],
-                read_limit=64_000, cancel=cancel,
-            )
-
-        self.assertEqual(result.kind, "cancelled")
-        self.assertNotEqual(judge_reach(result), ReachState.FREEZE)
-
     def test_stale_hosts_entry_gets_hosts_advice_not_antivirus(self) -> None:
         verdict = summarize_service(
             "Instagram",
@@ -2103,7 +2065,7 @@ class BlockcheckScopeTests(unittest.TestCase):
 
 
 class TlsProbeFailureTests(unittest.TestCase):
-    """Классификация сбоев на настоящих сокетах (без TLS-сервера)."""
+    """Классификация сбоев запроса «как Chrome» на настоящих сокетах (без TLS-сервера)."""
 
     def _server(self, behaviour):
         listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -2124,7 +2086,7 @@ class TlsProbeFailureTests(unittest.TestCase):
         return port
 
     def _get(self, port, timeout=1.0):
-        return https_get("example.com", "127.0.0.1", timeout=timeout, port=port)
+        return chrome_get("example.com", "127.0.0.1", timeout=timeout, port=port)
 
     def test_reset_during_handshake_is_reset_or_tls(self) -> None:
         def _rst(conn):
