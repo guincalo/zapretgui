@@ -51,6 +51,7 @@ from telegram_proxy.proxy.obfs import (
     dc_field_value,
     encode_packet,
 )
+from telegram_proxy.proxy.route_catalog import relay_addresses
 from telegram_proxy.proxy.routes import (
     KIND_DIRECT,
     KIND_FRONT,
@@ -791,6 +792,10 @@ class TelegramSession:
         health = host.route_health
         reason = str(exc)
         if exc.counted and route.kind != KIND_UPSTREAM:
+            # Потерянный SYN при живом адресе — шум одного потока, а не отказ адреса.
+            lost_syn = not exc.tcp_reached and health.tcp_recently_connected(route.connect_host)
+            if route.kind == KIND_RELAY and route.address_health_key and not lost_syn:
+                health.note_relay_address_failed(relay_addresses(self._dc), route.connect_host)
             if exc.tcp_reached and route.connect_host:
                 health.note_tcp_connected(route.connect_host)
             if route.health_key:
@@ -847,6 +852,8 @@ class TelegramSession:
             health.note_tcp_connected(route.connect_host)
         if route.health_key:
             health.note_answer(route.health_key)
+        if route.kind == KIND_RELAY and route.address_health_key:
+            health.note_relay_address_answered(relay_addresses(self._dc), route.connect_host)
         if route.kind == KIND_FRONT:
             health.note_front_result(route.front_index, route.front_family, tcp_ok=True, answered=True)
         if conn.opened is not None:

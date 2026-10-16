@@ -84,9 +84,12 @@ class RoutePlanTests(unittest.TestCase):
         )
         self.assertEqual(kinds(media_home)[0], KIND_RELAY)
 
-    def test_dc1_has_no_relay_and_starts_with_fronts(self) -> None:
-        plan = build_plan(PlanInput(dc=1, is_media=False, target_host="149.154.175.50"), self.health)
-        self.assertEqual(kinds(plan), [KIND_FRONT, KIND_FRONT, KIND_FRONT, *TUNNELS, KIND_DIRECT])
+    def test_dc1_dc3_dc5_use_relay_on_their_own_ingress(self) -> None:
+        for dc, address in ((1, "149.154.174.100"), (3, "149.154.174.100"), (5, "149.154.170.100")):
+            with self.subTest(dc=dc):
+                plan = build_plan(PlanInput(dc=dc, is_media=False, target_host="149.154.175.50"), self.health)
+                self.assertEqual(kinds(plan), [KIND_RELAY, KIND_FRONT, KIND_FRONT, KIND_FRONT, *TUNNELS, KIND_DIRECT])
+                self.assertEqual((plan[0].connect_host, plan[0].sni), (address, f"kws{dc}.web.telegram.org"))
 
     def test_dc203_uses_only_tunnel_before_fallbacks(self) -> None:
         plan = build_plan(PlanInput(dc=203, is_media=False, target_host="91.105.192.100", upstream=PRESET), self.health)
@@ -136,15 +139,44 @@ class RoutePlanTests(unittest.TestCase):
             worker_domains=("w.example.dev",),
         )
         plan = build_plan(PlanInput(dc=1, is_media=False, target_host="149.154.175.50", cloudflare=cloudflare), self.health)
+        self.assertEqual(kinds(plan)[:4], [KIND_RELAY, KIND_USER_DOMAIN, KIND_USER_WORKER, KIND_FRONT])
+        self.assertEqual(plan[1].sni, "kws1.my.example.com")
+        self._suppress("kws1.web.telegram.org")
+        plan = build_plan(PlanInput(dc=1, is_media=False, target_host="149.154.175.50", cloudflare=cloudflare), self.health)
         self.assertEqual(kinds(plan)[:3], [KIND_USER_DOMAIN, KIND_USER_WORKER, KIND_FRONT])
         self.assertEqual(plan[0].sni, "kws1.my.example.com")
 
-    def test_suppressed_relay_address_switches_to_dns_name(self) -> None:
+    def test_suppressed_relay_address_switches_to_the_other_ingress_then_dns(self) -> None:
+        request = PlanInput(dc=2, is_media=False, target_host="149.154.167.51")
         self._suppress(address_key("149.154.167.220"))
-        plan = build_plan(PlanInput(dc=2, is_media=False, target_host="149.154.167.51"), self.health)
+        plan = build_plan(request, self.health)
+        self.assertEqual(plan[0].connect_host, "149.154.167.99")
+        self.assertEqual(plan[0].address_health_key, address_key("149.154.167.99"))
+        self.assertEqual(plan[0].pool_key, "relay:kws2.web.telegram.org@149.154.167.99")
+        self._suppress(address_key("149.154.167.99"))
+        plan = build_plan(request, self.health)
         self.assertEqual(plan[0].connect_host, "kws2.web.telegram.org")
+        self.assertEqual(plan[0].address_health_key, "")
+        self.assertEqual(plan[0].pool_key, "relay:kws2.web.telegram.org@dns")
+
+    def test_failed_ingress_yields_to_the_other_and_answer_keeps_it_first(self) -> None:
+        dc2 = PlanInput(dc=2, is_media=False, target_host="149.154.167.51")
+        dc4 = PlanInput(dc=4, is_media=True, target_host="149.154.164.250")
+        addresses = ("149.154.167.220", "149.154.167.99")
+        # Один отказ .220 — и все имена DC2/DC4 сразу идут на .99, без DNS.
+        self.health.note_relay_address_failed(addresses, "149.154.167.220")
+        self.assertEqual(build_plan(dc2, self.health)[0].connect_host, "149.154.167.99")
+        self.assertEqual(build_plan(dc4, self.health)[0].connect_host, "149.154.167.99")
+        # .99 ответил: он остаётся первым и после того, как отказ .220 забыт.
+        self.health.note_relay_address_answered(addresses, "149.154.167.99")
+        self.clock.now += 600
+        self.assertEqual(build_plan(dc2, self.health)[0].connect_host, "149.154.167.99")
+        # Отказал и он — первым снова идёт .220, который давно не отказывал.
+        self.health.note_relay_address_failed(addresses, "149.154.167.99")
+        self.assertEqual(build_plan(dc2, self.health)[0].connect_host, "149.154.167.220")
 
     def test_all_wss_suppressed_goes_socks_then_fronts_anyway(self) -> None:
+        self._suppress("kws1.web.telegram.org")
         self._suppress(cdn_key(1))
         for host in TUNNEL_HOSTS:
             self._suppress(host)

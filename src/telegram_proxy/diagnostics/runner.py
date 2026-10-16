@@ -11,11 +11,13 @@ from os import urandom
 from log.log import log
 from settings.mode import ENGINE_WINWS2
 import telegram_proxy.config.settings as telegram_proxy_settings
+from telegram_proxy.proxy.route_catalog import RELAY_INGRESS
 from utils.windows_process_probe import iter_process_records_winapi
 from utils.net_resolve import connect_tcp
 
 DC_TARGETS = [
     ("149.154.167.220", "WSS relay", "—"),
+    ("149.154.167.99", "WSS relay", "—"),
     ("149.154.167.50", "DC2", "kws2"),
     ("149.154.167.41", "DC2", "kws2"),
     ("149.154.167.91", "DC4", "kws4"),
@@ -33,15 +35,19 @@ DC_TARGETS = [
     ("149.154.164.250", "DC4 media", "—"),
 ]
 
+# Каждое имя kwsN проверяется на адресах входа своего DC: на чужом адресе релей
+# отвечает 302 или молчит, и так раньше выходило «релея нет» для DC1, DC3, DC5.
 WSS_PROBE_TARGETS = [
-    ("149.154.167.220", "kws1.web.telegram.org", 1),
-    ("149.154.167.220", "kws2.web.telegram.org", 2),
-    ("149.154.167.220", "kws3.web.telegram.org", 3),
-    ("149.154.167.220", "kws4.web.telegram.org", 4),
-    ("149.154.167.220", "kws5.web.telegram.org", 5),
-    ("149.154.167.220", "zws2.web.telegram.org", 2),
-    ("149.154.167.220", "zws4.web.telegram.org", 4),
+    (address, f"kws{dc}.web.telegram.org", dc)
+    for dc, addresses in sorted(RELAY_INGRESS.items())
+    for address in addresses
 ]
+
+# Адрес входа -> какие DC он обслуживает, для строки «доступность адресов».
+RELAY_ADDRESS_DCS: dict[str, list[int]] = {}
+for _dc, _addresses in sorted(RELAY_INGRESS.items()):
+    for _address in _addresses:
+        RELAY_ADDRESS_DCS.setdefault(_address, []).append(_dc)
 
 def run_all(
     proxy_port: int,
@@ -70,12 +76,10 @@ def run_all(
             for ip, domain, dc in WSS_PROBE_TARGETS
         ]
 
-        relay_future = executor.submit(check_relay_reachable, timeout=5.0)
-        dns_relay_future = executor.submit(
-            check_relay_reachable,
-            relay_ip="149.154.167.99",
-            timeout=5.0,
-        )
+        relay_futures = {
+            address: executor.submit(check_relay_reachable, relay_ip=address, timeout=5.0)
+            for address in RELAY_ADDRESS_DCS
+        }
 
         sni_future = executor.submit(_test_sni_vs_ip)
         http_future = executor.submit(_test_http_port80)
@@ -87,36 +91,31 @@ def run_all(
         if upstream_target is not None:
             upstream_future = executor.submit(_test_upstream_proxy, *upstream_target)
 
-        relay_result = relay_future.result()
+        relay_results = {address: future.result() for address, future in relay_futures.items()}
         results.extend(
             [
                 "=" * 76,
-                "  ДОСТУПНОСТЬ WSS RELAY",
+                "  ДОСТУПНОСТЬ WSS RELAY (адреса входа веб-релеев Telegram)",
                 "=" * 76,
-                "  149.154.167.220:443 (web.telegram.org)",
             ]
         )
-        if relay_result["reachable"]:
-            results.append(f"  TCP+TLS: OK ({relay_result['ms']:.0f}ms)")
-        else:
-            results.append(f"  TCP+TLS: TIMEOUT ({relay_result['ms']:.0f}ms) <- ЗАБЛОКИРОВАН")
-            results.append("  ! WSS relay недоступен — прокси не сможет проксировать через WSS.")
+        for address, relay_result in relay_results.items():
+            dcs = ", ".join(f"DC{dc}" for dc in RELAY_ADDRESS_DCS[address])
+            if relay_result["reachable"]:
+                results.append(f"  {address}:443 ({dcs}): TCP+TLS OK ({relay_result['ms']:.0f}ms)")
+            else:
+                results.append(
+                    f"  {address}:443 ({dcs}): TIMEOUT ({relay_result['ms']:.0f}ms) <- ЗАБЛОКИРОВАН"
+                )
+        if not any(result["reachable"] for result in relay_results.values()):
+            results.append("  ! Ни один адрес входа не отвечает — прокси пойдёт через Cloudflare.")
             try:
                 zapret_running = winws_future.result(timeout=0.1)
             except Exception:
                 zapret_running = None
             if zapret_running is not None:
                 results.append(f"  Zapret запущен: {'ДА' if zapret_running else 'НЕТ'}")
-            if relay_result["error"]:
-                results.append(f"  Ошибка: {relay_result['error']}")
         publish()
-
-        dns_relay_result = dns_relay_future.result()
-        if dns_relay_result["reachable"]:
-            results.append(f"  DNS relay (149.154.167.99): OK ({dns_relay_result['ms']:.0f}ms)")
-        else:
-            results.append(f"  DNS relay (149.154.167.99): TIMEOUT ({dns_relay_result['ms']:.0f}ms)")
-        results.append("  (не используется — .220 стабильнее для медиа)")
         results.append("")
 
         results.extend(
@@ -150,14 +149,14 @@ def run_all(
             [
                 "",
                 "=" * 76,
-                "  WSS RELAY — ДОСТУПНОСТЬ ЭНДПОИНТОВ (149.154.167.220)",
+                "  WSS RELAY — ДОСТУПНОСТЬ ЭНДПОИНТОВ (на адресах входа своего DC)",
                 "=" * 76,
-                f"{'DC':<6} {'Endpoint':<32} {'TCP':>6}  {'TLS':>6}  {'WS':>6}  {'Результат'}",
+                f"{'DC':<6} {'Endpoint':<44} {'TCP':>6}  {'TLS':>6}  {'WS':>6}  {'Результат'}",
                 "-" * 76,
             ]
         )
 
-        for result in sorted(wss_results, key=lambda item: item["dc"]):
+        for result in sorted(wss_results, key=lambda item: (item["dc"], item["ip"])):
             tcp = f"{result['tcp_ms']:.0f}ms" if result["tcp_ms"] is not None else "—"
             tls = f"{result['tls_ms']:.0f}ms" if result["tls_ms"] is not None else "—"
             ws = f"{result['ws_ms']:.0f}ms" if result["ws_ms"] is not None else "—"
@@ -174,7 +173,7 @@ def run_all(
             else:
                 status = result.get("error", result["status"])[:30]
             results.append(
-                f"DC{result['dc']:<4} {result['domain']:<32} {tcp:>6}  {tls:>6}  {ws:>6}  {status}"
+                f"DC{result['dc']:<4} {result['domain'] + ' @ ' + result['ip']:<44} {tcp:>6}  {tls:>6}  {ws:>6}  {status}"
             )
         publish()
 
@@ -644,7 +643,7 @@ def _build_summary(
             icon = "x"
         summary.append(f"  [{icon}] {dc_name:<10} напрямую: {direct:<10} прокси: {wss_info}")
 
-    summary.extend(["", "── WSS relay (149.154.167.220) ──"])
+    summary.extend(["", "── WSS relay ──"])
     if relay_ok:
         summary.append(f"  Доступен: {', '.join(f'kws{dc}' for dc in sorted(wss_ok_dcs))}")
     else:

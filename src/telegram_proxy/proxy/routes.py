@@ -2,8 +2,9 @@
 
 Главный путь — WSS, как в ZaStoGram:
 
-1. релей Telegram kwsN / kwsN-1 (только стабильные из route_catalog: DC2, DC4),
-   по зашитому адресу; если адрес подавлен — тот же домен через DNS;
+1. релей Telegram kwsN / kwsN-1 для DC1–DC5 по адресу входа из
+   route_catalog.RELAY_INGRESS (у DC2/DC4 их два: первым тот, что последним
+   ответил); если подавлены все адреса — тот же домен через DNS;
 2. свой домен Cloudflare и свой Worker из настроек, если они заданы;
 3. фронты Cloudflare из CDN_FRONTS с курсором и запомненным рабочим адресом;
 4. туннель через воркеры из TUNNEL_HOSTS по кругу, начиная со своего для
@@ -46,8 +47,8 @@ from telegram_proxy.proxy.route_catalog import (
     CDN_FRONTS,
     TUNNEL_HOSTS,
     WSS_PATH,
-    WSS_ROUTES,
-    RouteStatus,
+    relay_addresses,
+    relay_domain,
 )
 from telegram_proxy.proxy.routing import UpstreamProxyConfig, should_route_upstream
 
@@ -143,14 +144,6 @@ class PlanInput:
 _FRONT_DOMAINS = frozenset(front.domain for front in CDN_FRONTS)
 
 
-def _stable_relay(dc: int) -> tuple[str, str, str] | None:
-    """(домен, медиа-домен, адрес) стабильного релея DC или None."""
-    for route in WSS_ROUTES:
-        if route.dc == int(dc) and route.status == RouteStatus.STABLE:
-            return route.hostname, route.media_hostname, route.relay_ip
-    return None
-
-
 def _is_ipv4(value: str) -> bool:
     try:
         IPv4Address(str(value))
@@ -160,24 +153,37 @@ def _is_ipv4(value: str) -> bool:
 
 
 def _relay_route(dc: int, is_media: bool, health: RouteHealth) -> Route | None:
-    relay = _stable_relay(dc)
-    if relay is None:
+    addresses = relay_addresses(dc)
+    if not addresses:
         return None
-    hostname, media_hostname, relay_ip = relay
-    domain = media_hostname if is_media else hostname
+    domain = relay_domain(dc, is_media=is_media)
     if health.is_suppressed(domain):
         return None
-    addr_key = address_key(relay_ip)
-    use_address = not health.is_suppressed(addr_key)
+    # Один релей в плане: за ним сразу идут фронты, и гонка фронта с
+    # недоказанным релеем остаётся в силе. Отказавший адрес уступает место
+    # другому адресу DC в следующих соединениях (health.relay_address_order).
+    for address in health.relay_address_order(addresses):
+        addr_key = address_key(address)
+        if health.is_suppressed(addr_key):
+            continue
+        return Route(
+            kind=KIND_RELAY,
+            connect_host=address,
+            sni=domain,
+            dc_field=DC_FIELD_RANDOM,
+            health_key=domain,
+            address_health_key=addr_key,
+            proof_bytes=RELAY_PROOF_BYTES,
+            pool_key=f"relay:{domain}@{address}",
+        )
     return Route(
         kind=KIND_RELAY,
-        connect_host=relay_ip if use_address else domain,
+        connect_host=domain,
         sni=domain,
         dc_field=DC_FIELD_RANDOM,
         health_key=domain,
-        address_health_key=addr_key if use_address else "",
         proof_bytes=RELAY_PROOF_BYTES,
-        pool_key=f"relay:{domain}@{relay_ip if use_address else 'dns'}",
+        pool_key=f"relay:{domain}@dns",
     )
 
 

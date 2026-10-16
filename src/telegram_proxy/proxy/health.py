@@ -15,6 +15,9 @@
   дольше 10 минут, чтобы старая сеть не мешала новой;
 * пока релей не ответил ни разу с запуска прокси или сбоит, он «не доказан»:
   сессия гонит рядом с ним фронт (ZaStoGram, socket.cpp WssRelayUnproven).
+* у DC2/DC4 два адреса входа релея: первым идёт тот, что последним ответил,
+  отказавший за последние 2 минуты встаёт назад; только когда подавлены все
+  адреса, релей идёт по имени через DNS (ZaStoGram, selectRelayAddress).
 
 Ключи: домен релея (kws2.web.telegram.org), адрес релея (addr-149.154.167.220),
 все фронты одного DC (cdn-kws2), туннель (имя хоста воркера, у каждого своё).
@@ -28,7 +31,7 @@ import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Sequence
 
 
 log = logging.getLogger("tg_proxy")
@@ -42,6 +45,8 @@ SUPPRESS_MAX_SECONDS = 30 * 60.0
 RESTORED_SUPPRESS_MAX_SECONDS = 10 * 60.0
 # Рабочий адрес фронтов забывается после стольких отказов TCP подряд на нём.
 FRONT_FAMILY_FORGET_FAILURES = 2
+# Отказавший адрес входа релея уступает очередь другому адресу DC на это время.
+RELAY_ADDRESS_RETRY_SECONDS = SUPPRESS_BASE_SECONDS
 
 
 def address_key(ip: str) -> str:
@@ -82,6 +87,10 @@ class RouteHealth:
         self._front_cursor = int.from_bytes(os.urandom(2), "little") % self._front_slots if self._front_slots else 0
         self._front_family: int | None = None
         self._front_family_failures = 0
+        # Адрес входа релея, ответивший последним (ключ — первый адрес списка
+        # DC), и когда какой адрес отказал. Только в памяти, как и _answered.
+        self._relay_preferred: dict[str, str] = {}
+        self._relay_failed_at: dict[str, float] = {}
         # С какого воркера-туннеля эта установка начинает перебор.
         self.tunnel_start = int.from_bytes(os.urandom(2), "little") if tunnel_start is None else int(tunnel_start)
         self._load()
@@ -155,6 +164,40 @@ class RouteHealth:
     def tcp_recently_connected(self, address: str) -> bool:
         at = self._tcp_ok_at.get(address)
         return at is not None and self._clock() - at < RECENT_TCP_SECONDS
+
+    # ---- адреса входа релея ----
+
+    def relay_address_order(self, addresses: Sequence[str]) -> list[str]:
+        """Адреса входа DC в порядке попыток: ответивший последним — первым,
+        отказавшие за последние RELAY_ADDRESS_RETRY_SECONDS — в конце."""
+
+        if not addresses:
+            return []
+        preferred = self._relay_preferred.get(addresses[0], "")
+        order = ([preferred] if preferred in addresses else []) + [a for a in addresses if a != preferred]
+        now = self._clock()
+
+        def failed_recently(address: str) -> bool:
+            return now - self._relay_failed_at.get(address, -1e9) < RELAY_ADDRESS_RETRY_SECONDS
+
+        return sorted(order, key=failed_recently)
+
+    def note_relay_address_failed(self, addresses: Sequence[str], address: str) -> None:
+        """Адрес входа отказал: следующие соединения DC берут другой его адрес."""
+
+        if not address or address not in addresses:
+            return
+        self._relay_failed_at[address] = self._clock()
+        if len(addresses) > 1 and self._relay_preferred.get(addresses[0]) == address:
+            self._relay_preferred.pop(addresses[0], None)
+
+    def note_relay_address_answered(self, addresses: Sequence[str], address: str) -> None:
+        if not address or address not in addresses:
+            return
+        if len(addresses) > 1 and self._relay_preferred.get(addresses[0]) != address:
+            log.info("relay address %s answered: it goes first for its DCs", address)
+        self._relay_preferred[addresses[0]] = address
+        self._relay_failed_at.pop(address, None)
 
     # ---- фронты ----
 

@@ -465,6 +465,23 @@ class SessionScenarioTests(unittest.IsolatedAsyncioTestCase):
             self.logs,
         )
 
+    async def test_relay_address_without_tcp_hands_dc_to_its_other_ingress(self) -> None:
+        # Провайдер закрыл 149.154.167.220 по IP: следующее соединение DC2 идёт
+        # на второй адрес входа 149.154.167.99, а не на DNS-имя или фронт.
+        self._race_timing(loss_wait=0.0)
+        self.relay_hangs = True
+        proxy = await self._start(mode="socks5")
+        await self._one_dc2_exchange()
+        await asyncio.sleep(0.05)
+
+        self.dialled.clear()
+        await self._one_dc2_exchange()
+
+        self.assertEqual(self.dialled[0], "149.154.167.99")
+        self.assertEqual(proxy.stats.wss_connections, 1)
+        order = proxy.route_health.relay_address_order(("149.154.167.220", "149.154.167.99"))
+        self.assertEqual(order[0], "149.154.167.99")
+
     async def test_relay_is_not_blamed_when_front_answers_before_it_could_connect(self) -> None:
         # Фронт из пула отвечает почти сразу; полсекунды без SYN ещё не отказ.
         self._race_timing(loss_wait=5.0)
