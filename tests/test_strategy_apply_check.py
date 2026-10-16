@@ -48,8 +48,11 @@ class WaitTests(unittest.TestCase):
 
 
 class CheckSiteTests(unittest.TestCase):
-    def _run(self, outcomes_by_call, *, running=True):
+    def _run(self, outcomes_by_call, *, running=True, visit=None):
+        from blockcheck import browser_check
+
         calls = iter(outcomes_by_call)
+        visit = visit or browser_check.BrowserVisit(browser_check.BROWSER_MISSING)
         with (
             patch("blockcheck.strategy_search.probes.resolve_target_addresses", return_value=(["1.1.1.1", "1.1.2.1"], "")),
             patch("blockcheck.strategy_search.probes.probe_https_addresses", side_effect=lambda host, addresses, cancel: next(calls)),
@@ -57,7 +60,9 @@ class CheckSiteTests(unittest.TestCase):
         ):
             cancel = SocketCancel()
             cancel.sleep = lambda seconds: True
-            return check.run_apply_check("discord.com", is_running=lambda: True, restarting=False, cancel=cancel)
+            return check.run_apply_check(
+                "discord.com", is_running=lambda: True, restarting=False, cancel=cancel, open_browser=lambda host, **_k: visit
+            )
 
     def test_site_open_through_preset_is_ok(self) -> None:
         self.assertEqual(self._run([[OK, OK]]).code, check.CHECK_OK)
@@ -67,6 +72,19 @@ class CheckSiteTests(unittest.TestCase):
         failed = self._run([[RESET, OK], [RESET, RESET]])
         self.assertEqual(failed.code, check.CHECK_FAILED)
         self.assertIn("сброшено", failed.text)
+
+    def test_real_browser_confirms_what_the_probe_saw(self) -> None:
+        from blockcheck import browser_check
+
+        opened = self._run([[OK, OK]], visit=browser_check.BrowserVisit(browser_check.BROWSER_OK, browser="msedge.exe"))
+        self.assertEqual(opened.code, check.CHECK_OK)
+        self.assertIn("msedge.exe", opened.text)
+        refused = browser_check.BrowserVisit(browser_check.BROWSER_FAILED, "ERR_CONNECTION_RESET", "соединение сброшено", "msedge.exe")
+        failed = self._run([[OK, OK]], visit=refused)
+        self.assertEqual(failed.code, check.CHECK_BROWSER_FAILED)
+        self.assertIn("сброшено", failed.text)
+        # Проба не открыла сайт — браузер не нужен: итог уже ясен.
+        self.assertEqual(self._run([[RESET], [RESET]], visit=refused).code, check.CHECK_FAILED)
 
     def test_zapret_not_started_is_skipped(self) -> None:
         self.assertEqual(self._run([], running=False).code, check.CHECK_SKIPPED)
@@ -89,3 +107,5 @@ class MessageTests(unittest.TestCase):
         self.assertEqual(kind, "warning")
         self.assertIn("профиль", body)
         self.assertIsNone(check.apply_check_message("discord.com", check.CHECK_SKIPPED, "Zapret не запустился"))
+        kind, title, _body = check.apply_check_message("discord.com", check.CHECK_BROWSER_FAILED, "msedge.exe: сброшено")
+        self.assertEqual((kind, title), ("warning", "В браузере сайт не открылся"))

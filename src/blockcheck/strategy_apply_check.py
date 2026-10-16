@@ -6,6 +6,9 @@
 запустился с новой стратегией, сайт открывается ещё раз тем же способом, что
 и в подборе (те же адреса из разных подсетей и проверка объёма), и человек
 сразу видит, работает ли стратегия у него, а не «проверьте сами».
+
+Открылся — сайт открывает ещё и настоящий браузер без окна (Edge или Chrome,
+``blockcheck.browser_check``): своим DNS и своим стеком, как его откроет человек.
 """
 
 from __future__ import annotations
@@ -28,6 +31,8 @@ CHECK_OK = "ok"
 CHECK_FAILED = "failed"
 # Проверить не вышло (Zapret не запустился, адреса нет, проверку сняли).
 CHECK_SKIPPED = "skipped"
+# Проба сайт открыла, а настоящий браузер — нет.
+CHECK_BROWSER_FAILED = "browser_failed"
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,8 +84,8 @@ def wait_until_running(is_running: Callable[[], bool], *, restarting: bool, slee
     return False
 
 
-def run_apply_check(host: str, *, is_running, restarting: bool, cancel) -> ApplyCheck:
-    """Дождаться Zapret и проверить сайт; при провале — ещё раз чуть позже.
+def run_apply_check(host: str, *, is_running, restarting: bool, cancel, open_browser=None) -> ApplyCheck:
+    """Дождаться Zapret и проверить сайт; при провале — ещё раз чуть позже; открылся — и в браузере.
 
     Второй заход нужен, если работающий Zapret перечитал пресет позже, чем мы
     начали проверку: первая проба тогда шла ещё со старым пресетом.
@@ -88,11 +93,28 @@ def run_apply_check(host: str, *, is_running, restarting: bool, cancel) -> Apply
     if not wait_until_running(is_running, restarting=restarting, sleep=cancel.sleep, cancelled=lambda: cancel.cancelled):
         return ApplyCheck(CHECK_SKIPPED, "Zapret не запустился")
     check = check_site(host, cancel=cancel)
-    if check.code != CHECK_FAILED:
+    if check.code == CHECK_FAILED:
+        if not cancel.sleep(RESTART_SETTLE_SECONDS):
+            return ApplyCheck(CHECK_SKIPPED, "проверку остановили")
+        check = check_site(host, cancel=cancel)
+    if check.code != CHECK_OK:
         return check
-    if not cancel.sleep(RESTART_SETTLE_SECONDS):
+    return _confirm_in_browser(host, check, cancel=cancel, open_browser=open_browser)
+
+
+def _confirm_in_browser(host: str, check: ApplyCheck, *, cancel, open_browser=None) -> ApplyCheck:
+    """Проба открыла сайт — подтверждает настоящий браузер. Нет браузера — остаётся итог пробы."""
+    from blockcheck import browser_check
+
+    visit = (open_browser or browser_check.open_in_browser)(host, cancelled=lambda: cancel.cancelled)
+    if cancel.cancelled:
         return ApplyCheck(CHECK_SKIPPED, "проверку остановили")
-    return check_site(host, cancel=cancel)
+    if visit.state == browser_check.BROWSER_MISSING:
+        return check
+    if visit.ok:
+        note = f"открылся и в браузере {visit.browser}"
+        return ApplyCheck(CHECK_OK, f"{check.text}; {note}" if check.text else note)
+    return ApplyCheck(CHECK_BROWSER_FAILED, f"{visit.browser}: {visit.text}")
 
 
 class StrategyApplyCheckWorker(QThread):
@@ -134,5 +156,13 @@ def apply_check_message(host: str, code: str, text: str) -> tuple[str, str, str]
             f"{host}: {text or 'не открылся'}. В подборе стратегия работала — значит, сайт перехватывает "
             "другой профиль выше в пресете или пресет объявляет фейки иначе. Откройте пресет и поднимите "
             "профиль сайта наверх или запустите подбор ещё раз.",
+        )
+    if code == CHECK_BROWSER_FAILED:
+        return (
+            "warning",
+            "В браузере сайт не открылся",
+            f"{host}: проба программы через ваш пресет сайт открыла, а браузер без окна — нет ({text}). "
+            "Браузер мог получить от DNS другой адрес сайта или пойти через свой прокси. Откройте сайт в "
+            "браузере сами; если не открывается — запустите подбор ещё раз.",
         )
     return None
