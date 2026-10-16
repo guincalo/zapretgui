@@ -315,16 +315,19 @@ def _probe_host(
             probe.mark("volume")
         if quic_future is not None:
             probe.quic = quic_probe.judge(quic_future.result())
-        if protocols_future is not None:
-            probe.settle_protocols(protocol_probe.judge(protocols_future.result()))
+        facts = protocols_future.result() if protocols_future is not None else None
+        probe.settle_protocols(protocol_probe.judge(facts, protocol_probe.chrome_line(probe.reach)))
         probe.mark("roads")
     return probe
 
 
 def _start_protocols(run: _Run, probe: _Probe) -> Future | None:
-    """TLS 1.2, TLS 1.3 и HTTP — по тому же адресу, к которому шёл основной запрос."""
+    """TLS 1.2, TLS 1.3 и HTTP — по тому же адресу, к которому шёл основной запрос.
+
+    Только если сайт не открылся: открывшемуся хватает строки «Как Chrome» из основной проверки.
+    """
     result = probe.reach
-    if result is None or not result.ip or run.dns_cancelled():
+    if result is None or not result.ip or probe.reach_state == ReachState.OK or run.dns_cancelled():
         return None
     return run.submit(protocol_probe.collect, probe.host, result.ip, submit=run.net_lane.submit, cancel=run.probe_cancel)
 
@@ -551,7 +554,6 @@ def _service_verdict(service: Service, probes: list[_Probe], *, zapret_running: 
             kind=probe.kind,
             hosts_stale=probe.hosts_stale,
             unstable=bool(probe.unstable),
-            fingerprint=any(line.code == protocol_probe.CODE_FINGERPRINT for line in probe.protocols),
             dns_blind=bool(
                 probe.judgement
                 and probe.judgement.state == DnsState.SPOOFED

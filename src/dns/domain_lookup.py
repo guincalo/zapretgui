@@ -490,11 +490,11 @@ def _program_road(domain: str | None, ip: str, cancel: SocketCancel) -> ProgramR
         return ProgramRoad(ip=ip, tcp=tcp)
     from diagnostics import protocol_probe
 
-    # Свой маленький пул: общий занят другими пробами, а эти четыре ждут друг друга.
-    with ThreadPoolExecutor(max_workers=4, thread_name_prefix="domain-road") as pool:
+    # Свой маленький пул: общий занят другими пробами, а эти три ждут друг друга.
+    with ThreadPoolExecutor(max_workers=3, thread_name_prefix="domain-road") as pool:
         found = protocol_probe.judge(protocol_probe.collect(domain, ip, submit=pool.submit, cancel=cancel))
     lines = tuple((line.title, line.state, line.text) for line in found)
-    hello = [line for line in found if line.key in (protocol_probe.PROTO_TLS12, protocol_probe.PROTO_TLS13, protocol_probe.PROTO_BROWSER)]
+    hello = [line for line in found if line.key in (protocol_probe.PROTO_TLS12, protocol_probe.PROTO_TLS13)]
     # «Не проходит» — только когда приветствие именно оборвали; несостоявшаяся проба ничего не доказывает.
     opens: bool | None = None
     if any(line.state == protocol_probe.STATE_OK for line in hello):

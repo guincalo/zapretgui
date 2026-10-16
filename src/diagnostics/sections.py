@@ -723,11 +723,11 @@ def check_crowd(run: Run, collected: dict[str, list[Probe]], services, emit: Emi
     Идёт самой последней: проба сама может остановить сайт на пару минут. При
     работающем обходе (``tools``) не делается — мерили бы обход, а не линию.
     """
-    from diagnostics import browser_hello, crowd_probe, protocol_probe
+    from diagnostics import browser_hello, crowd_probe
 
     if tools:
         return None
-    # Сайт, который открылся и у которого приветствие «как Chrome» проходит: иначе сравнивать не с чем.
+    # Сайт, который открылся: основная проверка открывает его как Chrome, иначе сравнивать не с чем.
     site = next(
         (
             probe
@@ -739,7 +739,6 @@ def check_crowd(run: Run, collected: dict[str, list[Probe]], services, emit: Emi
             and probe.reach is not None
             and ":" not in probe.reach.ip
             and not probe.unstable
-            and any(line.key == protocol_probe.PROTO_BROWSER and line.state == protocol_probe.STATE_OK for line in probe.protocols)
         ),
         None,
     )

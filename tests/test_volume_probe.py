@@ -144,8 +144,10 @@ class DownloadTests(unittest.TestCase):
         return listener.getsockname()[1]
 
     def _download(self, port: int, **kwargs) -> vp.VolumeRun:
-        trusting = ssl.create_default_context(cafile=str(self.cert))
-        with patch.object(vp, "client_context", return_value=trusting):
+        from utils import chrome_https
+
+        # Запросы идут «как Chrome»: учебный сертификат — единственный корень доверия.
+        with patch.object(chrome_https, "_ca_bundle", return_value=str(self.cert)):
             return vp.download(HOST, "127.0.0.1", "/page", port=port, timeout=2.0, **kwargs)
 
     @staticmethod
@@ -176,7 +178,9 @@ class DownloadTests(unittest.TestCase):
         # Объём набран запросами по одному соединению, а не одним ответом.
         self.assertGreater(result.requests, 30)
         self.assertTrue(seen[0].startswith(b"GET /page HTTP/1.1\r\n"))
-        self.assertIn(b"Connection: keep-alive", seen[0])
+        # Запрос браузерный: заголовки Chrome на Windows, а не «Mozilla/5.0» программы.
+        self.assertIn(b"Chrome/150", seen[0])
+        self.assertIn(b'sec-ch-ua-platform: "Windows"', seen[0])
 
     def test_chunked_answers_are_read_to_the_end(self) -> None:
         def handle(tls) -> None:

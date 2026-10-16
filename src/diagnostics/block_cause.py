@@ -448,6 +448,10 @@ def judge(facts: CauseFacts) -> Cause | None:
             # Не проверяли повторно (старые данные) — верим первому сравнению; повтор не дал ясного ответа — нет.
             confident=again is None or repeated,
         )
+    if facts.real_again is not None and facts.real_again.kind == HELLO_OK:
+        # Простое приветствие с настоящим именем проходит: ни имя, ни адрес не закрыты. Рвут само
+        # соединение основной проверки — например, по почерку браузера (строка «Как Chrome»).
+        return None
     allowed = facts.allowed
     if allowed is not None and allowed.answered:
         # Постороннее имя не прошло, а разрешённое прошло: к этому адресу пускают только

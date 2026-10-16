@@ -158,7 +158,12 @@ class NetLaneTests(unittest.TestCase):
 
         run = Run(None, workers=8)
         self.addCleanup(run.close)
-        probe = SimpleNamespace(host="discord.com", reach=ProbeResult(ip="203.0.113.5", kind=KIND_RESET, stage=STAGE_TLS))
+        from diagnostics.verdict import ReachState
+
+        # Сайт не открылся: только тогда идут пробы протоколов.
+        probe = SimpleNamespace(
+            host="discord.com", reach=ProbeResult(ip="203.0.113.5", kind=KIND_RESET, stage=STAGE_TLS), reach_state=ReachState.DPI
+        )
         seen = {}
 
         def remember(name):

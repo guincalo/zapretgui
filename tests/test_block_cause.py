@@ -268,6 +268,11 @@ class JudgeTests(unittest.TestCase):
         self.assertEqual((mixed.code, mixed.confident), (bc.CAUSE_NO_NAME_WORKS, False))
         self.assertEqual(bk.site_kind("dpi", mixed.code), bk.KIND_UNCLEAR)
 
+    def test_plain_hello_with_the_real_name_passing_is_not_a_closed_address(self) -> None:
+        # Основная проверка идёт как Chrome; простое приветствие с тем же именем прошло — адрес открыт,
+        # а режут само браузерное соединение (вид «по почерку браузера» ставит строка «Как Chrome»).
+        self.assertIsNone(bc.judge(_facts(neutral=SILENCE, nameless=SILENCE, real_again=ANSWER)))
+
     def test_only_allowed_name_passing_is_a_name_whitelist_not_a_closed_address(self) -> None:
         """Постороннее имя не прошло, а разрешённое прошло: адрес открыт, пускают по списку имён."""
         cause = bc.judge(_facts(neutral=RESET, nameless=SILENCE, allowed=ANSWER))

@@ -110,19 +110,13 @@ class Probe:
         self._marked_at = now
 
     @property
-    def browser_only(self) -> bool:
-        """Обычное соединение рвут, а приветствие, какое шлёт Chrome, до сервера доходит.
-
-        Человек открывает сайт браузером, поэтому такой сайт для него открывается:
-        фильтр (или стратегия обхода) пропускает именно браузерное приветствие.
-        """
-        return any(line.code == protocol_probe.CODE_BROWSER_ONLY for line in self.protocols)
+    def fingerprint(self) -> bool:
+        """Chrome режут, а простое приветствие к тому же адресу проходит: фильтр узнаёт браузер по почерку."""
+        return any(line.code == protocol_probe.CODE_FINGERPRINT for line in self.protocols)
 
     def settle_protocols(self, lines: tuple) -> None:
-        """Принимает строки «TLS 1.2 / TLS 1.3 / как Chrome / HTTP» и поправляет по ним вывод."""
+        """Принимает строки «Как Chrome / TLS 1.2 / TLS 1.3 / HTTP»."""
         self.protocols = lines
-        if self.reach_state == ReachState.DPI and self.browser_only:
-            self.reach_state = ReachState.OK
 
     @property
     def address_confirmed(self) -> bool:
@@ -159,6 +153,9 @@ class Probe:
         # Не открылся и из-за рубежа — не блокировка: сайт не работает сам.
         if kind and self.outside == OUTSIDE_DOWN and self.reach_state in (ReachState.IP_BLOCK, ReachState.DPI):
             return block_kind.KIND_DOWN
+        # Причину пробы не назвали, но простое приветствие проходит, а Chrome — нет.
+        if kind == block_kind.KIND_UNCLEAR and self.fingerprint:
+            return block_kind.KIND_FINGERPRINT
         return kind
 
 

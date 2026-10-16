@@ -157,11 +157,8 @@ class SectionTests(unittest.TestCase):
     """Какой сайт идёт на пробу и когда она не делается вовсе."""
 
     @staticmethod
-    def _probe(host, *, state=ReachState.OK, main=True, browser="ok", ip="45.1.2.3"):
-        lines = [SimpleNamespace(key="browser", state=browser)] if browser else []
-        return SimpleNamespace(
-            host=host, reach_state=state, reach=SimpleNamespace(ip=ip), target=SimpleNamespace(main=main), protocols=lines, unstable=""
-        )
+    def _probe(host, *, state=ReachState.OK, main=True, ip="45.1.2.3"):
+        return SimpleNamespace(host=host, reach_state=state, reach=SimpleNamespace(ip=ip), target=SimpleNamespace(main=main), unstable="")
 
     def _run(self, collected, *, tools=(), verdict=None):
         services = {
@@ -181,7 +178,7 @@ class SectionTests(unittest.TestCase):
             result = sections.check_crowd(run, collected, services, lines.append, tools=tools)
         return result, asked, lines
 
-    def test_first_open_site_whose_browser_hello_passes_is_taken(self) -> None:
+    def test_first_open_main_site_is_taken(self) -> None:
         collected = {
             "ya": [self._probe("ya.ru")],
             "a": [self._probe("blocked.example", state=ReachState.DPI), self._probe("side.example", main=False)],
@@ -205,10 +202,9 @@ class SectionTests(unittest.TestCase):
 
     def test_no_suitable_site_or_no_control_no_probe(self) -> None:
         only_blocked = {"ya": [self._probe("ya.ru")], "a": [self._probe("x.example", state=ReachState.DPI)]}
-        no_browser = {"ya": [self._probe("ya.ru")], "a": [self._probe("x.example", browser="")]}
         no_control = {"ya": [self._probe("ya.ru", state=ReachState.DPI)], "a": [self._probe("x.example")]}
 
-        for collected in (only_blocked, no_browser, no_control):
+        for collected in (only_blocked, no_control):
             self.assertEqual(self._run(collected)[:2], (None, []))
 
     def test_freeze_becomes_a_problem_with_the_site_named(self) -> None:

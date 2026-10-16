@@ -769,48 +769,55 @@ class SiteWordsComeFromTheReportTests(unittest.TestCase):
     """Слово итога, дороги и метки сайта лежат в отчёте готовыми: экран их только показывает."""
 
     @staticmethod
-    def _protocols(tls12, tls13, browser):
+    def _protocols(tls12, tls13):
         bc = engine.block_cause
         return lambda host, ip: engine.protocol_probe.ProtocolFacts(
-            host=host, ip=ip, tls12=bc.HelloResult(tls12, ms=30.0), tls13=bc.HelloResult(tls13, ms=30.0), browser=bc.HelloResult(browser, ms=40.0)
+            host=host, ip=ip, tls12=bc.HelloResult(tls12, ms=30.0), tls13=bc.HelloResult(tls13, ms=30.0)
         )
 
     @staticmethod
     def _discord(result) -> dict:
         return next(item for item in result["services"] if item["key"] == "discord")
 
-    def test_open_site_has_status_and_six_roads_in_fixed_order(self) -> None:
-        bc = engine.block_cause
+    def test_open_site_has_status_and_its_roads_in_fixed_order(self) -> None:
+        # Открытому сайту хватает основной проверки «как Chrome»: простые приветствия к нему не шлются.
         net = _Net()
-        net.protocol_facts = self._protocols(bc.HELLO_OK, bc.HELLO_OK, bc.HELLO_OK)
+        net.protocol_facts = lambda host, ip: self.fail("пробы протоколов у открытого сайта")
         discord = self._discord(net.run(engine.run_blockcheck, "full", emit=lambda _line: None))
 
         self.assertEqual(discord["status"], "Открывается")
-        self.assertEqual([road["key"] for road in discord["roads"]], ["tls12", "tls13", "browser", "quic", "dns"])
-        self.assertEqual([road["label"] for road in discord["roads"]], ["TLS 1.2", "TLS 1.3", "Chrome", "QUIC", "DNS"])
+        self.assertEqual([road["key"] for road in discord["roads"]], ["browser", "quic", "dns"])
+        self.assertEqual([road["label"] for road in discord["roads"]], ["Chrome", "QUIC", "DNS"])
         for road in discord["roads"]:
             self.assertTrue(road["word"] and road["text"] and road["hint"], road)
             self.assertIn(road["state"], ("ok", "warn", "fail", "info", "unknown"))
         dns = next(road for road in discord["roads"] if road["key"] == "dns")
         self.assertEqual((dns["state"], dns["word"]), ("ok", "честный"))
 
-    def test_roads_not_checked_means_no_roads_not_invented_ones(self) -> None:
-        discord = self._discord(_Net().run(engine.run_blockcheck, "full", emit=lambda _line: None))
-
-        self.assertEqual(discord["roads"], [])
-
-    def test_browser_hello_cut_alone_is_a_warning_in_the_report_itself(self) -> None:
-        # Раньше «жёлтым» такой сайт делал экран, а в отчёте он оставался зелёным — две правды.
+    def test_closed_site_gets_every_road(self) -> None:
         bc = engine.block_cause
-        net = _Net()
-        net.protocol_facts = self._protocols(bc.HELLO_OK, bc.HELLO_OK, bc.HELLO_RESET)
+        net = _Net(https=lambda host, ip: ProbeResult(ip=ip, kind=KIND_RESET) if host == "discord.com" else _ok(ip))
+        net.protocol_facts = self._protocols(bc.HELLO_RESET, bc.HELLO_RESET)
+        discord = self._discord(net.run(engine.run_blockcheck, "full", emit=lambda _line: None))
+
+        self.assertEqual([road["key"] for road in discord["roads"]][:3], ["tls12", "tls13", "browser"])
+
+    def test_site_cut_only_for_chrome_is_a_fingerprint_block_in_the_report(self) -> None:
+        # Основная проверка «как Chrome» оборвана, а простое приветствие к тому же адресу проходит.
+        bc = engine.block_cause
+        net = _Net(https=lambda host, ip: ProbeResult(ip=ip, kind=KIND_RESET) if host == "discord.com" else _ok(ip))
+        net.protocol_facts = self._protocols(bc.HELLO_OK, bc.HELLO_OK)
         result = net.run(engine.run_blockcheck, "full", emit=lambda _line: None)
         discord = self._discord(result)
 
-        self.assertEqual((discord["level"], discord["kind"]), ("warn", "fingerprint"))
-        self.assertIn("в браузере он может не открываться", discord["headline"])
+        self.assertEqual((discord["level"], discord["kind"]), ("fail", "fingerprint"))
+        self.assertIn("похожие на браузер", discord["headline"])
         self.assertNotIn("Discord", result["working"])
-        self.assertEqual(sum(1 for item in result["problems"] if item.get("kind") == "fingerprint" and "Discord" in item["text"]), 1)
+
+        # Простое приветствие тоже рвут — обычная блокировка, не «почерк».
+        net = _Net(https=lambda host, ip: ProbeResult(ip=ip, kind=KIND_RESET) if host == "discord.com" else _ok(ip))
+        net.protocol_facts = self._protocols(bc.HELLO_RESET, bc.HELLO_RESET)
+        self.assertNotEqual(self._discord(net.run(engine.run_blockcheck, "full", emit=lambda _line: None))["kind"], "fingerprint")
 
     def test_status_names_the_cause_that_is_not_the_provider(self) -> None:
         def https(host, ip):
@@ -856,7 +863,7 @@ class SiteWordsComeFromTheReportTests(unittest.TestCase):
         # «Проверка домена» показывает ту же карточку: слова и метка реестра должны быть и там.
         net = _Net()
         net.registry = engine.registry.Index(hosts=engine.registry.build_hosts(["example.org"])[0], updated=1000.0)
-        net.protocol_facts = self._protocols(engine.block_cause.HELLO_OK, engine.block_cause.HELLO_OK, engine.block_cause.HELLO_OK)
+        net.protocol_facts = self._protocols(engine.block_cause.HELLO_OK, engine.block_cause.HELLO_OK)
         site = net.run(engine.check_site, "example.org")
 
         self.assertEqual(site["status"], "Открывается")
@@ -1397,35 +1404,6 @@ class EngineScenarioTests(unittest.TestCase):
         self.assertIn(("Проверка заняла", "12 с"), [(line.name, line.text) for line in rows])
         # Набор разделов один и тот же с первого отчёта: экран не гадает, каких ключей ещё нет.
         self.assertLessEqual(set(engine._REPORT_SECTIONS), set(seen[0]))
-
-    def test_site_that_passes_with_a_chrome_hello_counts_as_opening_in_a_browser(self) -> None:
-        # Простое соединение рвут, а приветствие, какое шлёт Chrome, до сервера доходит:
-        # человек открывает сайт браузером, значит, для него он открывается.
-        from diagnostics.block_cause import HELLO_OK, HELLO_RESET, HelloResult
-
-        def run(browser_kind):
-            net = _Net(https=lambda host, ip: ProbeResult(ip=ip, kind=KIND_RESET))
-            net.protocol_facts = lambda host, ip: engine.protocol_probe.ProtocolFacts(
-                host=host,
-                ip=ip,
-                tls12=HelloResult(HELLO_RESET),
-                tls13=HelloResult(HELLO_RESET),
-                browser=HelloResult(browser_kind, ms=40.0),
-            )
-            result = net.run(engine.run_blockcheck, "main", emit=lambda _line: None)
-            discord = next(item for item in result["services"] if item["key"] == "discord")
-            return discord, result
-
-        discord, result = run(HELLO_OK)
-        self.assertEqual(discord["targets"][0]["state"], "ok")
-        self.assertIn("открывается в браузере", discord["targets"][0]["text"])
-        self.assertIn("Discord", result["working"])
-        self.assertFalse([item for item in result["problems"] if "Discord не открывается" in item["text"]])
-
-        # Браузерное приветствие тоже рвут — сайт по-прежнему не открывается.
-        discord, result = run(HELLO_RESET)
-        self.assertEqual(discord["targets"][0]["state"], "dpi")
-        self.assertNotIn("Discord", result["working"])
 
     def test_vpn_caveat_is_said_once_above_not_in_every_row(self) -> None:
         # О запущенных VPN итог говорит одной строкой над проблемами (bypass_warning/bypass_note),

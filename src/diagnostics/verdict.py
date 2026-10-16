@@ -27,7 +27,6 @@ from diagnostics.block_kind import (
     KIND_CUT,
     KIND_DNS,
     KIND_DOWN,
-    KIND_FINGERPRINT,
     KIND_IP,
     KIND_NO_CONNECT,
     KIND_UNSTABLE,
@@ -291,8 +290,6 @@ class TargetOutcome:
     hosts_stale: bool = False
     # Сайт открылся, но не каждый раз или не по каждому своему адресу.
     unstable: bool = False
-    # Проверка сайт открыла, но приветствие с составом Chrome не проходит: в браузере он может висеть.
-    fingerprint: bool = False
     # DNS компьютера адреса не дал вовсе («такого сайта нет»), хотя сайт существует: проверка
     # дошла до него по адресу из шифрованного DNS, а браузер и программы спросят Windows.
     dns_blind: bool = False
@@ -467,13 +464,6 @@ def summarize_service(
             headline = f"{label} открывается через раз"
             advice = (_ADVICE_START if zapret_running is False else _ADVICE_STRATEGY, ADVICE_UNSTABLE)
             own_kind = KIND_UNSTABLE
-        elif not secondary_broken and any(item.fingerprint and item.reach == ReachState.OK for item in targets):
-            level = Level.WARN
-            headline = (
-                f"{label}: проверка сайт открывает, но соединение «как у Chrome» не проходит — "
-                "в браузере он может не открываться"
-            )
-            own_kind = KIND_FINGERPRINT
         elif not secondary_broken and main.dns_blind:
             # «Открывается» было бы неправдой: по адресу из шифрованного DNS сайт доступен,
             # а компьютеру его адрес не называют. Так выглядит «проверка проходит, а в браузере пусто».

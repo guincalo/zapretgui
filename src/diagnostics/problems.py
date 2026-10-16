@@ -22,7 +22,6 @@ from diagnostics import (
     block_cause,
     block_kind,
     ipv6_check,
-    protocol_probe,
     quic_probe,
     report_text,
     subnet_whitelist,
@@ -49,11 +48,6 @@ ADVICE_BLOCKED_REFERENCE = (
     "Windows молча вернётся к обычным запросам, которые видны и подменяются."
 )
 
-
-ADVICE_FINGERPRINT = (
-    "Подберите стратегию Zapret для сайта. Если в вашем браузере сайт открывается нормально — "
-    "ничего делать не нужно."
-)
 
 # Блокировки, которые обходит стратегия Zapret.
 BYPASSABLE = (ReachState.DPI, ReachState.FREEZE)
@@ -372,42 +366,8 @@ def collect_problems(
         elif verdict.level == Level.UNKNOWN:
             if not offline:
                 problems.append(problem(Level.UNKNOWN, verdict.headline, verdict.advice, site=key, section=SECTION_SERVICES))
-        elif verdict.kind != block_kind.KIND_FINGERPRINT:
-            # Сайт, который в браузере может не открыться, в «Открываются» не числится: о нём своя строка ниже.
+        else:
             working.append(service.label)
-
-    # Сайт открывается нашей проверкой, но приветствие с составом Chrome не проходит.
-    for key, service in services.items():
-        if service.control or offline:
-            continue
-        marked = [
-            probe
-            for probe in collected.get(key, ())
-            if probe.reach_state == ReachState.OK
-            and any(line.code == protocol_probe.CODE_FINGERPRINT for line in probe.protocols)
-        ]
-        if not marked:
-            continue
-        evidence = tuple(
-            report_text.sentence(line.text) + "."
-            for line in marked[0].protocols
-            if line.code == protocol_probe.CODE_FINGERPRINT
-        )
-        problems.append(
-            problem(
-                Level.WARN,
-                f"{service.label}: проверка сайт открывает, но соединение «как у Chrome» не проходит — "
-                "в браузере он может не открываться",
-                evidence + (ADVICE_FINGERPRINT,),
-                action=_zapret_action(zapret_running),
-                target=marked[0].host,
-                kind=block_kind.KIND_FINGERPRINT,
-                title=service.label,
-                evidence=evidence,
-                site=key,
-                section=SECTION_SERVICES,
-            )
-        )
 
     if freeze is not None and freeze.level in (Level.FAIL, Level.WARN):
         problems.append(

@@ -1,14 +1,15 @@
-"""Сайт по четырём дорогам отдельно: TLS 1.2, TLS 1.3, «как Chrome» и обычный HTTP.
+"""Сайт по четырём дорогам отдельно: «как Chrome», TLS 1.2, TLS 1.3 и обычный HTTP.
 
-Основная проверка отвечает на вопрос «открывается ли сайт». Здесь тот же
-адрес пробуется несколькими способами по отдельности:
+Основная проверка сама открывает сайт так, как его открыл бы Chrome
+(``utils.chrome_https``) — это строка **«Как Chrome»**, она берётся из её
+итога, отдельной пробы для неё нет. Остальные дороги пробуются, только если
+сайт не открылся (``utils.probe_gate``: разбор — по сигналу беды):
 
-- **TLS 1.2** и **TLS 1.3** — шифрованное соединение только этой версией.
-  Фильтр иногда режет лишь одну из них: по этому видно, какая стратегия нужна.
-- **Как Chrome** — приветствие с тем же составом, что у браузера
-  (``diagnostics.browser_hello``). Фильтр умеет узнавать программу по этому
-  «почерку»: если обычное приветствие к адресу проходит, а браузерное — нет
-  (дважды подряд), в самом браузере сайт может не открываться.
+- **TLS 1.2** и **TLS 1.3** — простое приветствие только этой версией, каким
+  ходят программы. Фильтр иногда режет лишь одну из них. А если простое
+  приветствие проходит, а браузерное — нет, фильтр режет по «почерку»
+  браузера (``CODE_FINGERPRINT``): в Chrome сайт не открывается, хотя к самому
+  серверу дорога есть.
 - **HTTP** (порт 80, без шифрования) — отвечает ли сайт и не подставляет ли
   провайдер страницу о блокировке.
 
@@ -41,11 +42,9 @@ from diagnostics.block_cause import (
     stub_reason,
     tls_hello,
 )
-from diagnostics import browser_hello
 from utils.socket_cancel import SocketCancel
 
 __all__ = [
-    "CODE_BROWSER_ONLY",
     "CODE_FINGERPRINT",
     "HINTS",
     "PROTO_BROWSER",
@@ -58,6 +57,7 @@ __all__ = [
     "STATE_UNKNOWN",
     "ProtocolFacts",
     "ProtocolLine",
+    "chrome_line",
     "collect",
     "judge",
 ]
@@ -67,13 +67,10 @@ PROTO_TLS13 = "tls13"
 PROTO_BROWSER = "browser"
 PROTO_HTTP = "http"
 
-# Обычное приветствие проходит, а браузерное — нет: режут по «почерку» браузера.
+# Простое приветствие проходит, а браузерное — нет: режут по «почерку» браузера.
 CODE_FINGERPRINT = "fingerprint"
-# Наоборот: браузерное проходит, обычное — нет. В браузере сайт, возможно, открывается.
-CODE_BROWSER_ONLY = "browser_only"
-
-# Пауза перед повтором браузерного приветствия: один сбой — ещё не вывод.
-BROWSER_RETRY_PAUSE_S = 0.5
+# Слово строки «Как Chrome», когда соединение оборвали или заглушили (а не, скажем, чужой сертификат).
+WORD_CUT = "режется"
 
 STATE_OK = "ok"
 STATE_FAIL = "fail"
@@ -94,8 +91,6 @@ class ProtocolFacts:
     # За сколько ответил порт 80. None — не ответил.
     http_ms: float | None = None
     cancelled: bool = False
-    # Приветствие с составом Chrome. При сбое — итог повторной попытки.
-    browser: HelloResult | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -108,7 +103,7 @@ class ProtocolLine:
     # Полная фраза для подробностей.
     text: str
     ms: float | None = None
-    # Особый вывод строки (``CODE_FINGERPRINT`` / ``CODE_BROWSER_ONLY``). Пусто — обычная строка.
+    # Особый вывод строки (``CODE_FINGERPRINT``). Пусто — обычная строка.
     code: str = ""
 
 
@@ -118,23 +113,12 @@ def _timed_http(host: str, ip: str, cancel: SocketCancel) -> tuple[HttpFacts, fl
     return facts, ((time.perf_counter() - started) * 1000.0 if facts.status is not None else None)
 
 
-def _browser_hello(host: str, ip: str, cancel: SocketCancel) -> HelloResult:
-    """Приветствие Chrome; сбой перепроверяется один раз после паузы."""
-    result = browser_hello.send_hello(ip, host, cancel=cancel)
-    if result.kind not in (HELLO_RESET, HELLO_TIMEOUT):
-        return result
-    if not cancel.sleep(BROWSER_RETRY_PAUSE_S):
-        return HelloResult(HELLO_CANCELLED)
-    return browser_hello.send_hello(ip, host, cancel=cancel)
-
-
 def collect(host: str, ip: str, *, submit: Callable, cancel: SocketCancel) -> ProtocolFacts:
-    """Четыре пробы к одному адресу, одновременно."""
-    # Три шифрованных соединения с одним именем уходят не разом, а с шагом: пачка одновременных
+    """Три пробы к адресу сайта, который не открылся: TLS 1.2, TLS 1.3 и HTTP."""
+    # Два шифрованных соединения с одним именем уходят не разом, а с шагом: пачка одновременных
     # соединений к одному сайту сама бывает поводом для фильтра придержать их все.
     tls12 = submit(tls_hello, ip, host, cancel=cancel, version=TLS_1_2)
     tls13 = submit(later, STAGGER_S, cancel, tls_hello, ip, host, cancel=cancel, version=TLS_1_3)
-    browser = submit(later, 2 * STAGGER_S, cancel, _browser_hello, host, ip, cancel)
     http = submit(_timed_http, host, ip, cancel)
     http_facts, http_ms = http.result()
     return ProtocolFacts(
@@ -142,7 +126,6 @@ def collect(host: str, ip: str, *, submit: Callable, cancel: SocketCancel) -> Pr
         ip=ip,
         tls12=tls12.result(),
         tls13=tls13.result(),
-        browser=browser.result(),
         http=http_facts,
         http_ms=http_ms,
         cancelled=cancel.cancelled,
@@ -180,56 +163,42 @@ def _tls_line(key: str, result: HelloResult | None) -> ProtocolLine | None:
     return ProtocolLine(key, title, STATE_FAIL, "чужой ответ", "вместо шифрования пришло что-то другое: ответил не сервер")
 
 
-def _browser_line(facts: ProtocolFacts) -> ProtocolLine | None:
-    """Строка «Как Chrome». Вывод о «почерке» — только из сравнения с обычным приветствием."""
+def chrome_line(result) -> ProtocolLine | None:
+    """Строка «Как Chrome» — итог основной проверки (``tls_probe.ProbeResult``), отдельной пробы нет."""
+    from diagnostics import tls_probe
+
     title = _TITLES[PROTO_BROWSER]
-    result = facts.browser
-    if result is None or result.kind == HELLO_CANCELLED:
+    if result is None or result.kind == tls_probe.KIND_CANCELLED:
         return None
-    plain = [item.kind for item in (facts.tls12, facts.tls13) if item is not None]
-    plain_passes = HELLO_OK in plain
-    # Обычное приветствие режут: ни одно не прошло и хотя бы одно оборвано или пропало. Несостоявшееся
-    # соединение рядом с оборванным вывода не отменяет: до сервера оно просто не дошло.
-    plain_cut = not plain_passes and any(kind in (HELLO_RESET, HELLO_TIMEOUT) for kind in plain)
-    # Отказ сервера — тоже ответ сервера: приветствие до него дошло.
-    if result.kind in (HELLO_OK, HELLO_ALERT):
-        if plain_cut:
-            return ProtocolLine(
-                PROTO_BROWSER,
-                title,
-                STATE_OK,
-                "проходит",
-                "приветствие, какое шлёт Chrome, до сервера доходит, а обычное — нет: "
-                "в самом браузере сайт, возможно, открывается",
-                result.ms,
-                CODE_BROWSER_ONLY,
-            )
+    if result.kind == tls_probe.KIND_CERT:
+        return ProtocolLine(PROTO_BROWSER, title, STATE_FAIL, "чужой сертификат", f"сервер предъявил чужой сертификат: {result.cert_problem}")
+    if result.kind == tls_probe.KIND_OK or result.status is not None:
         return ProtocolLine(
-            PROTO_BROWSER, title, STATE_OK, "проходит", f"приветствие, какое шлёт Chrome, до сервера доходит (ответ за {_ms(result.ms)})", result.ms
+            PROTO_BROWSER, title, STATE_OK, "проходит", f"сайт отвечает так, как ответил бы Chrome, за {_ms(result.elapsed_ms)}", result.elapsed_ms
         )
-    if result.kind == HELLO_CONNECT:
+    if result.kind == tls_probe.KIND_CONNECT:
         return ProtocolLine(PROTO_BROWSER, title, STATE_UNKNOWN, "нет соединения", "не удалось соединиться с адресом")
-    if result.kind in (HELLO_RESET, HELLO_TIMEOUT):
-        how = "соединение сбрасывают" if result.kind == HELLO_RESET else "ответа нет"
-        if plain_passes:
-            return ProtocolLine(
-                PROTO_BROWSER,
-                title,
-                STATE_FAIL,
-                "режется",
-                f"обычное приветствие к этому адресу проходит, а такое, как у Chrome, — нет ({how}, проверено дважды). "
-                "Похоже на блокировку по «почерку» браузера: в Chrome сайт может не открываться, "
-                "а в Firefox или в свежем Chrome (у него почерк уже другой) — открываться",
-                code=CODE_FINGERPRINT,
-            )
-        return ProtocolLine(
-            PROTO_BROWSER,
-            title,
-            STATE_FAIL,
-            "сброс" if result.kind == HELLO_RESET else "молчит",
-            f"на приветствие, какое шлёт Chrome, {how} — как и на обычное",
-        )
-    return ProtocolLine(PROTO_BROWSER, title, STATE_FAIL, "чужой ответ", "вместо шифрования пришло что-то другое: ответил не сервер")
+    if result.kind in (tls_probe.KIND_RESET, tls_probe.KIND_TIMEOUT, tls_probe.KIND_TLS):
+        how = "соединение сбрасывают" if result.kind == tls_probe.KIND_RESET else "ответа нет" if result.kind == tls_probe.KIND_TIMEOUT else "шифрование не устанавливается"
+        return ProtocolLine(PROTO_BROWSER, title, STATE_FAIL, WORD_CUT, f"на соединение, какое открывает Chrome, {how}")
+    return ProtocolLine(PROTO_BROWSER, title, STATE_UNKNOWN, "не проверено", "соединение не удалось, причину определить не удалось")
+
+
+def _fingerprint(chrome: ProtocolLine, facts: ProtocolFacts) -> ProtocolLine:
+    """Chrome режут, а простое приветствие к тому же адресу с тем же именем проходит — режут по «почерку»."""
+    plain = [item.kind for item in (facts.tls12, facts.tls13) if item is not None]
+    if chrome.word != WORD_CUT or HELLO_OK not in plain:
+        return chrome
+    return ProtocolLine(
+        chrome.key,
+        chrome.title,
+        STATE_FAIL,
+        WORD_CUT,
+        f"{chrome.text}, а простое приветствие к тому же адресу с тем же именем проходит. Похоже на блокировку "
+        "по «почерку» браузера: фильтр узнаёт Chrome по первому пакету соединения, другие программы "
+        "к сайту пускает",
+        code=CODE_FINGERPRINT,
+    )
 
 
 def _http_line(facts: ProtocolFacts) -> ProtocolLine | None:
@@ -251,19 +220,20 @@ def _http_line(facts: ProtocolFacts) -> ProtocolLine | None:
     return ProtocolLine(PROTO_HTTP, title, STATE_OK, f"код {http.status}", f"сайт отвечает, код {http.status}, за {took}", facts.http_ms)
 
 
-def judge(facts: ProtocolFacts | None) -> tuple[ProtocolLine, ...]:
-    """Строки по каждой дороге. Пусто — проверку сняли или не делали."""
+def judge(facts: ProtocolFacts | None, chrome: ProtocolLine | None = None) -> tuple[ProtocolLine, ...]:
+    """Строки по каждой дороге. ``chrome`` — строка основной проверки (``chrome_line``).
+
+    Без проб (сайт открылся или их сняли) остаётся одна строка «Как Chrome».
+    """
     if facts is None or facts.cancelled:
-        return ()
+        return (chrome,) if chrome is not None else ()
     lines = (
         _tls_line(PROTO_TLS12, facts.tls12),
         _tls_line(PROTO_TLS13, facts.tls13),
-        _browser_line(facts),
+        _fingerprint(chrome, facts) if chrome is not None else None,
         _http_line(facts),
     )
     found = tuple(line for line in lines if line is not None)
-    if any(line.code == CODE_BROWSER_ONLY for line in found):
-        found = tuple(_calm(line) if line.key in (PROTO_TLS12, PROTO_TLS13) else line for line in found)
     states = {line.key: line.state for line in found}
     if states.get(PROTO_TLS12) == STATE_FAIL and states.get(PROTO_TLS13) == STATE_OK:
         found = tuple(_old_hello_only(line) if line.key == PROTO_TLS12 else line for line in found)
@@ -294,25 +264,6 @@ def _old_hello_only(line: ProtocolLine) -> ProtocolLine:
 HINTS = {
     PROTO_TLS12: "TLS 1.2 — прежняя версия шифрования. Так подключаются старые программы и устройства; браузеры почти всегда берут TLS 1.3.",
     PROTO_TLS13: "TLS 1.3 — нынешняя версия шифрования. Здесь её проверяют простым соединением, каким ходят программы, а не браузер.",
-    PROTO_BROWSER: "То же шифрование, но приветствие составлено как у браузера Chrome. Эта строка ближе всего к тому, что вы увидите в браузере.",
+    PROTO_BROWSER: "Основная проверка: сайт открывается так, как его открыл бы Chrome, — с тем же началом соединения. Эта строка ближе всего к тому, что вы увидите в браузере.",
     PROTO_HTTP: "Обычное соединение без шифрования (порт 80). Сайты отвечают на него переходом на защищённый адрес — это норма.",
 }
-WORD_NOT_FOR_BROWSER = "не мешает"
-
-
-def _calm(line: ProtocolLine) -> ProtocolLine:
-    """Обычное приветствие режут, но браузерное проходит: человеку это не мешает, и красным быть не должно."""
-    if line.state != STATE_FAIL:
-        return line
-    how = "молча глушит (ответа нет)" if line.word == "молчит" else "обрывает"
-    return ProtocolLine(
-        line.key,
-        line.title,
-        STATE_INFO,
-        WORD_NOT_FOR_BROWSER,
-        f"простое соединение с этим шифрованием фильтр {how}. Так ходят некоторые программы, но не браузер: "
-        "он шлёт другое приветствие, и оно проходит (строка «Как Chrome»). Сайту в браузере это не мешает, "
-        "исправлять ничего не нужно",
-        line.ms,
-        line.code,
-    )

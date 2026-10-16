@@ -94,11 +94,6 @@ def reach_text(probe: Probe) -> str:
     """Одна строка: открывается ли адрес и почему нет."""
     result = probe.reach
     source = SOURCE_NOTE.get(probe.reach_source, "")
-    if probe.reach_state == ReachState.OK and probe.browser_only and result is not None:
-        return (
-            f"открывается в браузере: приветствие, какое шлёт Chrome, до сервера доходит, "
-            f"а простое соединение других программ рвут ({result.ip}{source})"
-        )
     if probe.reach_state == ReachState.OK and result is not None:
         tls = f", {result.tls_version.replace('TLSv', 'TLS ')}" if result.tls_version else ""
         if ":" in result.ip:
@@ -195,8 +190,6 @@ def probe_lines(probe: Probe, *, full: bool) -> list[str]:
 def short_text(probe: Probe) -> str:
     if probe.reach_state != ReachState.OK:
         return fail_text(probe)
-    if probe.browser_only:
-        return "открывается в браузере"
     if probe.reach is not None and ":" in probe.reach.ip:
         return "открывается только по IPv6"
     return "открывается"

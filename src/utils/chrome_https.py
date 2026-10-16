@@ -37,10 +37,31 @@ from dataclasses import dataclass
 from utils.net_failure import FAILURE_OTHER, FAILURE_RESET, FAILURE_TIMEOUT, classify_code
 from utils.socket_cancel import SocketCancel
 
-__all__ = ["CHROME_TARGET", "chrome_get"]
+__all__ = ["CHROME_TARGET", "WINDOWS_HEADERS", "ChromeConnection", "Exchange", "chrome_get"]
 
 # Какой браузер изображать: самая новая версия Chrome, которую знает curl_cffi 0.16.
 CHROME_TARGET = "chrome150"
+# Заголовки запроса — как у Chrome 150 на Windows с русским языком, в его порядке. Профиль
+# curl_cffi снят с Chrome на macOS; запрос «с Mac» с компьютера, который по пакетам Windows,
+# сам бы выделялся. Свои заголовки curl_cffi поэтому выключены, а не подменяются поштучно:
+# смесь его заголовков со своими роняла libcurl на повторных запросах по одному соединению.
+WINDOWS_HEADERS = (
+    b'sec-ch-ua: "Not;A=Brand";v="8", "Chromium";v="150", "Google Chrome";v="150"',
+    b"sec-ch-ua-mobile: ?0",
+    b'sec-ch-ua-platform: "Windows"',
+    b"Upgrade-Insecure-Requests: 1",
+    b"User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
+    b"Chrome/150.0.0.0 Safari/537.36",
+    b"Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,"
+    b"application/signed-exchange;v=b3;q=0.7",
+    b"Sec-Fetch-Site: none",
+    b"Sec-Fetch-Mode: navigate",
+    b"Sec-Fetch-User: ?1",
+    b"Sec-Fetch-Dest: document",
+    b"Accept-Encoding: gzip, deflate, br, zstd",
+    b"Accept-Language: ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
+    b"Priority: u=0, i",
+)
 
 # Коды ошибок libcurl (CURLcode), по которым судим об исходе.
 _E_COULDNT_CONNECT = 7
@@ -74,6 +95,8 @@ class _Progress:
 
     status: int | None = None
     body: bytearray | None = None
+    # Сколько байт заголовков ответа пришло: у HEAD, кроме них, ничего нет.
+    header_size: int = 0
     # Чтение прервали мы сами: набрали сколько нужно (``stopped_by_us``) или нажали «Стоп».
     stopped_by_us: bool = False
     cancelled: bool = False
@@ -123,6 +146,149 @@ def _curl_api() -> _CurlApi:
     return _CurlApi(Curl, CurlError, CurlOpt, CurlInfo, CURL_WRITEFUNC_ERROR)
 
 
+@dataclass(slots=True)
+class Exchange:
+    """Чем кончился один запрос по соединению ``ChromeConnection``."""
+
+    progress: _Progress
+    # Код libcurl (0 — без ошибки), его текст и вид сбоя по коду ошибки системы.
+    error_code: int = 0
+    message: str = ""
+    os_failure: str = ""
+    # Для этого запроса libcurl открыл новое соединение: прежнее закрыли.
+    reconnected: bool = False
+
+    @property
+    def received(self) -> int:
+        """Байты ответа: заголовки и тело."""
+        return self.progress.header_size + len(self.progress.body)
+
+    @property
+    def stalled(self) -> bool:
+        """Данные перестали идти (или не пошли) дольше срока."""
+        return self.error_code == _E_TIMEOUT or (bool(self.error_code) and self.os_failure == FAILURE_TIMEOUT)
+
+    @property
+    def reset(self) -> bool:
+        """Соединение оборвали."""
+        return bool(self.error_code) and (self.os_failure == FAILURE_RESET or self.error_code in _RESET_CODES)
+
+    @property
+    def stage(self) -> str:
+        from diagnostics import tls_probe
+
+        if self.progress.secured:
+            return tls_probe.STAGE_READ
+        return tls_probe.STAGE_TLS if self.progress.tls_started else tls_probe.STAGE_CONNECT
+
+
+class ChromeConnection:
+    """Соединение «как Chrome» с сайтом по заданному адресу: запросы подряд идут по нему же.
+
+    Так браузер грузит страницу — несколько запросов по одному соединению (HTTP/2).
+    Фильтр считает данные по соединению, поэтому обрыв по объёму видно только так.
+    """
+
+    def __init__(
+        self,
+        host: str,
+        ip: str,
+        *,
+        timeout: float,
+        port: int = 443,
+        read_timeout: float = 3.0,
+        decode_body: bool = False,
+        cancel: SocketCancel | None = None,
+    ) -> None:
+        self.host = host
+        self.ip = ip
+        self.port = int(port)
+        self.cancel = cancel or SocketCancel()
+        self._api = _curl_api()
+        opt = self._api.CurlOpt
+        self._curl = self._api.Curl()
+        self._requests = 0
+        address = f"[{ip}]" if ":" in ip else ip
+        curl = self._curl
+        curl.impersonate(CHROME_TARGET, default_headers=False)
+        curl.setopt(opt.HTTPHEADER, list(WINDOWS_HEADERS))
+        curl.setopt(opt.RESOLVE, [f"{host}:{self.port}:{address}".encode()])
+        curl.setopt(opt.CAINFO, _ca_bundle().encode())
+        # Заголовок Accept-Encoding остаётся браузерным; тело распаковывается, только
+        # если нужно содержимое: иначе размер — это байты на проводе.
+        curl.setopt(opt.HTTP_CONTENT_DECODING, 1 if decode_body else 0)
+        curl.setopt(opt.CONNECTTIMEOUT_MS, int(max(0.2, float(timeout)) * 1000))
+        # Тело замерло дольше ``read_timeout`` — обрыв (как ``body_cut`` у прежней пробы).
+        curl.setopt(opt.LOW_SPEED_LIMIT, 1)
+        curl.setopt(opt.LOW_SPEED_TIME, max(1, round(float(read_timeout))))
+        curl.setopt(opt.TIMEOUT_MS, int((max(0.2, float(timeout)) + 60.0) * 1000))
+        curl.setopt(opt.VERBOSE, 1)
+        curl.setopt(opt.NOSIGNAL, 1)
+
+    def request(
+        self,
+        path: str = "/",
+        *,
+        method: str = "GET",
+        enough: Callable[[bytearray], bool] = lambda _body: False,
+    ) -> Exchange:
+        """Один запрос. ``enough(тело)`` — читать дальше незачем (чтение прерывается без сбоя)."""
+        api = self._api
+        opt, info = api.CurlOpt, api.CurlInfo
+        progress = _Progress(body=bytearray())
+        token = self.cancel
+
+        def _on_header(line: bytes) -> int:
+            progress.header_size += len(line)
+            if line.startswith(b"HTTP/"):
+                parts = line.split()
+                # Перед окончательным ответом бывают промежуточные (100, 103): ждём настоящий.
+                if len(parts) >= 2 and parts[1].isdigit() and not parts[1].startswith(b"1"):
+                    progress.status = int(parts[1])
+            return len(line)
+
+        def _on_body(chunk: bytes) -> int:
+            progress.body.extend(chunk)
+            if token.cancelled:
+                progress.cancelled = True
+                return api.write_error
+            if enough(progress.body):
+                progress.stopped_by_us = True
+                return api.write_error
+            return len(chunk)
+
+        curl = self._curl
+        curl.setopt(opt.URL, f"https://{self.host}:{self.port}{path or '/'}".encode())
+        curl.setopt(opt.NOBODY, 1 if method == "HEAD" else 0)
+        curl.setopt(opt.HEADERFUNCTION, _on_header)
+        curl.setopt(opt.WRITEFUNCTION, _on_body)
+        curl.setopt(opt.DEBUGFUNCTION, progress.on_debug)
+        exchange = Exchange(progress)
+        if token.cancelled:
+            progress.cancelled = True
+            return exchange
+        try:
+            # Списки заголовков и «имя → адрес» нужны и следующим запросам по этому соединению:
+            # по умолчанию curl_cffi освобождает их после запроса, а libcurl продолжает на них
+            # ссылаться — следующий запрос читал освобождённую память и ронял процесс.
+            # Освобождаются они в ``close``.
+            curl.perform(clear_headers=False, clear_resolve=False)
+        except api.CurlError as error:
+            exchange.error_code = int(getattr(error, "code", 0) or 0)
+            exchange.message = str(error)
+        if exchange.error_code:
+            # Код ошибки системы: отказ, тишина или нет дороги — текст libcurl этого не различает.
+            exchange.os_failure = classify_code(int(curl.getinfo(info.OS_ERRNO) or 0))
+        elif progress.status is None:
+            progress.status = int(curl.getinfo(info.RESPONSE_CODE) or 0) or None
+        self._requests += 1
+        exchange.reconnected = self._requests > 1 and int(curl.getinfo(info.NUM_CONNECTS) or 0) > 0
+        return exchange
+
+    def close(self) -> None:
+        self._curl.close()
+
+
 def chrome_get(
     host: str,
     ip: str,
@@ -138,45 +304,32 @@ def chrome_get(
 ):
     """GET ``https://host/path`` по адресу ``ip`` с рукопожатием и заголовками Chrome.
 
-    Параметры и исход — как у ``diagnostics.tls_probe.https_get``: ``timeout`` —
-    подключение, шифрование и первый ответ; ``read_limit`` — сколько байт тела
-    читать (0 — только заголовок); ``read_timeout`` — сколько ждать следующих
-    данных, замершее на середине тело видно как ``body_cut``. ``body_done`` получает
-    тело (без заголовков) и говорит, что читать дальше незачем; конец ответа libcurl
-    видит сам. ``decode_body`` — распаковать сжатое тело (нужно содержимое страницы);
+    Исход — ``diagnostics.tls_probe.ProbeResult``: ``timeout`` — подключение,
+    шифрование и первый ответ; ``read_limit`` — сколько байт тела читать (0 —
+    только заголовок); ``read_timeout`` — сколько ждать следующих данных, замершее
+    на середине тело видно как ``body_cut``. ``body_done`` получает тело (без
+    заголовков) и говорит, что читать дальше незачем; конец ответа libcurl видит
+    сам. ``decode_body`` — распаковать сжатое тело (нужно содержимое страницы);
     размер тогда уже не байты на проводе и для суждения об обрыве по объёму не годится.
     """
     from diagnostics import tls_probe
 
-    api = _curl_api()
-    CurlOpt, CurlInfo = api.CurlOpt, api.CurlInfo
-
     token = cancel or SocketCancel()
     started = time.perf_counter()
-    progress = _Progress(body=bytearray())
-    curl = api.Curl()
 
-    def _elapsed() -> float:
-        return (time.perf_counter() - started) * 1000
+    def _enough(body: bytearray) -> bool:
+        return len(body) >= max(read_limit, 1) or (body_done is not None and body_done(bytes(body)))
 
-    def _on_header(line: bytes) -> int:
-        if line.startswith(b"HTTP/"):
-            parts = line.split()
-            # Перед окончательным ответом бывают промежуточные (100, 103): ждём настоящий.
-            if len(parts) >= 2 and parts[1].isdigit() and not parts[1].startswith(b"1"):
-                progress.status = int(parts[1])
-        return len(line)
-
-    def _on_body(chunk: bytes) -> int:
-        body = progress.body
-        body.extend(chunk)
-        if token.cancelled:
-            progress.cancelled = True
-            return api.write_error
-        if len(body) >= max(read_limit, 1) or (body_done is not None and body_done(bytes(body))):
-            progress.stopped_by_us = True
-            return api.write_error
-        return len(chunk)
+    if token.cancelled:
+        return tls_probe.ProbeResult(ip=ip, kind=tls_probe.KIND_CANCELLED, stage=tls_probe.STAGE_CONNECT)
+    connection = ChromeConnection(
+        host, ip, timeout=timeout, port=port, read_timeout=read_timeout, decode_body=decode_body, cancel=token
+    )
+    try:
+        exchange = connection.request(path, enough=_enough)
+    finally:
+        connection.close()
+    progress = exchange.progress
 
     def _result(kind: str, detail: str = "", **extra):
         if token.cancelled and (kind != tls_probe.KIND_OK or extra.get("body_cut")):
@@ -185,62 +338,17 @@ def chrome_get(
         return tls_probe.ProbeResult(
             ip=ip,
             kind=kind,
-            stage=stage,
+            stage=exchange.stage,
             status=progress.status,
             body_size=len(progress.body),
-            tls_version=tls_version,
-            elapsed_ms=_elapsed(),
+            tls_version=progress.tls_version,
+            elapsed_ms=(time.perf_counter() - started) * 1000,
             detail=detail,
             body=bytes(progress.body),
             **extra,
         )
 
-    address = f"[{ip}]" if ":" in ip else ip
-    stage = tls_probe.STAGE_CONNECT
-    tls_version = ""
-    try:
-        if not token.cancelled:
-            curl.impersonate(CHROME_TARGET, default_headers=True)
-            curl.setopt(CurlOpt.URL, f"https://{host}:{int(port)}{path or '/'}".encode())
-            curl.setopt(CurlOpt.RESOLVE, [f"{host}:{int(port)}:{address}".encode()])
-            curl.setopt(CurlOpt.CAINFO, _ca_bundle().encode())
-            # Заголовок Accept-Encoding остаётся браузерным; тело распаковывается, только
-            # если нужно содержимое: иначе размер — это байты на проводе.
-            curl.setopt(CurlOpt.HTTP_CONTENT_DECODING, 1 if decode_body else 0)
-            curl.setopt(CurlOpt.CONNECTTIMEOUT_MS, int(max(0.2, float(timeout)) * 1000))
-            # Тело замерло дольше ``read_timeout`` — обрыв (как ``body_cut`` у прежней пробы).
-            curl.setopt(CurlOpt.LOW_SPEED_LIMIT, 1)
-            curl.setopt(CurlOpt.LOW_SPEED_TIME, max(1, round(float(read_timeout))))
-            curl.setopt(CurlOpt.TIMEOUT_MS, int((max(0.2, float(timeout)) + 60.0) * 1000))
-            curl.setopt(CurlOpt.HEADERFUNCTION, _on_header)
-            curl.setopt(CurlOpt.WRITEFUNCTION, _on_body)
-            curl.setopt(CurlOpt.VERBOSE, 1)
-            curl.setopt(CurlOpt.DEBUGFUNCTION, progress.on_debug)
-            curl.setopt(CurlOpt.NOSIGNAL, 1)
-        if token.cancelled:
-            return _result(tls_probe.KIND_CANCELLED)
-        error_code = 0
-        message = ""
-        try:
-            curl.perform()
-        except api.CurlError as error:
-            error_code = int(getattr(error, "code", 0) or 0)
-            message = str(error)
-        # Код ошибки системы: отказ, тишина или нет дороги — текст libcurl этого не различает.
-        os_failure = classify_code(int(curl.getinfo(CurlInfo.OS_ERRNO) or 0)) if error_code else ""
-        stage = (
-            tls_probe.STAGE_READ
-            if progress.secured
-            else tls_probe.STAGE_TLS
-            if progress.tls_started
-            else tls_probe.STAGE_CONNECT
-        )
-        tls_version = progress.tls_version
-        if progress.status is None and error_code == 0:
-            progress.status = int(curl.getinfo(CurlInfo.RESPONSE_CODE) or 0) or None
-        return _classify(error_code, os_failure, message, progress, stage, _result, tls_probe)
-    finally:
-        curl.close()
+    return _classify(exchange.error_code, exchange.os_failure, exchange.message, progress, exchange.stage, _result, tls_probe)
 
 
 def _classify(error_code: int, os_failure: str, message: str, progress: _Progress, stage: str, result, tls_probe):

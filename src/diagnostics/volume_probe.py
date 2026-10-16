@@ -22,14 +22,11 @@
 
 from __future__ import annotations
 
-import socket
-import ssl
 import time
 from dataclasses import dataclass
 
 from diagnostics.limits import FREEZE_MAX_BYTES, FREEZE_MIN_BYTES
-from diagnostics.tls_probe import client_context
-from utils.socket_cancel import SocketCancel, close_quietly
+from utils.socket_cancel import SocketCancel
 
 __all__ = [
     "CUT_MAX_BYTES",
@@ -106,92 +103,6 @@ class VolumeVerdict:
     cut_kb: int = 0
 
 
-class _Closed(Exception):
-    """Сервер закрыл соединение."""
-
-
-class _Enough(Exception):
-    """Нужный объём набран: дочитывать ответ незачем."""
-
-
-class _Reader:
-    """Читает ответы подряд из одного соединения и считает полученное."""
-
-    def __init__(self, sock, target: int) -> None:
-        self._sock = sock
-        self._target = target
-        self._buffer = bytearray()
-        self.total = 0
-
-    def _fill(self) -> None:
-        chunk = self._sock.recv(65536)
-        if not chunk:
-            raise _Closed
-        self._buffer.extend(chunk)
-        self.total += len(chunk)
-        if self.total >= self._target:
-            raise _Enough
-
-    def until(self, marker: bytes, limit: int = 65536) -> bytes:
-        while True:
-            index = self._buffer.find(marker)
-            if index >= 0:
-                data = bytes(self._buffer[:index])
-                del self._buffer[: index + len(marker)]
-                return data
-            if len(self._buffer) > limit:
-                raise _Closed
-            self._fill()
-
-    def skip(self, count: int) -> None:
-        while count > 0:
-            if not self._buffer:
-                self._fill()
-            taken = min(count, len(self._buffer))
-            del self._buffer[:taken]
-            count -= taken
-
-    def drain(self) -> None:
-        """Тело без указанной длины: читаем, пока сервер не закроет соединение."""
-        while True:
-            self._buffer.clear()
-            self._fill()
-
-
-def _headers(head: bytes) -> tuple[int, dict[bytes, bytes]]:
-    lines = head.split(b"\r\n")
-    parts = lines[0].split(None, 2) if lines else []
-    if len(parts) < 2 or not parts[0].startswith(b"HTTP/") or not parts[1].isdigit():
-        raise _Closed
-    fields: dict[bytes, bytes] = {}
-    for line in lines[1:]:
-        name, _colon, value = line.partition(b":")
-        fields[name.strip().lower()] = value.strip().lower()
-    return int(parts[1]), fields
-
-
-def _skip_body(reader: _Reader, method: str, status: int, fields: dict[bytes, bytes]) -> bool:
-    """Дочитывает тело ответа. False — после него соединение закрыто, запросов больше не будет."""
-    keep = fields.get(b"connection") != b"close"
-    if method == "HEAD" or status < 200 or status in (204, 304):
-        return keep
-    if b"chunked" in fields.get(b"transfer-encoding", b""):
-        while True:
-            size = int(reader.until(b"\r\n").split(b";", 1)[0].strip() or b"0", 16)
-            if size == 0:
-                # После последнего куска — необязательные поля и пустая строка.
-                while reader.until(b"\r\n"):
-                    pass
-                return keep
-            reader.skip(size + 2)
-    length = fields.get(b"content-length")
-    if length is not None and length.isdigit():
-        reader.skip(int(length))
-        return keep
-    reader.drain()
-    return False
-
-
 def download(
     host: str,
     ip: str,
@@ -205,61 +116,53 @@ def download(
     budget: float = BUDGET_S,
     cancel: SocketCancel | None = None,
 ) -> VolumeRun:
-    """Шлёт запросы ``method`` по одному соединению с ``ip``, пока не наберётся ``target`` байт ответа."""
+    """Шлёт запросы ``method`` подряд по одному соединению «как Chrome» с ``ip``, пока не наберётся ``target`` байт ответа.
+
+    Соединение — как у браузера (``utils.chrome_https.ChromeConnection``): то же
+    рукопожатие, HTTP/2, браузерные заголовки, сжатие не распаковывается (считаются
+    байты на проводе).
+    """
+    from utils.chrome_https import ChromeConnection
+
     token = cancel or SocketCancel()
     started = time.monotonic()
-    sock: socket.socket | None = None
-    wrapped: ssl.SSLSocket | None = None
-    reader: _Reader | None = None
+    received = 0
     requests = 0
 
     def _run(kind: str) -> VolumeRun:
-        received = reader.total if reader is not None else 0
         if token.cancelled and kind != RUN_PASSED:
             kind = RUN_CANCELLED
         return VolumeRun(kind, received, requests)
 
+    if token.cancelled:
+        return VolumeRun(RUN_CANCELLED)
+    connection = ChromeConnection(host, ip, timeout=timeout, port=port, read_timeout=stall, cancel=token)
     try:
-        sock = socket.socket(socket.AF_INET6 if ":" in ip else socket.AF_INET, socket.SOCK_STREAM)
-        if not token.track(sock):
-            return VolumeRun(RUN_CANCELLED)
-        sock.settimeout(timeout)
-        sock.connect((ip, int(port)))
-        wrapped = client_context().wrap_socket(sock, server_hostname=host, do_handshake_on_connect=False)
-        token.track(wrapped)
-        wrapped.settimeout(timeout)
-        wrapped.do_handshake()
-        reader = _Reader(wrapped, target)
-        request = (
-            f"{method} {path or '/'} HTTP/1.1\r\nHost: {host}\r\n"
-            "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64)\r\n"
-            "Accept: */*\r\nAccept-Encoding: identity\r\nConnection: keep-alive\r\n\r\n"
-        ).encode("ascii", errors="ignore")
-        wrapped.settimeout(stall)
         while requests < MAX_REQUESTS and time.monotonic() - started < budget:
-            wrapped.sendall(request)
+            before = received
+            exchange = connection.request(path, method=method, enough=lambda body: before + len(body) >= target)
             requests += 1
-            status, fields = _headers(reader.until(b"\r\n\r\n"))
-            if not _skip_body(reader, method, status, fields):
+            received += exchange.received
+            if exchange.progress.cancelled:
+                return _run(RUN_CANCELLED)
+            if exchange.reconnected:
+                # Прежнее соединение закрыли между запросами: счёт по нему кончился, этот запрос — уже не по нему.
+                received -= exchange.received
+                requests -= 1
                 return _run(RUN_CLOSED)
-            if requests >= ESTIMATE_AFTER and reader.total / requests * MAX_REQUESTS <= CUT_MAX_BYTES:
+            if exchange.progress.stopped_by_us or received >= target:
+                return _run(RUN_PASSED)
+            if exchange.error_code:
+                if requests == 1 and exchange.progress.status is None and not exchange.progress.secured:
+                    return _run(RUN_FAILED)
+                if exchange.stalled:
+                    return _run(RUN_STALLED)
+                return _run(RUN_RESET if exchange.reset else RUN_CLOSED)
+            if requests >= ESTIMATE_AFTER and received / requests * MAX_REQUESTS <= CUT_MAX_BYTES:
                 return _run(RUN_CLOSED)
         return _run(RUN_CLOSED)
-    except _Enough:
-        return _run(RUN_PASSED)
-    except (_Closed, ValueError):
-        # Закрыл соединение сам или ответил так, что ответ не разобрать.
-        return _run(RUN_CLOSED)
-    except (socket.timeout, TimeoutError):
-        return _run(RUN_FAILED if reader is None else RUN_STALLED)
-    except (ssl.SSLError, OSError):
-        # Сюда же попадает сброс соединения.
-        return _run(RUN_FAILED if reader is None else RUN_RESET)
     finally:
-        for item in (wrapped, sock):
-            if item is not None:
-                token.release(item)
-                close_quietly(item)
+        connection.close()
 
 
 def _froze_in_window(run: VolumeRun) -> bool:

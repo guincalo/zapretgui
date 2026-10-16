@@ -1014,7 +1014,8 @@ class ProgramRoadTests(unittest.TestCase):
             ((protocol_probe.STATE_FAIL, protocol_probe.STATE_FAIL), False),
             ((protocol_probe.STATE_UNKNOWN, protocol_probe.STATE_UNKNOWN), None),
         ):
-            found = (line(protocol_probe.PROTO_TLS13, states[0]), line(protocol_probe.PROTO_BROWSER, states[1]), line(protocol_probe.PROTO_HTTP, "ok"))
+            # Программы ходят простым приветствием: по нему и судим, строки «Как Chrome» тут нет.
+            found = (line(protocol_probe.PROTO_TLS12, states[0]), line(protocol_probe.PROTO_TLS13, states[1]), line(protocol_probe.PROTO_HTTP, "ok"))
             with (
                 patch.object(engine, "_tcp_connect", lambda ip, port=443: engine.TcpReport(ip, port, "ok", 5.0)),
                 patch.object(protocol_probe, "collect", collect),

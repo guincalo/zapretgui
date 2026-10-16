@@ -6,6 +6,7 @@ tests/test_diagnostics_verdict.py::TlsProbeFailureTests и tests/test_run_stop.p
 
 from __future__ import annotations
 
+import errno
 import unittest
 from unittest.mock import patch
 
@@ -30,11 +31,14 @@ class _Opt:
     VERBOSE = "verbose"
     DEBUGFUNCTION = "debug_fn"
     NOSIGNAL = "nosignal"
+    NOBODY = "nobody"
+    HTTPHEADER = "headers"
 
 
 class _Info:
     OS_ERRNO = "os_errno"
     RESPONSE_CODE = "response_code"
+    NUM_CONNECTS = "num_connects"
 
 
 class _CurlError(Exception):
@@ -63,7 +67,8 @@ def _api(script: _Script):
         def setopt(self, option, value):
             script.options[option] = value
 
-        def perform(self):
+        def perform(self, clear_headers=True, clear_resolve=True):
+            script.cleared = (clear_headers, clear_resolve)
             for kind, value in script.steps:
                 if kind == "debug":
                     script.options[_Opt.DEBUGFUNCTION](*value)
@@ -101,10 +106,14 @@ class ChromeHttpsTests(unittest.TestCase):
         result = _get(script, ip="2001:db8::5", read_limit=100)
 
         self.assertEqual(script.impersonated, chrome_https.CHROME_TARGET)
+        # Chrome на Windows с русским языком, а не профиль с Mac.
+        self.assertIn(b'sec-ch-ua-platform: "Windows"', script.options[_Opt.HTTPHEADER])
         self.assertEqual(script.options[_Opt.RESOLVE], [b"example.com:443:[2001:db8::5]"])
         # Тело не распаковывается: размер — байты на проводе.
         self.assertEqual(script.options[_Opt.HTTP_CONTENT_DECODING], 0)
         self.assertEqual((result.kind, result.status, result.body_size, result.tls_version), ("ok", 200, 10, "TLSv1.3"))
+        # Списки заголовков и адреса живут до закрытия соединения, а не до конца запроса.
+        self.assertEqual(script.cleared, (False, False))
 
     def test_page_content_can_be_asked_unpacked(self) -> None:
         script = _Script(HELLO, SECURED, OK_HEADER)
@@ -138,7 +147,7 @@ class ChromeHttpsTests(unittest.TestCase):
 
     def test_stages_of_failure(self) -> None:
         # Сброс посреди рукопожатия: код системы говорит «сброс».
-        reset = _get(_Script(HELLO, error=35, os_errno=104))
+        reset = _get(_Script(HELLO, error=35, os_errno=errno.ECONNRESET))
         self.assertEqual((reset.kind, reset.stage), (tls_probe.KIND_RESET, tls_probe.STAGE_TLS))
         # Рукопожатие не сошлось без сброса — ошибка шифрования.
         tls = _get(_Script(HELLO, error=35))
@@ -151,7 +160,7 @@ class ChromeHttpsTests(unittest.TestCase):
         self.assertEqual((silent.kind, silent.stage), (tls_probe.KIND_TIMEOUT, tls_probe.STAGE_TLS))
 
     def test_connect_failures_are_told_apart(self) -> None:
-        refused = _get(_Script(error=7, os_errno=111))
+        refused = _get(_Script(error=7, os_errno=errno.ECONNREFUSED))
         self.assertEqual((refused.kind, refused.connect_fail), (tls_probe.KIND_CONNECT, "refused"))
         silent = _get(_Script(error=28))
         self.assertEqual((silent.kind, silent.connect_fail), (tls_probe.KIND_CONNECT, "timeout"))
