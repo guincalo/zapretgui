@@ -646,16 +646,20 @@ TEXTS_TOUR: dict[str, dict[str, str]] = {
     "onboarding.step.domain_lookup.title": {"ru": "Проверка домена", "en": "Domain check"},
     "onboarding.step.domain_lookup.body": {
         "ru": (
-            "Всё об одном сайте: пинг, какие адреса отдают ему разные DNS-серверы, узлы по дороге до "
-            "сервера и какие ещё домены живут на том же адресе. Впишите домен или IP-адрес и запустите "
-            "проверку.\n\n"
+            "Всё об одном сайте. Впишите домен или IP-адрес и запустите проверку. Сначала программа "
+            "открывает сайт так, как его открыл бы браузер. Если он открывается и DNS отвечает честно, "
+            "на этом всё: лишние запросы провайдер увидел бы. Если что-то не так, идёт подробный разбор — "
+            "пинг, адреса от разных DNS-серверов, узлы по дороге до сервера и какие ещё домены живут на "
+            "том же адресе.\n\n"
             "Галочка под полем разрешает спрашивать соседей по адресу у внешних сервисов. Без неё наружу "
             "ничего не уходит."
         ),
         "en": (
-            "Everything about one site: ping, which addresses different DNS servers give for it, the "
-            "hops on the way to the server and which other domains live on the same address. Type a "
-            "domain or an IP address and start the check.\n\n"
+            "Everything about one site. Type a domain or an IP address and start the check. First the "
+            "program opens the site the way a browser would. If it opens and DNS answers honestly, that "
+            "is all: extra requests would be visible to your provider. If something is wrong, a detailed "
+            "check follows — ping, addresses from different DNS servers, the hops on the way to the server "
+            "and which other domains live on the same address.\n\n"
             "The checkbox under the field allows asking external services about neighbours on the "
             "address. Without it nothing leaves your computer."
         ),

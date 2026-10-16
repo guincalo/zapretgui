@@ -261,6 +261,9 @@ class DomainLookupReport:
     # Запись этой проверки в истории вкладки — та самая, что сохранена в настройки (с путём
     # к файлу полного текста). None — проверку прервали, в историю она не попала.
     history_entry: dict | None = None
+    # Прошла ли вторая волна — подробный разбор (``run_lookup``). Без сигнала беды её нет:
+    # пинга, пути, сертификатов и соседей тогда не ищут — «не понадобилось», а не «не вышло».
+    deep: bool = False
     finished: bool = False
     stopped: bool = False
     timed_out: bool = False
@@ -1089,7 +1092,15 @@ def run_domain_lookup(
     on_stage: Callable[[DomainLookupReport], None] | None = None,
     should_stop: Callable[[], bool] | None = None,
 ) -> DomainLookupReport:
-    """Полная проверка домена или адреса.
+    """Проверка домена или адреса — двумя волнами (``utils.probe_gate``).
+
+    Первая волна — то, что делает и браузер: адрес у Windows, у DNS компьютера и у
+    шифрованного эталона, затем сайт открывается так, как его открыл бы Chrome.
+    Вторая волна — подробный разбор: десятки DNS-серверов, пинг, путь до сервера,
+    сертификаты, сведения о сети и соседи по адресу. Она идёт только по сигналу
+    беды (``needs_deep``): сайт не открылся, DNS компьютера врёт или человек ввёл
+    сам адрес. Иначе программа без повода устраивала бы пачку запросов, по которой
+    её узнаёт провайдер.
 
     ``on_stage`` получает промежуточный отчёт каждый раз, когда готова очередная
     часть, — страница показывает результаты по мере появления.
@@ -1112,16 +1123,24 @@ def run_domain_lookup(
                 pass
         return updated
 
+    quick = tuple(server for server in server_list if server.kind in QUICK_SERVER_KINDS)
+    rest = tuple(server for server in server_list if server.kind not in QUICK_SERVER_KINDS)
     try:
         if kind == KIND_DOMAIN:
-            report = _resolve_stage(run, report, server_list, publish)
+            report = _resolve_stage(run, report, quick, publish, canary=False)
             primary_ip = pick_primary_ip(report.answers)
         else:
             primary_ip = value
         report = publish(replace(report, primary_ip=primary_ip))
 
         if primary_ip and not run.halted():
-            report = _address_stage(run, report, server_list, use_external, publish)
+            report = _browser_stage(run, report, publish)
+        if not run.halted() and needs_deep(report):
+            report = publish(replace(report, deep=True))
+            if kind == KIND_DOMAIN:
+                report = _resolve_stage(run, report, rest, publish, canary=True)
+            if report.primary_ip and not run.halted():
+                report = _address_stage(run, report, server_list, use_external, publish)
     finally:
         run.close()
 
@@ -1151,15 +1170,40 @@ def _unique_servers(servers: Iterable[DnsServer]) -> tuple[DnsServer, ...]:
     return tuple(result)
 
 
-def _resolve_stage(run: _Run, report: DomainLookupReport, servers, publish) -> DomainLookupReport:
-    domain = report.target
-    futures: dict[Future, object] = {run.pool.submit(_ask_windows, domain): -1}
-    for index, server in enumerate(servers):
-        futures[run.pool.submit(_ask_server, server, domain)] = index
-    futures[run.pool.submit(canary_answered, domain)] = "canary"
+# Кого спрашивают всегда: Windows, DNS компьютера, свои серверы человека и шифрованный эталон —
+# столько же запросов делает и сам компьютер. Остальные (провайдеры и общедоступные) — во второй волне.
+QUICK_SERVER_KINDS = frozenset({SERVER_SYSTEM, SERVER_CUSTOM, SERVER_DOH})
 
-    collected: dict[int, ResolverAnswer] = {}
-    intercepted = False
+
+def needs_deep(report: DomainLookupReport) -> bool:
+    """Сигнал беды для второй волны: без него подробный разбор не нужен."""
+    if report.kind != KIND_DOMAIN or not report.primary_ip:
+        # Человек спросил про сам адрес — или адреса нет вовсе: разбор и есть ответ.
+        return True
+    if windows_blind(report.answers) or forged_answers(report.answers):
+        return True
+    if any(item.level in (LEVEL_WARN, LEVEL_FAIL) for item in report.answers):
+        return True
+    if road_trouble(report):
+        return True
+    site = report.site or {}
+    return str(site.get("level") or "") != LEVEL_OK
+
+
+def _resolve_stage(run: _Run, report: DomainLookupReport, servers, publish, *, canary: bool) -> DomainLookupReport:
+    """Ответы DNS-серверов ``servers``; прежние ответы отчёта остаются первыми."""
+    domain = report.target
+    earlier = [item for item in report.answers]
+    futures: dict[Future, object] = {}
+    if not earlier:
+        futures[run.pool.submit(_ask_windows, domain)] = -1
+    for index, server in enumerate(servers):
+        futures[run.pool.submit(_ask_server, server, domain)] = len(earlier) + index
+    if canary:
+        futures[run.pool.submit(canary_answered, domain)] = "canary"
+
+    collected: dict[int, ResolverAnswer] = {index: item for index, item in enumerate(earlier)}
+    intercepted = report.intercepted
     for key, result in run.each_done(futures):
         if key == "canary":
             intercepted = bool(result)
@@ -1189,7 +1233,53 @@ def _check_site(domain: str, should_stop: Callable[[], bool]) -> dict | None:
     return check_site(domain, should_stop=should_stop)
 
 
+def _browser_stage(run: _Run, report: DomainLookupReport, publish) -> DomainLookupReport:
+    """Первая волна по адресу: сайт открывается так, как его открыл бы Chrome, и QUIC — как у браузера.
+
+    Разбор причины внутри обеих проб — только когда сайт не открылся (``diagnostics.engine``,
+    ``diagnostics.quic_probe``).
+    """
+    domain = report.target if report.kind == KIND_DOMAIN else None
+    if not domain or not is_public_ip(report.primary_ip):
+        return report
+    ip = report.primary_ip
+    futures: dict[Future, object] = {
+        run.pool.submit(_check_site, domain, run.halted): "site",
+        run.pool.submit(_hosts_help, domain): "hosts_help",
+        # Соединение с портом 443 браузер открывает и сам; по нему сравнивается дорога IPv6.
+        run.pool.submit(_tcp_connect, ip): "tcp",
+    }
+    if ":" not in ip:
+        futures[run.pool.submit(_inspect_quic, domain, ip, PATH_MAX_TTL, run.cancel)] = "quic"
+    # Windows ставит первым IPv6 — по нему и пойдёт браузер: эта дорога — часть первой волны.
+    road_ip = program_ipv6(report.answers) if ":" not in ip else ""
+    if road_ip:
+        futures[run.pool.submit(_program_road, domain, road_ip, run.cancel)] = "road"
+    for key, result in run.each_done(futures):
+        if key == "tcp" and isinstance(result, TcpReport):
+            report = replace(report, tcp=result)
+        elif key == "road" and isinstance(result, ProgramRoad):
+            report = replace(report, road=result)
+        elif key == "site" and isinstance(result, dict):
+            report = replace(report, site=result)
+        elif key == "quic" and isinstance(result, tuple):
+            report = replace(report, quic=result[0], filter_facts=result[1])
+        elif key == "hosts_help" and isinstance(result, HostsHelp):
+            report = replace(
+                report,
+                hosts_service=result.service,
+                hosts_rows=result.rows,
+                hosts_managed=result.managed,
+                hosts_offered=result.offered,
+            )
+        else:
+            continue
+        report = publish(report)
+    return report
+
+
 def _address_stage(run: _Run, report: DomainLookupReport, servers, use_external: bool, publish) -> DomainLookupReport:
+    """Вторая волна по адресу: пинг, путь, сертификаты, сеть и соседи (сайт и QUIC уже проверены)."""
     ip = report.primary_ip
     public = is_public_ip(ip)
     helpers = tuple(
@@ -1202,25 +1292,19 @@ def _address_stage(run: _Run, report: DomainLookupReport, servers, use_external:
     order = [SOURCE_PTR]
     futures: dict[Future, object] = {
         run.pool.submit(_ping, ip, run.halted): "ping",
-        run.pool.submit(_tcp_connect, ip): "tcp",
         run.pool.submit(_lookup_ptr, ip, helpers): SOURCE_PTR,
     }
+    if report.tcp is None:
+        futures[run.pool.submit(_tcp_connect, ip)] = "tcp"
     # Пингуется тот IPv6, на который Windows ведёт программы; нет такого — любой адрес IPv6 сайта.
     road_ip = program_ipv6(report.answers) if ":" not in ip else ""
     ipv6 = road_ip or pick_ipv6(report.answers, ip)
     if ipv6:
         futures[run.pool.submit(_ping, ipv6, run.halted)] = "ping6"
-    if road_ip:
+    if road_ip and report.road is None:
         futures[run.pool.submit(_program_road, domain, road_ip, run.cancel)] = "road"
-    if domain and public:
-        futures[run.pool.submit(_hosts_help, domain)] = "hosts_help"
     if ":" not in ip:
         futures[run.pool.submit(trace_route, ip, should_stop=run.halted)] = "route"
-        if domain and public:
-            futures[run.pool.submit(_inspect_quic, domain, ip, PATH_MAX_TTL, run.cancel)] = "quic"
-    if domain and public:
-        # Домен проверяется не только по адресу, но и так же, как сайты в BlockCheck.
-        futures[run.pool.submit(_check_site, domain, run.halted)] = "site"
     if domain:
         order.append(SOURCE_CERT_NAMED)
         futures[run.pool.submit(_lookup_cert, ip, SOURCE_CERT_NAMED, domain)] = SOURCE_CERT_NAMED
