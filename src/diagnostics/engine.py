@@ -34,6 +34,7 @@ BlockCheck отвечает на вопрос «какие сайты откры
 from __future__ import annotations
 
 import functools
+import random
 import threading
 import time
 from collections.abc import Callable
@@ -410,6 +411,7 @@ def _run_probes(
 
     def _probe(*args, **kwargs) -> _Probe:
         try:
+            run.wait_start_turn()
             started = time.monotonic()
             probe = _probe_target(*args, **kwargs)
             probe.seconds = time.monotonic() - started
@@ -423,15 +425,21 @@ def _run_probes(
                     ready = done[0]
                 on_done(ready, total)
 
-    planned: list[tuple[str, Target, Future]] = []
+    jobs: list[tuple[str, Target, bool]] = []
     for key, service in services.items():
         for target in service.targets:
             if not full and target.discover_googlevideo:
                 target = Target(target.host, target.purpose, target.path, main=target.main)
             # Объём по одному соединению — это десятки запросов подряд: контрольные
             # сайты ими не нагружаем, их всё равно не блокируют.
-            volume = full and not service.control
-            planned.append((key, target, lane.submit(_probe, run, target, key, full=full, volume=volume)))
+            jobs.append((key, target, full and not service.control))
+    # Сайты стартуют каждый раз в новом порядке (отчёт печатается в прежнем): одинаковый
+    # порядок от проверки к проверке — тоже узор.
+    futures: dict[int, Future] = {}
+    for index in random.sample(range(len(jobs)), len(jobs)):
+        key, target, volume = jobs[index]
+        futures[index] = lane.submit(_probe, run, target, key, full=full, volume=volume)
+    planned = [(key, target, futures[index]) for index, (key, target, _volume) in enumerate(jobs)]
 
     # Сначала дожидаемся всех, затем перепроверяем упавшие, и только потом печатаем:
     # перепроверка может изменить результат.

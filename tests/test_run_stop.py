@@ -116,6 +116,20 @@ class TlsDeadlineTests(unittest.TestCase):
         self.assertEqual((result.kind, result.stage), (tls_probe.KIND_TIMEOUT, tls_probe.STAGE_TLS))
         self.assertLess(result.elapsed_ms, 1500)
 
+    def test_sites_start_one_after_another_with_a_pause(self) -> None:
+        """Сайты не стартуют в одну долю секунды: между стартами — пауза из ``SITE_START_GAP_S``."""
+        from diagnostics import run_context
+
+        with patch.object(run_context, "SITE_START_GAP_S", (0.15, 0.15)):
+            run = Run(None, workers=2)
+            self.addCleanup(run.close)
+            started = []
+            for _site in range(3):
+                self.assertTrue(run.wait_start_turn())
+                started.append(time.monotonic())
+        self.assertGreaterEqual(started[1] - started[0], 0.14)
+        self.assertGreaterEqual(started[2] - started[1], 0.14)
+
     def test_run_warms_the_certificate_store(self) -> None:
         from diagnostics import run_context
 

@@ -270,6 +270,20 @@ class JudgeTests(unittest.TestCase):
 
 
 class CollectTests(unittest.TestCase):
+    def test_answering_site_gets_one_packet_like_a_browser(self) -> None:
+        asked: list = []
+
+        def hello(_ip, name, **_kwargs):
+            asked.append(name)
+            return 12.0
+
+        with ThreadPoolExecutor(4) as pool, patch.object(qp, "quic_hello", hello):
+            facts = qp.collect("youtube.com", "203.0.113.5", submit=pool.submit, cancel=SocketCancel())
+
+        # Ни постороннего имени, ни пакета без имени: браузер таких не шлёт.
+        self.assertEqual(asked, ["youtube.com"])
+        self.assertEqual(qp.judge(facts).code, qp.QUIC_OK)
+
     def test_three_packets_go_to_the_same_address(self) -> None:
         asked: list[tuple] = []
 
@@ -298,6 +312,7 @@ class CollectTests(unittest.TestCase):
 
     def test_real_name_answering_on_the_second_try_is_not_a_block(self) -> None:
         answers = iter([None, 12.0])
+        # Первое молчание настоящего имени — сигнал беды: уходят пакеты для разбора, затем повтор.
 
         def hello(_ip, name, **_kwargs):
             return next(answers) if name == "youtube.com" else 40.0

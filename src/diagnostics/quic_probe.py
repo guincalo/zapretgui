@@ -116,11 +116,15 @@ def quic_hello(
 
 
 def collect(host: str, ip: str, *, submit: Callable, cancel: SocketCancel) -> QuicFacts:
-    """Три пакета на один адрес одновременно: с именем сайта, с посторонним и без имени."""
-    real = submit(quic_hello, ip, host, cancel=cancel)
+    """Сначала один пакет с именем сайта — как у браузера. Только если сервер промолчал,
+    уходят пакеты с посторонним именем и без имени: они нужны, чтобы назвать причину,
+    а браузер таких не шлёт (``utils.probe_gate``: разбор — по сигналу беды)."""
+    real_ms = quic_hello(ip, host, cancel=cancel)
+    if real_ms is not None or cancel.cancelled:
+        return QuicFacts(host=host, real_ms=real_ms, cancelled=cancel.cancelled)
     neutral = submit(quic_hello, ip, NEUTRAL_NAME, cancel=cancel)
     nameless = submit(quic_hello, ip, None, cancel=cancel)
-    real_ms, neutral_ms, nameless_ms = real.result(), neutral.result(), nameless.result()
+    neutral_ms, nameless_ms = neutral.result(), nameless.result()
     real_again_ms = None
     if real_ms is None and (neutral_ms is not None or nameless_ms is not None) and not cancel.cancelled:
         real_again_ms = quic_hello(ip, host, cancel=cancel)

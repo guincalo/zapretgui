@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import os
+import random
 import threading
 import time
 from collections import deque
@@ -20,7 +21,7 @@ from dataclasses import dataclass, field
 
 from diagnostics import block_cause, block_kind, protocol_probe, quic_probe, volume_probe
 from diagnostics.outside_check import OUTSIDE_DOWN
-from diagnostics.limits import NET_AT_ONCE, NET_AT_ONCE_WEAK, REFERENCE_AT_ONCE, RUN_DEADLINE
+from diagnostics.limits import NET_AT_ONCE, NET_AT_ONCE_WEAK, REFERENCE_AT_ONCE, RUN_DEADLINE, SITE_START_GAP_S
 from diagnostics.services import Target
 from diagnostics.tls_probe import KIND_CONNECT, ProbeResult, client_context
 from diagnostics.verdict import DnsJudgement, ReachState
@@ -325,6 +326,8 @@ class Run:
         # досиживали свои секунды.
         self._closed = threading.Event()
         threading.Thread(target=self._watch, name="diag-watch", daemon=True).start()
+        self._start_lock = threading.Lock()
+        self._next_start = 0.0
 
     def _watch(self) -> None:
         while not self._closed.wait(_WATCH_S):
@@ -406,6 +409,18 @@ class Run:
 
     def submit(self, fn, *args, **kwargs) -> Future:
         return self.pool.submit(fn, *args, **kwargs)
+
+    def wait_start_turn(self) -> bool:
+        """Сайт ждёт своей очереди на старт: между стартами — случайная пауза ``SITE_START_GAP_S``.
+
+        Без неё все сайты начинались в одну и ту же долю секунды, каждый раз одинаково,
+        а такой узор сам выдаёт проверяльщика. False — проверку сняли.
+        """
+        with self._start_lock:
+            now = time.monotonic()
+            start = max(now, self._next_start)
+            self._next_start = start + random.uniform(*SITE_START_GAP_S)
+        return self.probe_cancel.sleep(start - now)
 
     def lane(self, limit: int) -> Lane:
         """Очередь для однотипных задач: не больше ``limit`` разом, остальные ждут без потока."""
