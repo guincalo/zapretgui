@@ -32,6 +32,7 @@ def start_blockcheck_page_run(
     blockcheck_feature,
     scope: str,
     user_domains: list[str],
+    ask_outside: bool = False,
     parent,
     run_runtime,
     start_button,
@@ -63,6 +64,7 @@ def start_blockcheck_page_run(
     worker = blockcheck_feature.create_blockcheck_worker(
         scope=scope,
         user_domains=list(user_domains or []),
+        ask_outside=bool(ask_outside),
         parent=None,
     )
     worker.log_message.connect(on_log)

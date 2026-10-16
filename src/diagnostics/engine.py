@@ -396,10 +396,13 @@ def _run_probes(
     emit: Emit,
     on_done: Callable[[int, int], None] | None = None,
     on_probe: Callable[[str, _Probe], None] | None = None,
+    ask_outside: bool = False,
 ) -> dict[str, list[_Probe]]:
     """Запускает все цели сразу и печатает их блоки по порядку.
 
     ``on_done(готово, всего)`` зовётся после каждой проверенной цели.
+    ``ask_outside`` — человек сам попросил сверить закрытые сайты с сервером
+    проекта (``_ask_outside``); без этого запрос туда не уходит.
     """
     total = sum(len(service.targets) for service in services.values())
     lock = threading.Lock()
@@ -445,7 +448,8 @@ def _run_probes(
             done_probes.append((key, target, None, str(exc)))
     if full:
         done_probes = _recheck_failed(run, services, done_probes)
-        _ask_outside(run, services, done_probes)
+        if ask_outside:
+            _ask_outside(run, services, done_probes)
 
     collected: dict[str, list[_Probe]] = {key: [] for key in services}
     current_service = ""
@@ -467,8 +471,10 @@ def _run_probes(
 def _ask_outside(run: _Run, services: dict[str, Service], done_probes: list) -> None:
     """Сайты без дороги и после перепроверки: живы ли они снаружи (сервер Zapret DNS).
 
-    Только встроенные сайты: свои домены пользователя (ключ ``user:``) на сервер
-    не уходят. Контрольные не спрашиваются: по ним судят о сети целиком.
+    Только по галочке человека: соединение с сервером проекта само по себе
+    выдаёт программу, поэтому без спроса оно не открывается. Только встроенные
+    сайты: свои домены пользователя (ключ ``user:``) на сервер не уходят.
+    Контрольные не спрашиваются: по ним судят о сети целиком.
     """
     failed = [
         probe
@@ -659,6 +665,7 @@ def run_blockcheck(
     check_dns_servers: Callable[..., dict] | None = None,
     progress: Callable[[str, int, int], None] | None = None,
     partial: Callable[[dict], None] | None = None,
+    ask_outside: bool = False,
 ) -> dict:
     """Проверка BlockCheck. Печатает отчёт через ``emit`` и возвращает итог для экрана.
 
@@ -670,6 +677,8 @@ def run_blockcheck(
     таким сайтам советуется hosts или DNS, а не подбор стратегии.
     ``check_dns_servers`` — проверка DNS-серверов для полной проверки: получает
     ``should_stop`` и возвращает ``{"level", "findings": [{"level", "text"}], "text"}``.
+    ``ask_outside`` — галочка «Сверить с сервером в Нидерландах»: закрытые сайты
+    спрашиваются у сервера проекта (``diagnostics.outside_check``).
     """
     from diagnostics.freeze_check import EVERY_AT_ONCE, check_freeze, summarize_freeze
     from diagnostics.voice_check import check_voice, summarize_voice
@@ -734,7 +743,9 @@ def run_blockcheck(
         # Сервис уходит на экран, как только проверены все его адреса, а не когда кончатся все сайты.
         on_probe = sections.live_services(services, verdict_of, lambda ready: live.put(services=ready))
         on_done = functools.partial(step, STEP_SITES)
-        collected = _run_probes(run, services, full=True, emit=emit, on_done=on_done, on_probe=on_probe)
+        collected = _run_probes(
+            run, services, full=True, emit=emit, on_done=on_done, on_probe=on_probe, ask_outside=ask_outside
+        )
         verdicts = {key: verdict_of(service, collected[key]) for key, service in services.items()}
         services_report = report_text.services_report(services, verdicts, collected)
         live.put(services=services_report)

@@ -455,6 +455,9 @@ TEXTS_TOUR: dict[str, dict[str, str]] = {
             "BlockCheck сам открывает сайты и смотрит, что с ними происходит. Выберите, что проверить: "
             "только Discord и YouTube, только сайты или полную проверку — с хостингами, DNS, звонками и "
             "самим компьютером, около минуты. Затем нажмите «Проверить».\n\n"
+            "Галочка «Сверить с сервером в Нидерландах» попросит наш сервер открыть закрытые сайты "
+            "из-за рубежа: так видно, блокировка это или сайт не работает сам. По умолчанию она выключена — "
+            "соединение с сервером проекта провайдер видит.\n\n"
             "Проверять полезно дважды: с выключенным Zapret — чтобы увидеть, что блокируется, и "
             "с включённым — чтобы убедиться, что обход помог."
         ),
@@ -462,6 +465,9 @@ TEXTS_TOUR: dict[str, dict[str, str]] = {
             "BlockCheck opens sites by itself and watches what happens to them. Choose what to check: "
             "only Discord and YouTube, only sites, or the full check — with hostings, DNS, calls and the "
             "computer itself, about a minute. Then press Check.\n\n"
+            "The Cross-check with the server in the Netherlands box asks our server to open the blocked sites "
+            "from abroad: this shows whether it is a block or the site itself is down. It is off by default — "
+            "your provider sees the connection to the project server.\n\n"
             "It is useful to check twice: with Zapret off — to see what is blocked, and with it on — to "
             "make sure the bypass helped."
         ),

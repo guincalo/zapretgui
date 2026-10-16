@@ -537,6 +537,20 @@ TEXTS: dict[str, dict[str, str]] = {
         "ru": "Что проверить:",
         "en": "What to check:",
     },
+    "page.blockcheck.ask_outside": {
+        "ru": "Сверить с сервером в Нидерландах",
+        "en": "Cross-check with the server in the Netherlands",
+    },
+    "page.blockcheck.ask_outside.description": {
+        "ru": (
+            "Закрытые сайты проверит и сервер Zapret DNS в Нидерландах: так видно, "
+            "блокировка это или сайт не работает сам. Провайдер увидит соединение с сервером проекта."
+        ),
+        "en": (
+            "Blocked sites are also checked by the Zapret DNS server in the Netherlands: this shows whether "
+            "it is a block or the site itself is down. Your provider will see the connection to the project server."
+        ),
+    },
     "page.blockcheck.scope_main": {
         "ru": "Только Discord и YouTube (быстро)",
         "en": "Discord and YouTube only (quick)",

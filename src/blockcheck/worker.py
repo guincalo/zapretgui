@@ -39,6 +39,7 @@ class BlockcheckWorker(QObject):
         load_geo_sites: Callable[[], object] | None = None,
         remember_run: Callable[[dict, str | None], dict] | None = None,
         check_dns_servers: Callable[..., dict] | None = None,
+        ask_outside: bool = False,
         parent=None,
     ):
         super().__init__(parent)
@@ -52,6 +53,7 @@ class BlockcheckWorker(QObject):
         self._load_geo_sites = load_geo_sites
         self._remember_run = remember_run
         self._check_dns_servers = check_dns_servers
+        self._ask_outside = bool(ask_outside)
         self._cancelled = False
         self._running = False
         self._run_log_file = None
@@ -93,6 +95,7 @@ class BlockcheckWorker(QObject):
                 should_stop=self.is_cancelled,
                 geo_service_for=self._geo_service_lookup(),
                 check_dns_servers=self._check_dns_servers,
+                ask_outside=self._ask_outside,
                 progress=self.progress.emit,
                 partial=self._on_partial,
             )

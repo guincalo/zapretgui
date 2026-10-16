@@ -1508,7 +1508,7 @@ class EngineScenarioTests(unittest.TestCase):
         """Сайт без дороги, который не открылся и с сервера за рубежом, — не блокировка."""
         net = _Net(https=lambda host, ip: ProbeResult(ip=ip, kind=KIND_RESET) if host == "discord.com" else _ok(ip))
         net.outside = {"discord.com": "down"}
-        result = net.run(engine.run_blockcheck, "main", emit=lambda _line: None)
+        result = net.run(engine.run_blockcheck, "main", emit=lambda _line: None, ask_outside=True)
 
         discord = next(item for item in result["services"] if item["key"] == "discord")
         self.assertEqual((discord["kind"], discord["level"]), ("down", "warn"))
@@ -1518,9 +1518,19 @@ class EngineScenarioTests(unittest.TestCase):
         problem = next(item for item in result["problems"] if "Discord" in item["text"])
         self.assertNotIn(problem["action"], ("strategy", "start_zapret"))
 
+    def test_server_abroad_is_not_asked_without_the_checkbox(self) -> None:
+        # Соединение с сервером проекта выдаёт программу провайдеру: без галочки его нет.
+        net = _Net(https=lambda host, ip: ProbeResult(ip=ip, kind=KIND_RESET) if host == "discord.com" else _ok(ip))
+        net.outside = {"discord.com": "down"}
+        result = net.run(engine.run_blockcheck, "main", emit=lambda _line: None)
+
+        self.assertEqual(net.outside_asked, [])
+        discord = next(item for item in result["services"] if item["key"] == "discord")
+        self.assertNotEqual(discord["kind"], "down")
+
     def test_own_domains_and_control_sites_are_not_sent_abroad(self) -> None:
         net = _Net(https=lambda host, ip: ProbeResult(ip=ip, kind=KIND_RESET))
-        net.run(engine.run_blockcheck, "all", user_domains=("my-own.example",), emit=lambda _line: None)
+        net.run(engine.run_blockcheck, "all", user_domains=("my-own.example",), emit=lambda _line: None, ask_outside=True)
 
         self.assertNotIn("my-own.example", net.outside_asked)
         self.assertFalse({"google.com", "www.google.com", "cloudflare.com", "ya.ru", "vk.com"} & set(net.outside_asked))

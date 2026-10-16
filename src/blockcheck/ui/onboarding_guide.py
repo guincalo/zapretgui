@@ -89,8 +89,8 @@ class BlockcheckTourGuide(QObject):
         cards = page._result_cards
         scan = page._strategy_tab_page
         if name == "start":
-            # Выбор набора и кнопка «Проверить»: они есть при любой раскладке верха страницы.
-            return [page._scope_combo, page._start_btn]
+            # Выбор набора, галочка сверки с сервером и кнопка «Проверить»: они есть при любой раскладке верха страницы.
+            return [page._scope_combo, page._outside_box, page._start_btn]
         if name == "domains":
             return page._domains_card
         if name == "tabs":

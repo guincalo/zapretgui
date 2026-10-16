@@ -51,6 +51,7 @@ from ui.queued_worker_state import QueuedWorkerState
 from app.ui_texts import tr as tr_catalog
 
 from qfluentwidgets import (
+    CheckBox,
     ComboBox,
     CaptionLabel,
     BodyLabel,
@@ -415,6 +416,22 @@ class BlockcheckPage(BasePage):
         self._update_scope_combo_accessibility()
         self._scope_combo.currentIndexChanged.connect(self._update_scope_combo_accessibility)
         row.addWidget(self._scope_combo)
+        # Сервер проекта открывает закрытый сайт из Нидерландов: так видно, заблокирован он
+        # или не работает сам. Само соединение с сервером выдаёт программу провайдеру,
+        # поэтому без галочки запрос туда не уходит (utils.probe_gate, решение 2026-10-16).
+        self._outside_box = CheckBox(
+            tr_catalog("page.blockcheck.ask_outside", default="Сверить с сервером в Нидерландах")
+        )
+        outside_description = tr_catalog(
+            "page.blockcheck.ask_outside.description",
+            default=(
+                "Закрытые сайты проверит и сервер Zapret DNS в Нидерландах: так видно, "
+                "блокировка это или сайт не работает сам. Провайдер увидит соединение с сервером проекта."
+            ),
+        )
+        set_tooltip(self._outside_box, outside_description)
+        set_control_accessibility(self._outside_box, name="Сверить с сервером в Нидерландах", description=outside_description)
+        row.addWidget(self._outside_box)
         row.addSpacing(8)
 
         self._status_label = CaptionLabel(
@@ -810,6 +827,7 @@ class BlockcheckPage(BasePage):
         self._result_cards.clear()
         self._results_card.setVisible(False)
         scope = self._current_scope()
+        self._outside_box.setEnabled(False)
         self._progress_steps.start(progress_steps(scope))
         self._progress_card.setVisible(True)
         # Список сайтов проверки уже взят: добавлять свои домены до конца проверки бесполезно.
@@ -820,6 +838,7 @@ class BlockcheckPage(BasePage):
             blockcheck_feature=self._blockcheck,
             scope=scope,
             user_domains=self._get_extra_domains(),
+            ask_outside=self._outside_box.isChecked(),
             parent=self,
             run_runtime=self._run_runtime,
             start_button=self._start_btn,
@@ -1415,6 +1434,7 @@ class BlockcheckPage(BasePage):
             scope_combo=self._scope_combo,
             progress_bar=self._progress_bar,
         )
+        self._outside_box.setEnabled(True)
         self._domains_card.setVisible(True)
 
     def _update_scope_combo_accessibility(self, *_args) -> None:
