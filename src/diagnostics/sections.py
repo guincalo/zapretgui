@@ -264,14 +264,16 @@ def clock_skew(run: Run) -> float | None:
 
 
 def check_system(
-    run: Run, services: dict[str, Service], zapret_running: bool | None = None
+    run: Run, services: dict[str, Service], zapret_running: bool | None = None, *, intercept: bool = True
 ) -> tuple[system_state.SystemItem, ...]:
+    """Состояние компьютера. ``intercept`` — ещё и самопроверка перехвата: соединение с
+    адресом-пустышкой 192.0.2.1 браузер не открывает, поэтому она — только в глубокой диагностике."""
     hosts = tuple(dict.fromkeys(target.host for service in services.values() for target in service.targets))
     # Самопроверка идёт рядом с чтением системы: перехват соединений на компьютере — тоже «Компьютер».
-    intercept = run.submit(self_check.collect, cancel=run.probe_cancel)
+    pending = run.submit(self_check.collect, cancel=run.probe_cancel) if intercept else None
     facts = system_state.collect_facts(check_hosts=hosts, clock_skew=lambda: clock_skew(run))
     items = system_state.judge(facts, zapret_running=zapret_running)
-    extra = self_check.judge(intercept.result())
+    extra = self_check.judge(pending.result()) if pending is not None else None
     return (*items, extra) if extra is not None else items
 
 

@@ -688,14 +688,15 @@ def run_blockcheck(
 
         # Звонки и обрыв на 16 КБ проверяются всегда: режим меняет только список сайтов.
         voice_future = run.later(STEP_VOICE, check_voice, run.submit, _wait_plain, cancel=run.probe_cancel)
-        burst_future = run.later(STEP_VOICE, sections.check_udp_burst, run)
+        # Серия UDP и отправка данных — пробы, которых браузер не делает: только в глубокой диагностике.
+        burst_future = run.later(STEP_VOICE, sections.check_udp_burst, run) if full else None
         freeze_future = run.later(
             STEP_HOSTINGS,
             check_freeze,
             run.lane(EVERY_AT_ONCE).submit,
             _wait_plain,
             lambda host, path: sections.download(run, host, path),
-            lambda host, path: sections.upload(run, host, path),
+            (lambda host, path: sections.upload(run, host, path)) if full else None,
             every=full,
             on_server=lambda _server, done, total: step(STEP_HOSTINGS, done, total),
         )
@@ -715,7 +716,7 @@ def run_blockcheck(
             else None
         )
         ipv6_future = run.later(STEP_IPV6, sections.check_ipv6, run)
-        system_future = run.later(STEP_SYSTEM, sections.check_system, run, services, zapret_running)
+        system_future = run.later(STEP_SYSTEM, sections.check_system, run, services, zapret_running, intercept=full)
 
         step(STEP_SITES, 0, targets_count)
         verdict_of = functools.partial(_service_verdict, zapret_running=zapret_running)

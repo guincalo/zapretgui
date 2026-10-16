@@ -121,7 +121,7 @@ SCOPE_MAIN = "main"
 SCOPE_ALL = "all"
 # Всё, что в «Все сайты», плюс DNS-серверы и поиск места фильтра.
 SCOPE_FULL = "full"
-SCOPE_TITLES = {SCOPE_MAIN: "Discord и YouTube", SCOPE_ALL: "Все сайты", SCOPE_FULL: "Полная проверка"}
+SCOPE_TITLES = {SCOPE_MAIN: "Discord и YouTube", SCOPE_ALL: "Все сайты", SCOPE_FULL: "Глубокая диагностика"}
 
 # Шаги хода проверки: что и в каком порядке показывает экран, пока она идёт.
 STEP_SITES = "sites"

@@ -24,6 +24,7 @@
 
 from __future__ import annotations
 
+import random
 import re
 from collections.abc import Callable
 from dataclasses import dataclass, replace
@@ -76,9 +77,12 @@ CANDIDATE_NAMES: tuple[str, ...] = (
 MAX_TRIED = 24
 WANTED = 3
 BATCH = 4
-STEP_S = 0.25
-BATCH_PAUSE_S = 1.0
-CONFIRM_PAUSE_S = 1.0
+# Паузы между пробами — случайные в этих пределах: ровный ритм «имя каждые 0,25 с» к одному
+# адресу сам выдаёт перебор (``utils.probe_gate``). Поиск идёт только по сигналу беды —
+# когда цель закрыта и без обхода, — поэтому лишние секунды здесь дешевле узора.
+STEP_S = (0.4, 1.2)
+BATCH_PAUSE_S = (1.5, 3.0)
+CONFIRM_PAUSE_S = (0.8, 1.6)
 FROZEN_AFTER = 3
 # Сколько вариантов с найденным именем добавлять в подбор на одно имя.
 VARIANTS_PER_NAME = 6
@@ -110,8 +114,11 @@ def discover(
     sleep: Callable[[float], None],
     cancelled: Callable[[], bool],
     names: tuple[str, ...] = CANDIDATE_NAMES,
+    pick: Callable[[float, float], float] = random.uniform,
 ) -> NameSearch:
-    """Какие имена пропускает фильтр к адресу цели. Сеть — только через ``hello``."""
+    """Какие имена пропускает фильтр к адресу цели. Сеть — только через ``hello``.
+
+    ``pick(от, до)`` — длина паузы (в тестах подменяется)."""
     if hello(target_host):
         # Настоящее имя прошло без обхода: сравнивать не с чем.
         return NameSearch(FILTER_UNKNOWN)
@@ -128,7 +135,7 @@ def discover(
         if cancelled() or len(found) >= WANTED:
             break
         if tried:
-            sleep(BATCH_PAUSE_S if tried % BATCH == 0 else STEP_S)
+            sleep(pick(*(BATCH_PAUSE_S if tried % BATCH == 0 else STEP_S)))
         tried += 1
         answer = hello(name)
         if answer is None:
@@ -138,7 +145,7 @@ def discover(
             continue
         silent_in_row = 0
         if answer:
-            sleep(CONFIRM_PAUSE_S)
+            sleep(pick(*CONFIRM_PAUSE_S))
             if hello(name):
                 found.append(name)
     if found and hello(target_host):

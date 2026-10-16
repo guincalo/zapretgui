@@ -23,6 +23,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
+from diagnostics.history import same_run_kind
 from diagnostics.levels import FAIL, is_open
 
 __all__ = [
@@ -72,7 +73,7 @@ def counterpart(history: list[dict], entry: dict) -> dict | None:
     wanted = ZAPRET_OFF if mark == ZAPRET_ON else ZAPRET_ON
     now = _when(entry)
     for run in reversed(history):
-        if run.get("kind") != entry.get("kind") or run.get("title") != entry.get("title"):
+        if not same_run_kind(run, entry):
             continue
         if run.get("zapret") != wanted:
             continue

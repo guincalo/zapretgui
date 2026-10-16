@@ -36,8 +36,9 @@ class DiscoverTests(unittest.TestCase):
         self.assertEqual(asked.count("ya.ru"), 2)
         self.assertNotIn("ozon.ru", asked)
         # Между пробами — шаг, между пачками — пауза подольше.
-        self.assertIn(sd.STEP_S, slept)
-        self.assertIn(sd.BATCH_PAUSE_S, slept)
+        # Паузы случайные, но в своих пределах: шаг внутри пачки и подольше — между пачками.
+        self.assertTrue(all(0.4 <= pause <= 3.0 for pause in slept))
+        self.assertTrue(any(pause >= sd.BATCH_PAUSE_S[0] for pause in slept))
 
     def test_unconfirmed_name_is_not_counted(self) -> None:
         # ya.ru прошло один раз, а при повторе — нет.

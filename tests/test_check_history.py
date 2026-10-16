@@ -59,8 +59,14 @@ class EntryTests(unittest.TestCase):
         full = history.blockcheck_entry(_report(_service("YouTube", "fail"), scope="full"), when=WHEN)
         earlier = [history.blockcheck_entry(_report(_service("YouTube", "ok"), scope="all"), when=WHEN)]
 
-        self.assertEqual(full["title"], "Полная проверка")
+        self.assertEqual(full["title"], "Глубокая диагностика")
         self.assertIsNone(history.previous_run(earlier, full))
+
+    def test_deep_diagnostics_is_compared_with_the_full_checks_of_before_the_rename(self) -> None:
+        full = history.blockcheck_entry(_report(_service("YouTube", "fail"), scope="full"), when=WHEN)
+        old = {**history.blockcheck_entry(_report(_service("YouTube", "ok"), scope="full"), when=WHEN), "title": "Полная проверка"}
+
+        self.assertIs(history.previous_run([old], full), old)
 
     def test_overall_level_is_the_worst_problem_level(self) -> None:
         def level(*problems):

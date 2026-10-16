@@ -336,7 +336,7 @@ class _Net:
             # Пачка одновременных соединений — настоящие приветствия в сеть.
             patch.object(sections, "check_crowd", side_effect=self._crowd),
             patch.object(engine.telegram_check, "check_telegram", side_effect=lambda *_a, **_k: self.telegram),
-            patch.object(sections, "check_system", side_effect=lambda _run, _services, _zapret=None: self.system_items),
+            patch.object(sections, "check_system", side_effect=lambda _run, _services, _zapret=None, **_kwargs: self.system_items),
             # Подсети — десятки настоящих соединений: в сценариях движка их нет.
             patch.object(sections, "check_subnets", side_effect=self._subnets),
             # «Жив ли сайт снаружи» — запрос к серверу проекта: в сценариях его нет.
@@ -1093,7 +1093,7 @@ class ClockSkewTests(unittest.TestCase):
 
 
 class FullCheckTests(unittest.TestCase):
-    """«Полная проверка»: всё из «Всех сайтов» плюс DNS-серверы и место фильтра."""
+    """«Глубокая диагностика»: всё из «Всех сайтов» плюс DNS-серверы, место фильтра и пробы, которых браузер не делает."""
 
     DNS_OK = {
         "level": "warn",
@@ -1143,7 +1143,7 @@ class FullCheckTests(unittest.TestCase):
         result, lines, calls = self._run()
 
         self.assertEqual(result["scope"], "full")
-        self.assertIn("🔍 BlockCheck: Полная проверка", lines[0])
+        self.assertIn("🔍 BlockCheck: Глубокая диагностика", lines[0])
         self.assertIn("telegram", {item["key"] for item in result["services"]})
         self.assertEqual(calls["dns"], 1)
         self.assertEqual(result["dns_servers"]["level"], "warn")

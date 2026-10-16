@@ -556,8 +556,8 @@ TEXTS: dict[str, dict[str, str]] = {
         "en": "Discord and YouTube only (quick)",
     },
     "page.blockcheck.scope_full": {
-        "ru": "Полная проверка (около минуты)",
-        "en": "Full check (about a minute)",
+        "ru": "Глубокая диагностика (около минуты)",
+        "en": "Deep diagnostics (about a minute)",
     },
     "page.blockcheck.scope_all": {
         "ru": "Только сайты (быстро)",
@@ -828,8 +828,8 @@ TEXTS: dict[str, dict[str, str]] = {
         "en": "Stop",
     },
     "page.blockcheck.ready": {
-        "ru": "Сайты, хостинги, DNS, звонки и сам компьютер — около минуты",
-        "en": "Sites, hostings, DNS, calls and this computer — about a minute",
+        "ru": "Сайты, хостинги и звонки — так, как их открыл бы браузер",
+        "en": "Sites, hostings and calls — the way a browser would open them",
     },
     "page.blockcheck.running": {
         "ru": "Проверяем… ход виден ниже",

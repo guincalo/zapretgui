@@ -157,10 +157,25 @@ def history_rows(runs) -> list[tuple[str, str, str]]:
     return rows
 
 
+# Прежние названия режимов: прошлые проверки хранят название того дня, а сравнивать
+# их надо с тем же режимом под новым именем (2026-10-16: «Полная проверка» стала
+# «Глубокой диагностикой»).
+_RENAMED_TITLES = {"Полная проверка": "Глубокая диагностика"}
+
+
+def same_run_kind(run: dict, entry: dict) -> bool:
+    """Прогоны одного вида и одного набора сайтов — их можно сравнивать между собой."""
+    def title(item: dict) -> str:
+        text = str(item.get("title") or "")
+        return _RENAMED_TITLES.get(text, text)
+
+    return run.get("kind") == entry.get("kind") and title(run) == title(entry)
+
+
 def previous_run(history: list[dict], entry: dict) -> dict | None:
     """Последний прошлый прогон того же вида и с тем же набором сайтов."""
     for run in reversed(history):
-        if run.get("kind") == entry.get("kind") and run.get("title") == entry.get("title"):
+        if same_run_kind(run, entry):
             return run
     return None
 

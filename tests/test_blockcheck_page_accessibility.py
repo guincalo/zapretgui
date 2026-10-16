@@ -89,7 +89,7 @@ class BlockcheckPageAccessibilityTests(unittest.TestCase):
         self.assertIn("BlockCheck, Подбор стратегии, Проверка домена, DNS-серверы или DNS подмена", page._tabs_pivot.accessibleDescription())
         self.assertEqual(
             page._scope_combo.accessibleName(),
-            "Что проверить BlockCheck, выбрано: Полная проверка (около минуты)",
+            "Что проверить BlockCheck, выбрано: Только сайты (быстро)",
         )
         self.assertEqual(page._start_btn.text(), "Проверить")
         self.assertEqual(page._start_btn.accessibleName(), "Запустить BlockCheck")
@@ -143,7 +143,7 @@ class BlockcheckPageAccessibilityTests(unittest.TestCase):
 
         self.assertEqual(
             menu.view.item(0).data(Qt.ItemDataRole.AccessibleTextRole),
-            "Что проверить BlockCheck: Полная проверка (около минуты), выбран",
+            "Что проверить BlockCheck: Только сайты (быстро), выбран",
         )
 
     def test_partial_reports_show_cards_during_the_run_with_a_pause_between_redraws(self) -> None:
@@ -546,17 +546,18 @@ class ScopeChoiceTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.app = QApplication.instance() or QApplication([])
 
-    def test_full_check_is_the_first_choice_and_the_default(self) -> None:
+    def test_sites_are_the_default_and_deep_diagnostics_is_the_last_choice(self) -> None:
+        # По умолчанию — проверка, которая ходит как браузер; шумные пробы — только по выбору человека.
         page = _make_page()
         combo = page._scope_combo
 
-        self.assertEqual([combo.itemData(index) for index in range(combo.count())], ["full", "all", "main"])
-        self.assertEqual(page._current_scope(), "full")
-        self.assertIn("Полная проверка", combo.currentText())
-        combo.setCurrentIndex(1)
+        self.assertEqual([combo.itemData(index) for index in range(combo.count())], ["all", "main", "full"])
         self.assertEqual(page._current_scope(), "all")
+        combo.setCurrentIndex(2)
+        self.assertEqual(page._current_scope(), "full")
+        self.assertIn("Глубокая диагностика", combo.currentText())
         page.set_ui_language("en")
-        self.assertEqual(combo.itemText(0), "Full check (about a minute)")
+        self.assertEqual(combo.itemText(2), "Deep diagnostics (about a minute)")
 
 
 class SummaryChangesTests(unittest.TestCase):

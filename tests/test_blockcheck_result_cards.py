@@ -11,7 +11,7 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication, QWidget
 
-from blockcheck.ui.page import SCOPE_FULL, BlockcheckPage
+from blockcheck.ui.page import SCOPE_ALL, BlockcheckPage
 from blockcheck.ui.result_cards import (
     CardsGrid,
     HostingDots,
@@ -867,17 +867,17 @@ class PageCardsTests(unittest.TestCase):
         self.addCleanup(page.deleteLater)
         return page
 
-    def test_full_check_is_first_and_selected(self) -> None:
+    def test_sites_are_first_and_selected(self) -> None:
         page = self._page()
 
         self.assertEqual(page._scope_combo.currentIndex(), 0)
-        self.assertEqual(page._current_scope(), SCOPE_FULL)
-        self.assertEqual(page._scope_combo.itemText(0), "Полная проверка (около минуты)")
-        self.assertEqual([page._scope_combo.itemData(index) for index in range(3)], ["full", "all", "main"])
+        self.assertEqual(page._current_scope(), SCOPE_ALL)
+        self.assertEqual(page._scope_combo.itemText(2), "Глубокая диагностика (около минуты)")
+        self.assertEqual([page._scope_combo.itemData(index) for index in range(3)], ["all", "main", "full"])
         # Смена языка расставляет названия в том же порядке.
         page.set_ui_language("ru")
-        self.assertEqual(page._scope_combo.itemText(0), "Полная проверка (около минуты)")
-        self.assertEqual(page._scope_combo.itemText(2), "Только Discord и YouTube (быстро)")
+        self.assertEqual(page._scope_combo.itemText(0), "Только сайты (быстро)")
+        self.assertEqual(page._scope_combo.itemText(2), "Глубокая диагностика (около минуты)")
 
     def test_card_opens_details_over_the_page_and_closing_brings_it_back(self) -> None:
         page = self._page()
