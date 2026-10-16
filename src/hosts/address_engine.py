@@ -32,6 +32,15 @@
 hosts и сверка при запуске. Сеть сюда приходит снаружи (``probe``,
 ``resolve``, ``network_ok``): в тестах она подменяется целиком.
 
+Когда что проверяется (``utils.probe_gate``). Человек переключил сервис
+(``Why.USER``) — проверяется всё и ищутся адреса. Плановая проверка
+(``Why.SCHEDULE``) трогает только то, чем пользуется браузер, — первый
+записанный адрес каждого имени, по одному соединению. Ответили — на этом
+всё: ни DNS, ни запаса, ни обхода соседей. Первый адрес не ответил — это
+сигнал беды (``Why.SIGNAL``): дальше полная проверка и поиск, но только для
+сервисов, у которых беда. Так программа без повода не устраивает пачку
+соединений к десяткам адресов при каждом запуске.
+
 Осторожность. Если не ответил ни один адрес и связи с интернетом нет, ничего
 не меняется: иначе при обрыве «умерли» бы все адреса разом. Имя никогда не остаётся без адреса: если
 убирать пришлось бы всё, остаётся каталог. В фоновой проверке адрес убирается
@@ -53,6 +62,7 @@ from hosts.address_probe import ALIVE, DEAD, UNKNOWN, Probe
 from hosts.address_scan import neighbours
 from hosts.catalog_overlay import clean_overlay
 from hosts.catalog_repository import HOSTS_PROFILE_ID, HostsCatalog
+from utils.probe_gate import Why, may_search
 
 __all__ = ["PASSPORTS", "EngineReport", "Passport", "check_selection"]
 
@@ -193,7 +203,7 @@ def check_selection(
     resolve: Callable[[str, bool], list[str]],
     network_ok: Callable[[], bool],
     ipv6: bool,
-    strict: bool,
+    why: Why,
     relays: Collection[str] = (),
     recheck: Collection[str] | None = None,
     sweep: Callable[[list[str]], dict[str, float]] | None = None,
@@ -205,8 +215,10 @@ def check_selection(
     ``catalog`` — поставленный каталог без наложений. ``probe(адрес, имя,
     нейтральное имя)`` и ``resolve(имя, нужен_ли_IPv6)`` — сеть. ``sweep(адреса)`` —
     быстрый обход: какие адреса принимают соединение и за сколько (None — соседей
-    известных адресов не искать). ``relays`` — адреса посредников каталога. ``strict`` — человек ждёт результата: мёртвый
-    адрес убирается сразу, без второй проверки. ``recheck`` — названия сервисов,
+    известных адресов не искать). ``relays`` — адреса посредников каталога. ``why`` — повод
+    (``utils.probe_gate.Why``): ``USER`` — человек ждёт результата, мёртвый адрес убирается
+    сразу, без второй проверки; ``SCHEDULE`` — сначала только первые адреса, полная проверка
+    лишь при беде. ``recheck`` — названия сервисов,
     которые проверить сейчас (None — все): человек переключил один сервис и не
     должен ждать, пока перепроверятся остальные двадцать; у остальных остаются
     адреса прошлой проверки. None вместо набора — менять нечего (нет связи или
@@ -233,29 +245,74 @@ def check_selection(
         plans.append(_Plan(service_id, service_name, profile_id, _by_host(rows), passport))
     if not selected:
         return None, EngineReport()
+    strict = why == Why.USER
 
-    # Что проверять. Без паспорта — только там, где есть из чего выбирать первого.
+    def _checked(plan: _Plan, addresses: list[str], address: str) -> bool:
+        """Проверять ли адрес. Без паспорта — только там, где есть из чего выбирать первого."""
+        if _is_v6(address) and not ipv6:
+            return False
+        if plan.passport is None:
+            rivals = [other for other in addresses if _is_v6(other) == _is_v6(address)]
+            if len(rivals) < 2 or (plan.profile_id != HOSTS_PROFILE_ID and address not in relay_set):
+                return False
+        return True
+
+    if why == Why.SCHEDULE:
+        # Плановая проверка: только первый записанный адрес каждого имени — тот, что берёт браузер.
+        written = {
+            (service_id, profile_id): rows
+            for service_id, profiles in before["services"].items()
+            for profile_id, rows in profiles.items()
+        } if same_catalog else {}
+        firsts: dict[tuple[str, str, str, str], tuple[str, str, str]] = {}
+        owner: dict[tuple[str, str, str, str], str] = {}
+        for plan in plans:
+            rows = written.get((plan.service_id, plan.profile_id))
+            current = _by_host([(str(host), str(address)) for host, address in rows]) if rows else plan.hosts
+            for host, addresses in current.items():
+                first = next((address for address in addresses if _checked(plan, plan.hosts.get(host, addresses), address)), "")
+                if first:
+                    key = plan.key(host, first)
+                    firsts.setdefault(key, (first, host, plan.front_for(first)))
+                    owner.setdefault(key, plan.service_id)
+        light = _probe_all(firsts, probe)
+        troubled = {owner[key] for key, found in light.items() if found.verdict == DEAD}
+        if not troubled:
+            # Браузер получает живой адрес: менять нечего, искать незачем.
+            return None, EngineReport(checked=len(light), checked_at=before["checked_at"])
+        if not any(found.verdict in (ALIVE, UNKNOWN) for found in light.values()) and not network_ok():
+            return None, EngineReport(network=False, checked=len(light))
+        # Сигнал беды: полная проверка — только сервисам, у которых первый адрес не ответил.
+        for plan in plans:
+            if plan.service_id not in troubled:
+                kept = before["services"].get(plan.service_id, {}).get(plan.profile_id) if same_catalog else None
+                if kept:
+                    carried[(plan.service_id, plan.profile_id)] = [list(row) for row in kept]
+        plans = [plan for plan in plans if plan.service_id in troubled]
+        recheck = {plan.service_name for plan in plans}
+        why = Why.SIGNAL
+
     units: dict[tuple[str, str, str, str], tuple[str, str, str]] = {}
     for plan in plans:
         for host, addresses in plan.hosts.items():
             for address in addresses:
-                if _is_v6(address) and not ipv6:
-                    continue
-                if plan.passport is None:
-                    rivals = [other for other in addresses if _is_v6(other) == _is_v6(address)]
-                    if len(rivals) < 2 or (plan.profile_id != HOSTS_PROFILE_ID and address not in relay_set):
-                        continue
-                units.setdefault(plan.key(host, address), (address, host, plan.front_for(address)))
+                if _checked(plan, addresses, address):
+                    units.setdefault(plan.key(host, address), (address, host, plan.front_for(address)))
     verdicts = _probe_all(units, probe)
     # Есть ли интернет, спрашивается, только когда не ответил вообще никто: отдельная проверка
     # связи стоит секунды, а хоть один ответ (даже «соединился, но молчит») и так всё доказывает.
     if units and not any(found.verdict in (ALIVE, UNKNOWN) for found in verdicts.values()) and not network_ok():
         return None, EngineReport(network=False)
 
-    # Поиск адресов — сервисам с паспортом. Сверх каталога проверяются копилка прошлых находок
+    # Поиск адресов — сервисам с паспортом и только по поводу: человек ждёт или первый адрес
+    # не ответил (``may_search``). Сверх каталога проверяются копилка прошлых находок
     # и свежие ответы шифрованного DNS: IPv4 всегда, IPv6 — если он на этом компьютере есть.
     pool_before = before["pool"]
-    seekers = [(index, plan) for index, plan in enumerate(plans) if plan.passport is not None and plan.passport.fresh]
+    seekers = [
+        (index, plan)
+        for index, plan in enumerate(plans)
+        if may_search(why) and plan.passport is not None and plan.passport.fresh
+    ]
     asked = list(dict.fromkeys(host for _index, plan in seekers for host in plan.hosts))
 
     def _answers(host: str) -> list[str]:

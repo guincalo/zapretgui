@@ -928,6 +928,19 @@ def normalize_remote_presets(data: object) -> dict[str, Any]:
     return result
 
 
+def normalize_probe_gate(data: object) -> dict[str, Any]:
+    last_run: dict[str, float] = {}
+    for key, value in as_dict(as_dict(data).get("last_run")).items():
+        name = str(key or "").strip()
+        try:
+            when = float(value)
+        except (TypeError, ValueError):
+            continue
+        if name and when > 0:
+            last_run[name] = when
+    return {"last_run": last_run}
+
+
 def normalize_settings(data: object) -> dict[str, Any]:
     raw = as_dict(data)
     return {
@@ -949,4 +962,5 @@ def normalize_settings(data: object) -> dict[str, Any]:
         "folders": normalize_folders(raw.get("folders")),
         "profile_identity": normalize_profile_identity(raw.get("profile_identity")),
         "remote_presets": normalize_remote_presets(raw.get("remote_presets")),
+        "probe_gate": normalize_probe_gate(raw.get("probe_gate")),
     }

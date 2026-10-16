@@ -677,6 +677,19 @@ def set_updater_settings(values: dict[str, Any]) -> dict[str, Any]:
     return copy.deepcopy(updated["updater"])
 
 
+def get_probe_gate_last_run(kind: str) -> float:
+    """Когда была прошлая плановая проверка вида ``kind`` (utils.probe_gate); 0 — не было."""
+    value = _read_path_value(("probe_gate", "last_run"), {}) or {}
+    try:
+        return max(float(value.get(str(kind)) or 0.0), 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def set_probe_gate_last_run(kind: str, when: float) -> None:
+    _update_settings(lambda data: data["probe_gate"]["last_run"].__setitem__(str(kind), float(when)))
+
+
 def get_update_skipped_version() -> str:
     return _get_str(("updater", "skipped_version"), "")
 
@@ -2067,6 +2080,8 @@ __all__ = [
     "get_auto_install_state",
     "get_auto_update_enabled",
     "get_update_skipped_version",
+    "get_probe_gate_last_run",
+    "set_probe_gate_last_run",
     "get_whats_new_state",
     "get_background_preset",
     "get_discord_restart_enabled",

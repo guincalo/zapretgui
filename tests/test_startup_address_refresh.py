@@ -217,8 +217,10 @@ class HostsAppliedSelectionRefreshRunTests(unittest.TestCase):
 
 
 class StartupAddressRefreshInstallTests(unittest.TestCase):
-    def _run_install(self, module_name: str, install_name: str, feature_kwargs: dict) -> list[tuple[str, str]]:
+    def _run_install(self, module_name: str, install_name: str, feature_kwargs: dict, *, gate_allows: bool = True) -> list[tuple[str, str]]:
         import importlib
+
+        from utils import probe_gate
 
         module = importlib.import_module(module_name)
         queued: list[tuple[str, str, object]] = []
@@ -236,6 +238,13 @@ class StartupAddressRefreshInstallTests(unittest.TestCase):
             patch.object(module, "is_startup_host_alive", return_value=True),
             # Повтор по расписанию ставится таймером Qt: в тесте его нет, запоминаем только срок.
             patch.object(module, "schedule_after", side_effect=lambda delay, _cb: self.scheduled.append(delay), create=True),
+            # Шлюз проб: разрешает плановую проверку или нет (время прошлой — в настройках).
+            patch.object(
+                probe_gate,
+                "try_background",
+                side_effect=lambda kind: probe_gate.BackgroundPermit(kind, probe_gate.Why.SCHEDULE) if gate_allows else None,
+            ),
+            patch.object(probe_gate.BackgroundPermit, "release", lambda self: None),
         ):
             getattr(module, install_name)(_Host(), log_startup_metric=lambda *_args: None, **feature_kwargs)
             # Задача может поставить следующую: проверка адресов ставит запись в hosts.
@@ -251,9 +260,11 @@ class StartupAddressRefreshInstallTests(unittest.TestCase):
     def test_addresses_are_checked_in_a_waiting_queue_and_only_then_hosts_is_rewritten(self) -> None:
         calls: list[str] = []
 
+        from utils.probe_gate import Why
+
         class FakeHostsFeature:
-            def check_addresses(self):
-                calls.append("check")
+            def check_addresses(self, *, why):
+                calls.append(f"check:{why}")
 
             def refresh_applied_selection(self):
                 calls.append("refresh")
@@ -265,15 +276,34 @@ class StartupAddressRefreshInstallTests(unittest.TestCase):
         )
         # Проверка ждёт сеть — в своей очереди; запись файла — на общей дорожке, после проверки.
         self.assertEqual(queued, [("dns", "HostsAddressCheck"), ("hosts", "HostsAppliedSelectionRefresh")])
-        self.assertEqual(calls, ["check", "refresh"])
-        # И дальше раз в шесть часов, пока программа открыта.
-        self.assertEqual(self.scheduled, [6 * 3600 * 1000])
+        self.assertEqual(calls, [f"check:{Why.SCHEDULE}", "refresh"])
+        # Дальше раз в час спрашиваем шлюз проб; сам интервал (6 ч) решает он.
+        self.assertEqual(self.scheduled, [3600 * 1000])
+
+    def test_gate_refusal_skips_the_address_check_but_not_the_hosts_refresh(self) -> None:
+        # Перезапуск через час после прошлой проверки: шлюз не пускает — ни одной пробы.
+        calls: list[str] = []
+
+        class FakeHostsFeature:
+            def check_addresses(self, *, why):
+                calls.append("check")
+
+            def refresh_applied_selection(self):
+                calls.append("refresh")
+
+        self._run_install(
+            "main.post_startup_hosts_refresh",
+            "install_hosts_applied_selection_refresh",
+            {"hosts_feature": FakeHostsFeature()},
+            gate_allows=False,
+        )
+        self.assertEqual(calls, ["refresh"])
 
     def test_failed_address_check_does_not_cancel_the_hosts_refresh(self) -> None:
         calls: list[str] = []
 
         class FakeHostsFeature:
-            def check_addresses(self):
+            def check_addresses(self, *, why):
                 raise OSError("нет сети")
 
             def refresh_applied_selection(self):

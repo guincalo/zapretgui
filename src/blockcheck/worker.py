@@ -77,6 +77,10 @@ class BlockcheckWorker(QObject):
         from core.runtime.long_tasks import begin_long_task, end_long_task
 
         long_task = begin_long_task("blockcheck")
+        # Пропуск шлюза проб: пока идёт проверка, фоновые проверки сети ждут.
+        from utils.probe_gate import begin_user_run, end_user_run
+
+        probe_run = begin_user_run("blockcheck")
         try:
             from diagnostics.engine import run_blockcheck
 
@@ -105,6 +109,7 @@ class BlockcheckWorker(QObject):
             report = {"failed": True, "error": str(e)}
         finally:
             end_long_task(long_task)
+            end_user_run(probe_run)
             self._running = False
         self.finished.emit(report)
 

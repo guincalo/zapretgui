@@ -23,11 +23,15 @@ class DNSCheckWorker(QObject):
         return self._stop_requested
 
     def run(self):
+        from utils.probe_gate import user_run
+
         try:
-            results = self._run_dns_poisoning_check(
-                log_callback=self.update_signal.emit,
-                should_stop=self.is_stop_requested,
-            )
+            # Пропуск шлюза проб: пока идёт проверка по кнопке, фоновые проверки сети ждут.
+            with user_run("dns_check"):
+                results = self._run_dns_poisoning_check(
+                    log_callback=self.update_signal.emit,
+                    should_stop=self.is_stop_requested,
+                )
             self.finished_signal.emit(self._request_id, results)
         except Exception as e:
             if not self._stop_requested:

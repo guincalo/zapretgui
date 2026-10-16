@@ -90,8 +90,8 @@ class HostsFileManagerTests(unittest.TestCase):
 
         asked: list[tuple] = []
 
-        def check(selection, *, strict, recheck):
-            asked.append((selection, strict, sorted(recheck)))
+        def check(selection, *, why, recheck):
+            asked.append((selection, why, sorted(recheck)))
             return report
 
         with (
@@ -107,7 +107,9 @@ class HostsFileManagerTests(unittest.TestCase):
             refresh.assert_called_once()
 
         # Проверяется сохранённый выбор и только названные сервисы; мёртвый адрес убирается сразу.
-        self.assertEqual(asked[0], (None, True, ["YouTube"]))
+        from utils.probe_gate import Why
+
+        self.assertEqual(asked[0], (None, Why.USER, ["YouTube"]))
         self.assertEqual((same.changed, same.message), (False, ""))
         self.assertEqual((better.changed, better.message), (True, "Неработающие адреса убраны: YouTube."))
 

@@ -16,6 +16,7 @@ from hosts import address_probe as probe_module
 from hosts.address_probe import ALIVE, DEAD, UNKNOWN, Probe
 from hosts.catalog_overlay import apply_overlay, clean_overlay
 from hosts.catalog_repository import HOSTS_PROFILE_ID, HostsCatalog
+from utils.probe_gate import Why
 
 SHA = "catalog-sha"
 
@@ -70,7 +71,7 @@ YOUTUBE_EVEN = _catalog(
 )
 
 
-def _check(catalog, selection, verdicts, *, fresh=None, previous=None, ipv6=True, strict=True, network=True, recheck=None, relays=(), sweep=None):
+def _check(catalog, selection, verdicts, *, fresh=None, previous=None, ipv6=True, strict=True, network=True, recheck=None, relays=(), sweep=None, why=None):
     asked: list[tuple[str, str, str]] = []
     resolved: list[str] = []
 
@@ -86,7 +87,7 @@ def _check(catalog, selection, verdicts, *, fresh=None, previous=None, ipv6=True
         resolve=lambda host, want_v6: resolved.append(host) or list((fresh or {}).get(host, ())),
         network_ok=lambda: network,
         ipv6=ipv6,
-        strict=strict,
+        why=why if why is not None else (Why.USER if strict else Why.SIGNAL),
         recheck=recheck,
         relays=relays,
         sweep=sweep,
@@ -249,7 +250,7 @@ class EngineTests(unittest.TestCase):
             resolve=lambda host, want_v6: resolved.append(host) or ["162.159.138.232"],
             network_ok=lambda: True,
             ipv6=False,
-            strict=True,
+            why=Why.USER,
         )
 
         self.assertEqual(resolved, [])
@@ -466,7 +467,7 @@ class EngineTests(unittest.TestCase):
             resolve=lambda host, want_v6: [],
             network_ok=lambda: True,
             ipv6=False,
-            strict=True,
+            why=Why.USER,
         )
 
         self.assertLessEqual(peak, engine.MAX_PER_ADDRESS)
@@ -501,7 +502,7 @@ class EngineTests(unittest.TestCase):
                 resolve=lambda host, want_v6: [],
                 network_ok=network_ok,
                 ipv6=False,
-                strict=True,
+                why=Why.USER,
             )
 
         run({"1.1.1.2": Probe(UNKNOWN)})
@@ -647,6 +648,42 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(_rows(overlay), _rows(first))
 
 
+class ScheduledCheckTests(unittest.TestCase):
+    """Плановая проверка без повода трогает только то, чем пользуется браузер (utils.probe_gate)."""
+
+    def test_living_first_addresses_end_the_check_without_any_search(self) -> None:
+        swept: list[list[str]] = []
+        verdicts = {"1.1.1.1": Probe(ALIVE, 10.0), "1.1.1.2": Probe(ALIVE, 5.0), "1.1.1.3": Probe(ALIVE, 5.0)}
+
+        overlay, report, asked = _check(
+            YOUTUBE_EVEN,
+            {"YouTube": HOSTS_PROFILE_ID},
+            verdicts,
+            fresh={"www.youtube.com": ["9.9.9.9"]},
+            sweep=lambda addresses: swept.append(addresses) or {},
+            why=Why.SCHEDULE,
+        )
+
+        # По одному соединению на первый адрес; ни DNS, ни соседей, ни замены более быстрым.
+        self.assertIsNone(overlay)
+        self.assertEqual({address for address, _host, _front in asked}, {"1.1.1.1"})
+        self.assertEqual(_check.resolved, [])
+        self.assertEqual(swept, [])
+        self.assertFalse(report.changed)
+
+    def test_dead_first_address_is_a_signal_for_a_full_check_with_search(self) -> None:
+        verdicts = {"1.1.1.1": Probe(DEAD), "1.1.1.2": Probe(ALIVE, 10.0), "1.1.1.3": Probe(ALIVE, 20.0)}
+
+        overlay, report, asked = _check(
+            YOUTUBE_EVEN, {"YouTube": HOSTS_PROFILE_ID}, verdicts, fresh={"www.youtube.com": []}, why=Why.SCHEDULE
+        )
+
+        self.assertIsNotNone(overlay)
+        self.assertIn("1.1.1.2", {address for address, _host, _front in asked})
+        self.assertIn("www.youtube.com", _check.resolved)
+        self.assertEqual(_rows(overlay)[0], ("www.youtube.com", "1.1.1.2"))
+
+
 class CommandTests(unittest.TestCase):
     """Команда проверки: сеть подменена, набор адресов лежит в словаре вместо настроек."""
 
@@ -684,7 +721,7 @@ class CommandTests(unittest.TestCase):
     def test_check_saves_the_overlay_and_reports_in_plain_words(self) -> None:
         self.probes = {"1.1.1.1": Probe(DEAD), "1.1.1.2": Probe(ALIVE, 10.0), "1.1.1.3": Probe(ALIVE, 20.0)}
 
-        report = self.commands.check_addresses({"YouTube": HOSTS_PROFILE_ID, "Discord": "off"}, strict=True)
+        report = self.commands.check_addresses({"YouTube": HOSTS_PROFILE_ID, "Discord": "off"}, why=Why.USER)
 
         self.assertEqual(
             self.stored["services"]["hosts.youtube"][HOSTS_PROFILE_ID],
@@ -694,23 +731,23 @@ class CommandTests(unittest.TestCase):
 
     def test_living_address_is_not_probed_again_for_a_while_but_a_dead_one_is(self) -> None:
         self.probes = {"1.1.1.1": Probe(DEAD), "1.1.1.2": Probe(ALIVE, 10.0), "1.1.1.3": Probe(ALIVE, 20.0)}
-        self.commands.check_addresses(None)
+        self.commands.check_addresses(None, why=Why.SIGNAL)
         self.asked.clear()
 
-        self.commands.check_addresses(None)
+        self.commands.check_addresses(None, why=Why.SIGNAL)
 
         self.assertEqual(self.asked, ["1.1.1.1"])
 
     def test_background_change_is_rolled_back_when_hosts_could_not_be_rewritten(self) -> None:
         """Страница узнаёт включённый сервис по адресам в файле: набор не должен уйти вперёд файла."""
         self.probes = {"1.1.1.1": Probe(ALIVE, 10.0)}
-        self.commands.check_addresses(None)
+        self.commands.check_addresses(None, why=Why.SIGNAL)
         self.commands._settle_overlay_after_refresh(write_failed=False)
         written = self.stored
 
         self.probes = {"1.1.1.1": Probe(UNKNOWN), "1.1.1.2": Probe(ALIVE, 10.0)}
         self.commands._PROBE_CACHE.clear()
-        self.commands.check_addresses(None)
+        self.commands.check_addresses(None, why=Why.SIGNAL)
         self.assertNotEqual(self.stored["services"], written["services"])
 
         self.commands._settle_overlay_after_refresh(write_failed=True)

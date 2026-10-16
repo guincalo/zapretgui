@@ -34,11 +34,15 @@ class ServerCheckWorker(QThread):
         return self._stop_requested
 
     def run(self) -> None:
+        from utils.probe_gate import user_run
+
         try:
-            report = self._run_server_check(
-                on_progress=lambda partial: self.stage.emit(self._request_id, partial),
-                should_stop=self.is_stop_requested,
-            )
+            # Пропуск шлюза проб: пока идёт проверка по кнопке, фоновые проверки сети ждут.
+            with user_run("dns_servers"):
+                report = self._run_server_check(
+                    on_progress=lambda partial: self.stage.emit(self._request_id, partial),
+                    should_stop=self.is_stop_requested,
+                )
         except Exception as exc:
             log(f"ServerCheckWorker: ошибка проверки DNS-серверов: {exc}", "ERROR")
             self.failed.emit(self._request_id, str(exc))

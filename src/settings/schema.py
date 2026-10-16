@@ -309,6 +309,12 @@ def default_profile_identity() -> dict[str, Any]:
     }
 
 
+def default_probe_gate() -> dict[str, Any]:
+    # Шлюз проб (utils.probe_gate): когда была прошлая плановая проверка каждого вида,
+    # {"<вид>": время UNIX}. Перезапуск программы по нему не повторяет проверку.
+    return {"last_run": {}}
+
+
 def default_remote_presets() -> dict[str, Any]:
     return {
         "winws2": {},
@@ -336,4 +342,5 @@ def build_default_settings() -> dict[str, Any]:
         "folders": default_folders(),
         "profile_identity": default_profile_identity(),
         "remote_presets": default_remote_presets(),
+        "probe_gate": default_probe_gate(),
     }

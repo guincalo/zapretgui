@@ -61,20 +61,21 @@ def _fresh_addresses(host: str, want_ipv6: bool) -> list[str]:
     return found
 
 
-def check_addresses(selection: dict[str, str] | None = None, *, strict: bool = False, recheck=None):
+def check_addresses(selection: dict[str, str] | None = None, *, why, recheck=None):
     """Умный движок: проверяет адреса включённых сервисов и запоминает рабочие (hosts.address_engine).
 
-    ``selection`` — выбор «сервис → профиль»; None — сохранённый выбор. ``strict`` — человек
-    только что переключил сервис: мёртвый адрес убирается сразу, без второй проверки.
+    ``selection`` — выбор «сервис → профиль»; None — сохранённый выбор. ``why`` — повод
+    (``utils.probe_gate.Why``): ``USER`` — человек только что переключил сервис, мёртвый адрес
+    убирается сразу; ``SCHEDULE`` — плановая проверка, только первые адреса, поиск лишь при беде.
     ``recheck`` — названия сервисов, которые проверить сейчас (None — все включённые).
     Сам файл hosts здесь не меняется: его переписывает refresh_applied_selection, если
     проверенные адреса отличаются от записанных.
     """
     with _CHECK_LOCK:
-        return _check_addresses(selection, strict=strict, recheck=recheck)
+        return _check_addresses(selection, why=why, recheck=recheck)
 
 
-def _check_addresses(selection: dict[str, str] | None, *, strict: bool, recheck):
+def _check_addresses(selection: dict[str, str] | None, *, why, recheck):
     global _OVERLAY_BEFORE_REFRESH
     import time
 
@@ -115,7 +116,7 @@ def _check_addresses(selection: dict[str, str] | None, *, strict: bool, recheck)
         resolve=_fresh_addresses,
         network_ok=internet_reachable,
         ipv6=bool(is_ipv6_available()),
-        strict=strict,
+        why=why,
         recheck=recheck,
         sweep=sweep,
     )
@@ -236,7 +237,9 @@ def recheck_applied(names) -> HostsCommandResult:
     блок в hosts переписывается. ``message`` — что сказать человеку (пусто — нечего),
     ``changed`` — переписан ли файл.
     """
-    report = check_addresses(None, strict=True, recheck=set(names or ()))
+    from utils.probe_gate import Why
+
+    report = check_addresses(None, why=Why.USER, recheck=set(names or ()))
     changed = bool(report.changed) and bool(refresh_applied_selection().changed)
     note = describe_address_check(report) if changed or report.silent else ""
     return HostsCommandResult(success=True, message=note, changed=changed)

@@ -90,6 +90,10 @@ class StrategyScanWorker(QObject):
         from core.runtime.long_tasks import begin_long_task, end_long_task
 
         long_task = begin_long_task("strategy_scan")
+        # Пропуск шлюза проб: пока идёт подбор, фоновые проверки сети ждут.
+        from utils.probe_gate import begin_user_run, end_user_run
+
+        probe_run = begin_user_run("strategy_scan")
         try:
             self._start_run_log()
             probe_host = self._resolve_probe_host()
@@ -123,6 +127,7 @@ class StrategyScanWorker(QObject):
             except Exception:
                 pass
             end_long_task(long_task)
+            end_user_run(probe_run)
             self._running = False
         self.scan_finished.emit(report)
         self.finished.emit(report)

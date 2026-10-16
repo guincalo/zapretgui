@@ -4,9 +4,9 @@ from log.log import log
 from main.post_startup_gate import bind_startup_gate, is_startup_host_alive
 from main.post_startup_threading import enqueue_subsystem_task, schedule_after
 
-# Адреса включённых сервисов перепроверяются, пока программа открыта: она живёт в трее сутками,
-# а адрес может перестать отвечать в любой день.
-HOSTS_ADDRESS_CHECK_INTERVAL_MS = 6 * 3600 * 1000
+# Как часто спрашивать шлюз проб, не пора ли проверить адреса. Сам интервал проверки
+# (раз в шесть часов, и через перезапуск тоже) решает шлюз: utils.probe_gate.HOSTS_ADDRESSES.
+HOSTS_ADDRESS_CHECK_TICK_MS = 3600 * 1000
 
 
 def install_hosts_applied_selection_refresh(
@@ -15,13 +15,15 @@ def install_hosts_applied_selection_refresh(
     hosts_feature=None,
     log_startup_metric,
 ) -> None:
-    """Сразу после запуска (и дальше раз в шесть часов) обновляет адреса в блоке ZapretGUI в hosts.
+    """После запуска сверяет блок ZapretGUI в hosts и плановым порядком проверяет адреса.
 
-    Два шага. Сначала умный движок проверяет адреса включённых сервисов — это
-    ожидание сети, поэтому оно идёт в своей очереди и остальным задачам запуска
-    не мешает. Затем блок в hosts переписывается, если проверенные адреса или
-    новый каталог отличаются от записанного: пользователю не нужно заново
-    нажимать «применить».
+    Два шага. Сначала умный движок проверяет адреса включённых сервисов — если
+    шлюз проб разрешает (``utils.probe_gate``: не чаще раза в шесть часов, даже
+    через перезапуск; не во время проверки по кнопке). Плановая проверка трогает
+    только первые адреса, поиск замены — лишь при беде. Это ожидание сети, поэтому
+    оно идёт в своей очереди и остальным задачам запуска не мешает. Затем блок в
+    hosts переписывается, если проверенные адреса или новый каталог отличаются от
+    записанного: пользователю не нужно заново нажимать «применить».
     """
 
     def _run_hosts_applied_selection_refresh() -> None:
@@ -47,9 +49,16 @@ def install_hosts_applied_selection_refresh(
         )
 
     def _run_hosts_address_check() -> None:
+        from utils.probe_gate import HOSTS_ADDRESSES, Why, try_background
+
         try:
             if is_startup_host_alive(startup_host) and hosts_feature is not None:
-                report = hosts_feature.check_addresses()
+                permit = try_background(HOSTS_ADDRESSES)
+                if permit is None:
+                    log_startup_metric("StartupHostsAddressCheckSkipped", "шлюз проб: ещё рано или идёт проверка по кнопке")
+                    return
+                with permit:
+                    report = hosts_feature.check_addresses(why=Why.SCHEDULE)
                 log_startup_metric(
                     "StartupHostsAddressCheckFinished",
                     f"checked={getattr(report, 'checked', 0)} changed={bool(getattr(report, 'changed', False))}",
@@ -69,11 +78,11 @@ def install_hosts_applied_selection_refresh(
         if not is_startup_host_alive(startup_host):
             return
         _start_hosts_applied_selection_refresh()
-        schedule_after(HOSTS_ADDRESS_CHECK_INTERVAL_MS, _on_periodic_tick)
+        schedule_after(HOSTS_ADDRESS_CHECK_TICK_MS, _on_periodic_tick)
 
     def _start_and_schedule() -> None:
         _start_hosts_applied_selection_refresh()
-        schedule_after(HOSTS_ADDRESS_CHECK_INTERVAL_MS, _on_periodic_tick)
+        schedule_after(HOSTS_ADDRESS_CHECK_TICK_MS, _on_periodic_tick)
 
     bind_startup_gate(
         startup_host.startup_interactive_ready,
