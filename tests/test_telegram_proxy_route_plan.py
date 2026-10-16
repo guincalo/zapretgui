@@ -91,14 +91,22 @@ class RoutePlanTests(unittest.TestCase):
                 self.assertEqual(kinds(plan), [KIND_RELAY, KIND_FRONT, KIND_FRONT, KIND_FRONT, *TUNNELS, KIND_DIRECT])
                 self.assertEqual((plan[0].connect_host, plan[0].sni), (address, f"kws{dc}.web.telegram.org"))
 
-    def test_dc203_uses_only_tunnel_before_fallbacks(self) -> None:
+    def test_dc203_goes_through_fronts_then_tunnel_and_never_direct(self) -> None:
         plan = build_plan(PlanInput(dc=203, is_media=False, target_host="91.105.192.100", upstream=PRESET), self.health)
-        self.assertEqual(kinds(plan), [*TUNNELS, KIND_UPSTREAM])
-        self.assertLessEqual({route.sni for route in plan[:-1]}, set(TUNNEL_HOSTS))
+        self.assertEqual(kinds(plan), [KIND_FRONT, KIND_FRONT, KIND_FRONT, *TUNNELS, KIND_UPSTREAM])
+        self.assertTrue(plan[0].sni.startswith("kws203.") and plan[0].sni.endswith(".co.uk"))
+        self.assertLessEqual({route.sni for route in plan[3:-1]}, set(TUNNEL_HOSTS))
+        # Без внешнего SOCKS и со всем WSS на паузе — снова фронты, а не только прямой TCP.
+        self._suppress(cdn_key(203))
+        for host in TUNNEL_HOSTS:
+            self._suppress(host)
+        plan = build_plan(PlanInput(dc=203, is_media=False, target_host="91.105.192.100"), self.health)
+        self.assertEqual(kinds(plan), [KIND_FRONT, KIND_FRONT, KIND_FRONT, KIND_DIRECT])
 
     def test_tunnels_are_tried_in_a_circle_from_this_install_start(self) -> None:
         hosts = ("a.workers.dev", "b.workers.dev", "c.workers.dev", "d.workers.dev")
         health = RouteHealth(clock=self.clock, tunnel_start=2 + 4 * 10)
+        self.assertTrue(health.note_failure(cdn_key(203), threshold=1))
         request = PlanInput(dc=203, is_media=False, target_host="91.105.192.100", upstream=PRESET)
         with patch.object(routes_module, "TUNNEL_HOSTS", hosts):
             plan = build_plan(request, health)
@@ -111,7 +119,7 @@ class RoutePlanTests(unittest.TestCase):
             plan = build_plan(request, health)
             self.assertEqual([route.sni for route in plan[:-1]], ["d.workers.dev", "a.workers.dev", "b.workers.dev"])
 
-    def test_every_tunnel_suppressed_leaves_dc203_on_socks(self) -> None:
+    def test_every_tunnel_suppressed_leaves_dc203_on_fronts(self) -> None:
         hosts = ("a.workers.dev", "b.workers.dev")
         with patch.object(routes_module, "TUNNEL_HOSTS", hosts):
             for host in hosts:
@@ -119,7 +127,8 @@ class RoutePlanTests(unittest.TestCase):
             plan = build_plan(
                 PlanInput(dc=203, is_media=False, target_host="91.105.192.100", upstream=PRESET), self.health
             )
-        self.assertEqual(kinds(plan), [KIND_UPSTREAM])
+        # Воркеры исчерпали суточный лимит — DC203 всё равно идёт через фронты.
+        self.assertEqual(kinds(plan), [KIND_FRONT, KIND_FRONT, KIND_FRONT, KIND_UPSTREAM])
 
     def test_manual_always_server_takes_all_traffic(self) -> None:
         manual = UpstreamProxyConfig(enabled=True, host="5.6.7.8", port=1080, mode="always")

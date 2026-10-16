@@ -8,7 +8,7 @@
 2. свой домен Cloudflare и свой Worker из настроек, если они заданы;
 3. фронты Cloudflare из CDN_FRONTS с курсором и запомненным рабочим адресом;
 4. туннель через воркеры из TUNNEL_HOSTS по кругу, начиная со своего для
-   каждой установки (для DC203 это единственная WSS-ступень);
+   каждой установки;
 5. внешний SOCKS5 (выбранный сервер страны) — запасной путь;
 6. прямой TCP — только когда внешнего SOCKS нет.
 
@@ -335,9 +335,6 @@ def _build_plan(request: PlanInput, health: RouteHealth) -> list[Route]:
         plan.extend(_user_domain_routes(dc, request.cloudflare, health))
         plan.extend(_user_worker_routes(dc, target_ip, request.cloudflare, health))
         plan.extend(_front_routes(dc, health))
-        plan.extend(_tunnel_routes(dc, target_ip, health))
-    elif dc == 203:
-        plan.extend(_user_worker_routes(dc, target_ip, request.cloudflare, health))
         plan.extend(_tunnel_routes(dc, target_ip, health))
 
     all_wss_suppressed = not plan and dc in CDN_FRONT_DCS

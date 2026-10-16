@@ -345,6 +345,8 @@ class SessionScenarioTests(unittest.IsolatedAsyncioTestCase):
         self.quota_hosts = {"a.workers.dev"}
         proxy = await self._start(mode="socks5")
         proxy.route_health.tunnel_start = 0
+        # Фронты DC203 на паузе: проверяется именно перебор воркеров.
+        proxy.route_health.note_failure("cdn-kws203", threshold=1)
 
         for _ in range(2):
             reader, writer = await self._socks5_connect("91.105.192.100", 443)

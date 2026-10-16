@@ -82,8 +82,11 @@ CDN_FRONTS: tuple[CdnFront, ...] = (
     CdnFront("nothingthere.co.uk", ("104.21.78.5", "172.67.214.67")),
 )
 
-# Фронты обслуживают только основные DC; у DC203 своего kws нет.
-CDN_FRONT_DCS: tuple[int, ...] = (1, 2, 3, 4, 5)
+# Фронты несут DC1–DC5 и DC203: у DC203 (медиа без Premium) нет веб-релея
+# Telegram, но kws203.<домен фронта> 16.10.2026 ответил настоящим resPQ на всех
+# проверенных фронтах. Пока DC203 ходил только через воркеры, исчерпанный
+# суточный лимит Cloudflare оставлял его без пути (ZaStoGram, тот же день).
+CDN_FRONT_DCS: tuple[int, ...] = (1, 2, 3, 4, 5, 203)
 
 # Туннель через воркер Cloudflare (zastogram-ws-worker/worker.js):
 # wss://<host>/apiws?dst=<IPv4 DC>, дальше воркер идёт на DC обычным TCP.
