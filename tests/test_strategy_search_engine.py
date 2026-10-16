@@ -458,6 +458,20 @@ class StrategyVerdictTests(unittest.TestCase):
         self.assertEqual(events.results[0].verdict, rules.VERDICT_WORKING)
         self.assertGreater(env.slept, 0)
 
+    def test_failure_on_a_network_that_drops_twice_is_not_remembered(self) -> None:
+        # Сеть пропала на этой стратегии дважды: провал ничего о ней не говорит,
+        # в историю провалов на 14 дней она не идёт.
+        env = FakeEnv(
+            network=lambda running, n: TIMEOUT,
+            candidates=[cand("a")],
+            control=[True, False, True, False, True],
+        )
+        _report, events = run(env)
+
+        self.assertEqual(len(events.results), 1)
+        self.assertFalse(events.results[0].success)
+        self.assertEqual([save for save in env.history_saves if "a" in save[2]], [])
+
     def test_network_that_never_returns_stops_the_scan(self) -> None:
         env = FakeEnv(
             network=lambda running, n: TIMEOUT,
@@ -533,6 +547,24 @@ class StageEventTests(unittest.TestCase):
 
         self.assertEqual(report.stop_kind, "address_block")
         self.assertIn(("baseline", "failed"), events.stages)
+
+    def test_stop_during_baseline_is_a_stop_not_a_diagnosis(self) -> None:
+        # «Стоп» оборвал пробы «без обхода»: их «не отвечает» — отмена, а не
+        # «провайдер блокирует адрес целиком».
+        events = FakeEvents()
+        stop = {"now": False}
+        events.is_cancelled = lambda: stop["now"]
+
+        def network(running, _number):
+            stop["now"] = True
+            return NO_CONNECT
+
+        env = FakeEnv(network=network, candidates=[cand("a")], port80_open=True, http=lambda r, n: NO_CONNECT)
+        report, _events = run(env, events)
+
+        self.assertTrue(report.cancelled)
+        self.assertEqual(report.fatal_error, "")
+        self.assertEqual(report.stop_kind, "")
 
     def test_no_internet_kind(self) -> None:
         env = FakeEnv(network=lambda running, n: RESET, candidates=[cand("a")], control=[False])
@@ -1036,6 +1068,20 @@ class HttpOnlySiteTests(unittest.TestCase):
 
 class QuicSearchTests(unittest.TestCase):
     """Сайт по TCP открыт, а QUIC режут по имени — подбор сам идёт для QUIC."""
+
+    def test_one_lost_quic_packet_after_success_is_forgiven(self) -> None:
+        # У QUIC провал — всегда тишина: одна потеря после первого успеха
+        # не делает рабочую стратегию «нестабильной».
+        def quic(running, number):
+            if running != "qfake":
+                return TIMEOUT
+            return TIMEOUT if number == 1 else OK
+
+        env = FakeEnv(network=lambda running, n: OK, candidates=[cand("tls")], quic_cut_by_name=True, quic=quic)
+        env.load_candidates = lambda protocol: [cand("qfake")] if protocol == "udp_quic" else [cand("tls")]
+        _report, events = run(env, target="www.youtube.com")
+
+        self.assertEqual(events.results[0].verdict, rules.VERDICT_WORKING)
 
     def test_quic_cut_by_name_is_searched_without_a_question(self) -> None:
         env = FakeEnv(

@@ -9,7 +9,8 @@
    - закрыта так, как закрывает DPI, — подбираем на этих же адресах
      (два IPv4 из разных подсетей и один IPv6);
    - ответила, но коротко — набираем объём по одному соединению: замерла
-     на 16–20 КБ — это обрыв по объёму, и каждую стратегию судим объёмом;
+     в окне обрыва (``diagnostics.limits.FREEZE_*_BYTES``) — это обрыв по
+     объёму, и каждую стратегию судим объёмом;
    - открыта — проверяем ещё раз и спрашиваем пользователя, есть ли смысл;
    - закрыта раньше шифрования (сервер не принимает подключение) —
      стратегии обхода DPI это не чинят, останавливаемся с объяснением.
@@ -399,7 +400,9 @@ class StrategySearch:
                         break
                 else:
                     failed.append(result)
-                    if run.verdict == rules.VERDICT_FAILED or run.repeatable_crash:
+                    # Провал при пропавшей сети ничего не говорит о стратегии:
+                    # в историю на 14 дней он не идёт.
+                    if (run.verdict == rules.VERDICT_FAILED and not run.network_lost) or run.repeatable_crash:
                         failed_ids.append(candidate.strategy_id)
                 if run.verdict in (rules.VERDICT_WORKING, rules.VERDICT_UNSTABLE) and not self._target.forced:
                     batch = self._bring_siblings(candidate, ordered, batch, queue, seen)
@@ -413,6 +416,10 @@ class StrategySearch:
                 self._stage(STEP_STRATEGIES, "done", f"Проверено стратегий: {index}")
             return self._finish(report, working, failed, started, cancelled=self.cancelled)
         except ScanFatal as fatal:
+            if self.cancelled:
+                # «Стоп» оборвал пробу на полпути: её «не отвечает» — это отмена,
+                # а не «нет интернета» или «адрес закрыт целиком».
+                return self._finish(report, working, failed, started, cancelled=True)
             report.fatal_error = str(fatal)
             report.stop_kind = fatal.kind
             if self._running_step:
@@ -579,7 +586,7 @@ class StrategySearch:
         """«Открыто без обхода» проверяется объёмом и второй пробой.
 
         Короткая главная страница проходит и там, где фильтр режет соединение
-        после 16–20 КБ, — видео и файлы при этом не грузятся. А фильтр, который
+        в окне ``FREEZE_*_BYTES``, — видео и файлы при этом не грузятся. А фильтр, который
         пропускает через раз, мог случайно пропустить первую пробу.
         """
         checked = [
@@ -832,8 +839,15 @@ class StrategySearch:
             outcomes = self._env.probe_quic(self._target.host, self._target.addresses)
             passed = rules.attempt_passed(outcomes)
             # Молчание UDP не отличить от пропавшей сети: провал сверяется с
-            # обычными сайтами; повтор уже был внутри пробы.
-            return _Attempt(passed, rules.attempt_reason(outcomes), rules.attempt_time_ms(outcomes), not passed)
+            # обычными сайтами; повтор уже был внутри пробы. У QUIC провал —
+            # всегда тишина: одна потеря не считается следом DPI.
+            return _Attempt(
+                passed,
+                rules.attempt_reason(outcomes),
+                rules.attempt_time_ms(outcomes),
+                not passed,
+                silent=not passed,
+            )
         if self._protocol == PROTOCOL_HTTP80:
             outcomes = self._env.probe_http(self._target.host, self._target.addresses)
             passed = rules.attempt_passed(outcomes)
@@ -875,8 +889,9 @@ class StrategySearch:
             "" if passed else rules.attempt_reason(outcomes),
             min(ok_times) if ok_times else rules.attempt_time_ms(outcomes),
             # UDP-молчание не отличить от пропавшей сети: провал всегда
-            # сверяется с обычными сайтами.
+            # сверяется с обычными сайтами и считается тишиной, а не следом DPI.
             not passed,
+            silent=not passed,
         )
 
     def _test_strategy(self, candidate: Candidate, *, confirm: bool = True) -> _StrategyRun:
@@ -898,7 +913,7 @@ class StrategySearch:
                 crash_reason = self._crash_text(start)
                 self._events.log(f"  winws2 не запустился: {crash_reason}")
                 session.stop()
-                if crash_reason and crash_reason == previous_crash:
+                if crash_reason and crash_reason == previous_crash and not getattr(start, "not_ready", False):
                     # Второй раз то же самое: перезапуски не помогут, стратегию запомним.
                     return _StrategyRun(rules.VERDICT_CRASH, [], crash_reason, repeatable_crash=True)
                 previous_crash = crash_reason

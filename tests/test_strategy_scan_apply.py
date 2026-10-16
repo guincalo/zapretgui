@@ -336,6 +336,33 @@ class StrategyScanApplyTests(unittest.TestCase):
         self.assertNotIn("--out-range=-d8", feature.saved_text)
         self.assertIn(TLS_GOOGLE_BLOB_LINE, feature.saved_text)
 
+    def test_full_flow_strategy_is_written_with_the_filter_it_was_tested_with(self) -> None:
+        # tlsrec ведёт всё соединение: проверяли её с --in-range=a --out-range=a
+        # --payload=all. Прежний -d10 profile-а её бы сломал.
+        feature = _PresetFeature(
+            "\n".join(
+                [
+                    "--new",
+                    "--filter-tcp=443",
+                    "--hostlist-domains=www.youtube.com",
+                    "--out-range=-d10",
+                    "--lua-desync=pass",
+                    "",
+                ]
+            )
+        )
+
+        with TemporaryDirectory() as temp_dir:
+            result = _apply(feature, temp_dir, strategy_args="--lua-desync=tlsrec:pos=sniext+1")
+
+        self.assertEqual(result.operation, "updated")
+        self.assertIn(
+            "--in-range=a\n--out-range=a\n--payload=all\n--lua-desync=tlsrec:pos=sniext+1\n",
+            feature.saved_text,
+        )
+        self.assertNotIn("--out-range=-d10", feature.saved_text)
+        self.assertIn("--wf-tcp-in=443", feature.saved_text)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -28,8 +28,11 @@ from dataclasses import dataclass
 logger = logging.getLogger(__name__)
 
 READY_MARKER = "windivert initialized"
-# Сколько ждать строки готовности.
-READY_TIMEOUT = 3.0
+# Сколько ждать строки готовности. winws2 печатает её всегда; если её долго
+# нет, драйвер перехвата ещё грузится (антивирус проверяет его) — проба,
+# пущенная раньше, ушла бы мимо стратегии и «провалила» рабочую. Срок тот же,
+# что у обычного запуска Zapret (``winws_runtime.engine.startup``).
+READY_TIMEOUT = 15.0
 # Сколько ещё подождать после неё, пока загрузится Lua стратегии.
 LUA_SETTLE_SECONDS = 0.2
 # Если строка готовности не пришла: сколько процесс должен прожить.
@@ -43,6 +46,9 @@ class SessionStart:
     ready_ms: float = 0.0
     exit_code: int | None = None
     output_tail: str = ""
+    # Процесс жив, но так и не сообщил о готовности перехвата: это беда
+    # запуска, а не стратегии — в историю провалов не идёт.
+    not_ready: bool = False
 
 
 class WinwsSession:
@@ -108,6 +114,13 @@ class WinwsSession:
         if exit_code is not None:
             self._join_reader()
             return SessionStart(False, exit_code=exit_code, output_tail=self.output_tail())
+        if not self._ready.is_set() and self._reader.is_alive():
+            # Вывод открыт, а готовности так и нет: перехват не начался.
+            return SessionStart(
+                False,
+                output_tail=self.output_tail() or f"winws2 не сообщил о готовности за {READY_TIMEOUT:g} с",
+                not_ready=True,
+            )
         if not self._ready.is_set():
             # Строки готовности нет, но процесс жив: подождать и перепроверить.
             remaining = FALLBACK_ALIVE_SECONDS - (self._clock() - started)

@@ -92,6 +92,31 @@ class WinwsSessionTests(unittest.TestCase):
         self.assertEqual(start.exit_code, None)
         session.stop()
 
+    def test_engine_that_never_gets_ready_is_not_reported_as_started(self) -> None:
+        # Вывод открыт, строки готовности нет: перехват не начался. Проба,
+        # пущенная сейчас, ушла бы мимо стратегии и «провалила» рабочую.
+        process = FakeProcess([b"github version v1.0.3\n"])
+        now = {"t": 0.0}
+
+        def sleep(seconds: float) -> None:
+            now["t"] += seconds
+
+        session = WinwsSession(
+            ["winws2.exe", "@cfg"],
+            cwd=".",
+            popen=lambda *a, **k: process,
+            clock=lambda: now["t"],
+            sleep=sleep,
+            bind_job=lambda _process: None,
+        )
+
+        start = session.start()
+
+        self.assertFalse(start.ok)
+        self.assertTrue(start.not_ready)
+        self.assertGreaterEqual(now["t"], 3.0)  # прежний срок 3 с — мало для антивируса
+        session.stop()
+
     def test_probe_process_lives_in_a_job_closed_on_stop(self) -> None:
         from blockcheck.strategy_search import winws_session
 

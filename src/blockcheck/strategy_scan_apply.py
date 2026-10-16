@@ -191,6 +191,9 @@ def _with_strategy_in_existing_profile(source, profile, new_profile, ready_strat
     STUN для голоса), его типы добавляются к объединению — иначе найденная
     стратегия не сработала бы на том, на чём её проверяли.
     Profile без стратегии получает строки найденного profile-а целиком.
+    Стратегия, которая ведёт всё соединение (``probe_profile.needs_full_flow``),
+    тоже пишется целиком, с фильтром пакетов, на котором её проверяли: прежние
+    диапазоны profile-а её бы сломали.
     """
     from profile.serializer import (
         with_profile_enabled,
@@ -200,12 +203,14 @@ def _with_strategy_in_existing_profile(source, profile, new_profile, ready_strat
     )
     from profile.strategy_shape import PAYLOAD_OPTION, is_lua_desync_line, strategy_shape, union_payload
 
+    from blockcheck.strategy_search.probe_profile import needs_full_flow
+
     ready_lines = [str(line or "").strip() for line in ready_strategy_lines or () if str(line or "").strip()]
     ready_lua_lines = [line for line in ready_lines if is_lua_desync_line(line)]
     index = profile.index
     current = strategy_shape(getattr(profile.strategy, "strategy_lines", ()) or ())
     scanned = _SCANNED_PAYLOADS.get(str(scan_protocol or "").strip(), ())
-    if not current.lua_lines:
+    if not current.lua_lines or needs_full_flow(ready_lines):
         updated = with_profile_strategy_lines(
             source,
             index,

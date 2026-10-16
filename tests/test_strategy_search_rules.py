@@ -65,6 +65,13 @@ class JudgeHttpsTests(unittest.TestCase):
         # Читаем больше верхней границы окна, иначе обрыв у её края не увидеть.
         self.assertGreater(rules.HTTPS_READ_LIMIT, FREEZE_MAX_BYTES)
 
+    def test_http_body_cut_after_status_is_blocked(self) -> None:
+        # Без шифрования заголовок 200 приходит, а тело фильтр рвёт на полпути.
+        cut = rules.judge_http(host="example.org", status=200, failure="reset", body_cut=True, body_size=20_000)
+        self.assertEqual(cut.state, rules.PROBE_BLOCKED)
+        self.assertIn("оборвался", cut.reason)
+        self.assertTrue(rules.judge_http(host="example.org", status=200).ok)
+
     def test_small_complete_page_is_ok(self) -> None:
         self.assertTrue(rules.judge_https(https_result(body_size=5_000, body_cut=False)).ok)
 

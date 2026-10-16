@@ -154,7 +154,9 @@ def probe_volume(host: str, address: str, answered: ProbeOutcome, *, cancel) -> 
     return verdict.judge_volume(answered, volume_probe.judge(facts))
 
 
-HTTP_READ_LIMIT = 16 * 1024
+# Читаем столько же, сколько у HTTPS: дальше окна обрыва по объёму, иначе
+# обрыв на 20–36 КБ остался бы невидимым.
+HTTP_READ_LIMIT = verdict.HTTPS_READ_LIMIT
 
 
 def probe_http(host: str, address: str, *, cancel=None) -> ProbeOutcome:
@@ -206,6 +208,14 @@ def probe_http(host: str, address: str, *, cancel=None) -> ProbeOutcome:
         name, _colon, value = line.partition(b":")
         if name.strip().lower() == b"location":
             location = value.strip().decode("latin-1", errors="replace")
+    # Заголовок пришёл, а тело сброшено или замерло на полпути — так фильтр
+    # режет по объёму. Набранный предел чтения без сбоя — не обрыв: дальше не читали.
+    body_cut = (
+        status is not None
+        and failure in (FAILURE_RESET, FAILURE_TIMEOUT)
+        and len(data) < HTTP_READ_LIMIT
+        and not http_body_complete(bytes(data))
+    )
     return verdict.judge_http(
         host=host,
         status=status,
@@ -214,6 +224,8 @@ def probe_http(host: str, address: str, *, cancel=None) -> ProbeOutcome:
         failure=failure,
         connected=connected,
         elapsed_ms=elapsed,
+        body_cut=body_cut,
+        body_size=len(body),
     )
 
 

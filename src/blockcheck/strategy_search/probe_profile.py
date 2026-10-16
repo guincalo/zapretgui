@@ -69,7 +69,10 @@ def strategy_lines_from_args(strategy_args: str) -> tuple[str, ...]:
 _FULL_FLOW_FUNCTIONS = frozenset({"tlsrec"})
 
 
-def _needs_full_flow(strategy: Sequence[str]) -> bool:
+def needs_full_flow(strategy: Sequence[str]) -> bool:
+    """Стратегия ведёт всё соединение: её проверяли со своим фильтром пакетов
+    (``--in-range=a --out-range=a --payload=all``), и «Применить» обязано
+    записать именно его — с диапазонами обычного профиля она не работает."""
     for line in strategy:
         if line.startswith("--lua-desync="):
             name = line.split("=", 1)[1].split(":", 1)[0].strip()
@@ -126,7 +129,7 @@ def build_probe_profile(
             ("--filter-tcp=80", f"--hostlist-domains={domain}", "--out-range=-d8"),
             strategy,
         )
-    if _needs_full_flow(strategy):
+    if needs_full_flow(strategy):
         return ProbeProfile(
             ("--wf-tcp-out=443", "--wf-tcp-in=443"),
             ("--filter-tcp=443", f"--hostlist-domains={domain}", "--in-range=a", "--out-range=a", "--payload=all"),
