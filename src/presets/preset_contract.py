@@ -21,6 +21,10 @@ tests/test_preset_contract_architecture_checks.py — структура) и а�
      ``profile.winws2_preset_source.ensure_winws2_lua_init_block``;
    - перенос старого ``--debug=@logs/...`` в ``--debug=@user/logs/...``
      (логи живут в user\\logs, по старому пути winws2 не стартует);
+   - перенос переименованного поставляемого списка на новое имя
+     (``LEGACY_LIST_FILE_RENAMES``, например ``lists/git-zapret-moe.txt`` ->
+     ``lists/zapret-moe.txt``): старого файла в поставке нет, а без файла
+     hostlist winws2 не стартует;
    - удаление служебных строк шапки ``# Modified:`` и ``# ActivePreset:``;
    - переводы строк CRLF/CR -> LF, ровно один перевод строки в конце файла и
      без метки BOM в начале (BOM — часть кодировки файла, а не текста; файлы
@@ -73,7 +77,8 @@ tests/test_preset_contract_architecture_checks.py — структура) и а�
 
 6. Разовый перевод пресетов пользователя при запуске программы
    (``ONE_TIME_MIGRATIONS``). Пресеты winws2 из папки пользователя, сохранённые
-   старыми версиями, могут не содержать полный обязательный блок ``--lua-init``.
+   старыми версиями, могут не содержать полный обязательный блок ``--lua-init``
+   или ссылаться на поставляемый список под прежним именем.
    После запуска программа один раз в фоне пропускает каждый такой файл через
    ту же нормализацию сохранения, что и пункт 1
    (``PresetFileService.migrate_user_presets_to_save_contract``) и записывает
@@ -121,6 +126,7 @@ ENGINE_WINWS2 = "winws2"
 
 SAVE_WINWS2_LUA_INIT_BLOCK = "winws2_lua_init_block"
 SAVE_LEGACY_DEBUG_LOG_RELOCATION = "legacy_debug_log_relocation"
+SAVE_LEGACY_LIST_FILE_RENAME = "legacy_list_file_rename"
 SAVE_DROP_SERVICE_HEADER_LINES = "drop_modified_and_active_preset_header_lines"
 SAVE_LINE_ENDINGS = "lf_line_endings_and_single_final_newline"
 SAVE_PRESET_IDENTITY_HEADERS = "preset_identity_headers_on_rename_duplicate_create_import"
@@ -128,6 +134,7 @@ SAVE_PRESET_IDENTITY_HEADERS = "preset_identity_headers_on_rename_duplicate_crea
 SAVE_TIME_NORMALIZATIONS: dict[str, str] = {
     SAVE_WINWS2_LUA_INIT_BLOCK: "winws2: полный обязательный блок --lua-init в начале преамбулы",
     SAVE_LEGACY_DEBUG_LOG_RELOCATION: "--debug=@logs/... -> --debug=@user/logs/...",
+    SAVE_LEGACY_LIST_FILE_RENAME: "lists/<прежнее имя поставляемого списка> -> lists/<нынешнее> (LEGACY_LIST_FILE_RENAMES)",
     SAVE_DROP_SERVICE_HEADER_LINES: "удаление строк # Modified: и # ActivePreset:",
     SAVE_LINE_ENDINGS: "CRLF/CR -> LF, ровно один перевод строки в конце, без метки BOM в начале",
     SAVE_PRESET_IDENTITY_HEADERS: "# Preset: / # PresetKind: при переименовании, дублировании, создании и импорте",
@@ -137,6 +144,13 @@ SAVE_TIME_NORMALIZATIONS: dict[str, str] = {
 SERVICE_HEADER_PREFIXES: tuple[str, ...] = ("# modified:", "# activepreset:")
 LEGACY_DEBUG_LOG_PREFIX = "logs/"
 DEBUG_LOG_DIR = "user/logs"
+
+# Поставляемые списки, сменившие имя: прежнее имя -> нынешнее. Пресеты
+# пользователя, сохранённые до переименования, ссылаются на прежний файл,
+# которого в поставке больше нет.
+LEGACY_LIST_FILE_RENAMES: dict[str, str] = {
+    "git-zapret-moe.txt": "zapret-moe.txt",
+}
 
 # --- 2. Запуск -------------------------------------------------------------
 
@@ -195,7 +209,8 @@ USER_WINWS2_PRESETS_SAVE_FORMAT_MIGRATION = "user_winws2_presets_save_format_mig
 
 ONE_TIME_MIGRATIONS: dict[str, str] = {
     USER_WINWS2_PRESETS_SAVE_FORMAT_MIGRATION: "после запуска пресеты winws2 из папки пользователя один раз "
-    "проходят нормализацию сохранения (полный блок --lua-init) и записываются, только если текст изменился",
+    "проходят нормализацию сохранения (полный блок --lua-init, новые имена списков) и записываются, "
+    "только если текст изменился",
 }
 
 OUTDATED_BUILTIN_OVERRIDE_REFRESH = "outdated_builtin_override_refresh"
@@ -288,6 +303,25 @@ def relocate_legacy_debug_log_file(value: str) -> str:
     return path
 
 
+def _rename_legacy_list_files(text: str) -> str:
+    lowered = text.lower()
+    if not any(old in lowered for old in LEGACY_LIST_FILE_RENAMES):
+        return text
+    out: list[str] = []
+    for raw in text.split("\n"):
+        stripped = raw.strip()
+        option, sep, value = stripped.partition("=")
+        if sep and option.startswith("--"):
+            path = value.strip().replace("\\", "/")
+            folder, slash, name = path.rpartition("/")
+            new_name = LEGACY_LIST_FILE_RENAMES.get(name.lower()) if slash else None
+            if new_name is not None and folder.lower().lstrip("@") == "lists":
+                out.append(f"{option}={folder}/{new_name}")
+                continue
+        out.append(raw)
+    return "\n".join(out)
+
+
 def _drop_service_header_lines(text: str) -> str:
     return "\n".join(
         line
@@ -321,6 +355,7 @@ def normalize_preset_source_for_save(source_text: str, engine: str) -> str:
     """
     text = _normalize_line_endings(strip_utf8_bom(source_text))
     text = _relocate_legacy_debug_log_lines(text)
+    text = _rename_legacy_list_files(text)
     text = _drop_service_header_lines(text)
     if str(engine or "").strip().lower() == ENGINE_WINWS2:
         from profile.winws2_preset_source import ensure_winws2_lua_init_block
@@ -341,6 +376,7 @@ __all__ = [
     "FAST_SWITCH_HANDOFF_EXTRA_ARGS",
     "GENERATED_CONFIG_EXEMPTIONS",
     "LAUNCH_TIME_TRANSFORMATIONS",
+    "LEGACY_LIST_FILE_RENAMES",
     "ONE_TIME_MIGRATIONS",
     "OUTDATED_BUILTIN_OVERRIDE_REFRESH",
     "PRESET_CONTRACT_SCOPE",

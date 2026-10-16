@@ -221,7 +221,7 @@ def new_profile_insert_index(preset: Preset) -> int:
     Profile-ы zapret2 проверяются по порядку и срабатывает первый подошедший.
     Исключения RU (hostlist/ipset из служебных списков) и profile без
     собственного hostlist/ipset перехватывают трафик всех profile-ов ниже,
-    поэтому новый profile встаёт перед ними. Начало пресета (git.zapret.moe и
+    поэтому новый profile встаёт перед ними. Начало пресета (zapret.moe и
     соседние profile-ы) не трогается.
     """
     for index, profile in enumerate(tuple(preset.profiles or ())):

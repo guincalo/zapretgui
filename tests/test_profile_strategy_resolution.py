@@ -228,7 +228,7 @@ class ProfileStrategyResolutionTests(unittest.TestCase):
                     )
                     self.assertEqual(self._resolved_strategy_id(profile), "pass")
 
-    def test_git_zapret_moe_is_first_and_uses_alt9_in_every_builtin_preset(self) -> None:
+    def test_zapret_moe_is_first_and_uses_alt9_in_every_builtin_preset(self) -> None:
         expected_strategy = (
             "--out-range=-d8",
             "--lua-desync=hostfakesplit:host=ozon.ru:tcp_ts=-1000:tcp_md5:repeats=4",
@@ -243,12 +243,12 @@ class ProfileStrategyResolutionTests(unittest.TestCase):
                     engine="winws2",
                     source_name=path.name,
                 )
-                matches = [profile for profile in preset.profiles if profile.display_name == "git.zapret.moe"]
+                matches = [profile for profile in preset.profiles if profile.display_name == "zapret.moe"]
                 self.assertEqual(len(matches), 1)
                 profile = matches[0]
                 self.assertIs(profile, preset.profiles[0])
                 self.assertEqual(profile.match.filter_lines, ["--filter-tcp=443"])
-                self.assertEqual(profile.match.hostlist_lines, ["--hostlist=lists/git-zapret-moe.txt"])
+                self.assertEqual(profile.match.hostlist_lines, ["--hostlist=lists/zapret-moe.txt"])
                 self.assertEqual(normalize_lines(profile.strategy.strategy_lines), expected_strategy)
                 self.assertEqual(self._resolved_strategy_id(profile), "alt9")
 

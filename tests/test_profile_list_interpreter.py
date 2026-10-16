@@ -73,10 +73,13 @@ class RenamedStockProfileNameTests(unittest.TestCase):
     def test_every_old_name_maps_to_a_service_role_name(self) -> None:
         from profile.stock_names import RENAMED_STOCK_PROFILE_NAMES, current_stock_profile_name
 
-        self.assertEqual(len(RENAMED_STOCK_PROFILE_NAMES), 21)
+        self.assertEqual(len(RENAMED_STOCK_PROFILE_NAMES), 22)
+        # Одиночный сервис пишется без роли.
+        single_service_names = {"zapret.moe"}
         for old, new in RENAMED_STOCK_PROFILE_NAMES.items():
             with self.subTest(old=old):
-                self.assertIn(" · ", new)
+                if new not in single_service_names:
+                    self.assertIn(" · ", new)
                 self.assertEqual(current_stock_profile_name(old), new)
                 self.assertEqual(current_stock_profile_name(old.upper()), new)
                 # Нынешнее имя само ни во что не превращается.

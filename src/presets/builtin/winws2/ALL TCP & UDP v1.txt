@@ -23,9 +23,9 @@
 --blob=tls7:@bin/tls_clienthello_7.bin
 --blob=fake_default_udp:0x00000000000000000000000000000000
 
---name=git.zapret.moe
+--name=zapret.moe
 --filter-tcp=443
---hostlist=lists/git-zapret-moe.txt
+--hostlist=lists/zapret-moe.txt
 --out-range=-d8
 --lua-desync=hostfakesplit:host=ozon.ru:tcp_ts=-1000:tcp_md5:repeats=4
 

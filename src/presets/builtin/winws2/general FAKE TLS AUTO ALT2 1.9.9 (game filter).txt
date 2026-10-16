@@ -25,9 +25,9 @@
 --wf-tcp-out=80,443,2053,2083,2087,2096,8443,1024-65535
 --wf-udp-out=443,19294-19344,50000-50100,1024-65535
 
---name=git.zapret.moe
+--name=zapret.moe
 --filter-tcp=443
---hostlist=lists/git-zapret-moe.txt
+--hostlist=lists/zapret-moe.txt
 --out-range=-d8
 --lua-desync=hostfakesplit:host=ozon.ru:tcp_ts=-1000:tcp_md5:repeats=4
 

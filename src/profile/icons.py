@@ -67,8 +67,8 @@ _KNOWN_ICONS: dict[str, ProfileIconSpec] = {
     "apple": ProfileIconSpec("simple:apple:AP", "#A2AAAD"),
     "notion": ProfileIconSpec("simple:notion:NO", "#B0B6BE"),
     "linkedin": ProfileIconSpec("fa5b.linkedin", "#0A66C2"),
-    # git.zapret.moe работает на Forgejo.
-    "git-zapret-moe": ProfileIconSpec("simple:forgejo:FJ", "#FB923C"),
+    # zapret.moe — сайты проекта, главный из них git.zapret.moe работает на Forgejo.
+    "zapret-moe": ProfileIconSpec("simple:forgejo:FJ", "#FB923C"),
     "lordfilm": ProfileIconSpec("fa5s.film", "#F59E0B"),
     "obsidian": ProfileIconSpec("simple:obsidian:OB", "#7C3AED"),
     "rutracker": ProfileIconSpec("fa5s.magnet", "#6AA2FF"),

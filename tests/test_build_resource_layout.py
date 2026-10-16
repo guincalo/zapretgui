@@ -1122,7 +1122,7 @@ class BuildResourceLayoutTests(unittest.TestCase):
                 for service_list in (
                     "apple.txt",
                     "gemini.txt",
-                    "git-zapret-moe.txt",
+                    "zapret-moe.txt",
                     "linkedin.txt",
                     "notion.txt",
                 ):
@@ -1178,7 +1178,7 @@ class BuildResourceLayoutTests(unittest.TestCase):
                 for service_list in (
                     "apple.txt",
                     "gemini.txt",
-                    "git-zapret-moe.txt",
+                    "zapret-moe.txt",
                     "linkedin.txt",
                     "notion.txt",
                 ):

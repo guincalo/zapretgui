@@ -237,7 +237,7 @@ class ProfileIconTests(unittest.TestCase):
             ("Notion", "lists/notion.txt"): "simple:notion:NO",
             ("LinkedIn", "lists/linkedin.txt"): "fa5b.linkedin",
             ("chatgpt", "lists/chatgpt.txt"): "own:openai:AI",
-            ("git.zapret.moe", "lists/git-zapret-moe.txt"): "simple:forgejo:FJ",
+            ("zapret.moe", "lists/zapret-moe.txt"): "simple:forgejo:FJ",
             ("LordFilm (зеркала)", "lists/lordfilm.txt"): "fa5s.film",
             ("rutracker.org", "lists/rutracker.txt"): "fa5s.magnet",
             ("rutor.info (.is)", "lists/rutor.txt"): "fa5s.magnet",

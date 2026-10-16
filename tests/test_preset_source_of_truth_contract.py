@@ -22,6 +22,7 @@ from presets.file_service import PresetFileService
 from presets.file_store import PresetFileStore
 from presets.preset_contract import (
     DEBUG_LOG_DIR,
+    LEGACY_LIST_FILE_RENAMES,
     SAVE_TIME_NORMALIZATIONS,
     SERVICE_HEADER_PREFIXES,
     normalize_preset_source_for_save,
@@ -142,6 +143,17 @@ WINWS2_SAVE_ONLY_FIXTURES: dict[str, str] = {
         "--wf-tcp-out=443\n"
         "--lua-desync=fake:blob=tls_google\n"
     ),
+    # Список git-zapret-moe.txt переименован в zapret-moe.txt: копия пресета
+    # со старым путём переходит на новый файл.
+    "legacy_list_file_name": (
+        "# Preset: Old list\n"
+        "--wf-tcp-out=443\n"
+        "--new\n"
+        "--name=git.zapret.moe\n"
+        "--filter-tcp=443\n"
+        "--hostlist=lists\\Git-Zapret-Moe.txt\n"
+        "--lua-desync=fake:blob=tls_google\n"
+    ),
 }
 
 WINWS1_FIXTURES: dict[str, str] = {
@@ -191,6 +203,12 @@ def _erase_allowed_save_differences(text: str, engine: str) -> list[str]:
         # Перенос старого --debug=@logs/... в user/logs.
         if lowered.startswith("--debug=@logs/"):
             raw = f"--debug=@{DEBUG_LOG_DIR}/{stripped.split('=', 1)[1][len('@logs/'):]}"
+        # Переименованный поставляемый список: прежнее имя -> нынешнее.
+        option, _, value = stripped.partition("=")
+        old_name = value.replace("\\", "/").rpartition("/")[2].lower()
+        if option.startswith("--") and value.replace("\\", "/").lower() == f"lists/{old_name}":
+            if old_name in LEGACY_LIST_FILE_RENAMES:
+                raw = f"{option}=lists/{LEGACY_LIST_FILE_RENAMES[old_name]}"
         if engine == ENGINE_WINWS2 and stripped.startswith("--"):
             # Обязательный блок --lua-init: его файлы в любом написании стираются.
             parts = _options(stripped)
@@ -302,7 +320,21 @@ class LuaInitBlockTests(unittest.TestCase):
 
 class SaveNormalizationTests(unittest.TestCase):
     def test_contract_lists_each_save_normalization(self) -> None:
-        self.assertEqual(len(SAVE_TIME_NORMALIZATIONS), 5)
+        self.assertEqual(len(SAVE_TIME_NORMALIZATIONS), 6)
+
+    def test_renamed_list_file_moves_to_new_name(self) -> None:
+        source = WINWS2_SAVE_ONLY_FIXTURES["legacy_list_file_name"]
+        for engine in (ENGINE_WINWS2, ENGINE_WINWS1):
+            with self.subTest(engine=engine):
+                saved = normalize_preset_source_for_save(source, engine)
+                self.assertIn("\n--hostlist=lists/zapret-moe.txt\n", saved)
+                self.assertNotIn("git-zapret-moe", saved.lower())
+                # Имя profile-а не меняется: прежнее стоковое имя только узнаётся.
+                self.assertIn("\n--name=git.zapret.moe\n", saved)
+
+    def test_other_list_files_keep_their_path(self) -> None:
+        source = "--hostlist=lists/my-git-zapret-moe.txt\n--ipset=other/git-zapret-moe.txt\n"
+        self.assertEqual(normalize_preset_source_for_save(source, ENGINE_WINWS1), source)
 
     def test_winws1_text_gets_no_lua_init_block(self) -> None:
         for name, source in {**WINWS1_FIXTURES, **_builtin_texts(ENGINE_WINWS1)}.items():

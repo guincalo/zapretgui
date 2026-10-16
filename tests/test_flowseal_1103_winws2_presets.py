@@ -228,7 +228,7 @@ class Flowseal1103Winws2PresetTests(unittest.TestCase):
         for name, preset in self.presets.items():
             with self.subTest(name=name):
                 first = preset.profiles[0]
-                self.assertEqual(first.display_name, "git.zapret.moe")
+                self.assertEqual(first.display_name, "zapret.moe")
                 self.assertEqual(
                     _strategy(first),
                     ("--out-range=-d8", "--lua-desync=hostfakesplit:host=ozon.ru:tcp_ts=-1000:tcp_md5:repeats=4"),
@@ -380,7 +380,7 @@ class Flowseal1103Winws2PresetTests(unittest.TestCase):
 
     def test_fooling_and_repeats_only_on_fake_sending_instances(self) -> None:
         for name, preset in self.presets.items():
-            for profile in preset.profiles[1:]:  # profile #1 git.zapret.moe is a fixed GUI convention
+            for profile in preset.profiles[1:]:  # profile #1 zapret.moe is a fixed GUI convention
                 for line in _lua(profile):
                     with self.subTest(name=name, profile=profile.display_name, line=line):
                         if re.search(r":(tcp_seq|tcp_ts|tcp_md5)[=:]|:tcp_md5$", line):

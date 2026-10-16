@@ -405,9 +405,9 @@ class TemplateAppendPositionTests(unittest.TestCase):
     def test_new_profile_goes_before_ru_exclusions_and_keeps_first_profile(self) -> None:
         text = "\n".join(
             (
-                "--name=git.zapret.moe",
+                "--name=zapret.moe",
                 "--filter-tcp=443",
-                "--hostlist=lists/git-zapret-moe.txt",
+                "--hostlist=lists/zapret-moe.txt",
                 "--lua-desync=fake:blob=tls_google",
                 "",
                 "--new",
@@ -429,7 +429,7 @@ class TemplateAppendPositionTests(unittest.TestCase):
         saved, new_key = self._enable_user_profile(text)
 
         names = [profile.name for profile in parse_preset_text(saved, engine="winws2").profiles]
-        self.assertEqual(names, ["git.zapret.moe", "My Site", "Исключения домены (RU сайты)", "DeepSeek"])
+        self.assertEqual(names, ["zapret.moe", "My Site", "Исключения домены (RU сайты)", "DeepSeek"])
         self.assertEqual(new_key, "profile:1")
 
     def test_new_profile_goes_before_catch_all_profile(self) -> None:

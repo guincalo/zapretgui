@@ -33,6 +33,7 @@ RENAMED_STOCK_PROFILE_NAMES: dict[str, str] = {
     "css.rbxcdn.com": "Roblox · оформление сайта (css.rbxcdn.com)",
     "tr.rbxcdn.com": "Roblox · картинки (tr.rbxcdn.com)",
     "Twitter Images (twimg.com)": "Twitter/X · картинки (twimg.com)",
+    "git.zapret.moe": "zapret.moe",
 }
 
 _RENAMED_BY_CASEFOLD = {old.casefold(): new for old, new in RENAMED_STOCK_PROFILE_NAMES.items()}
