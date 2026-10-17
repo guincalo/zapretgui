@@ -229,12 +229,12 @@ def _finish_event_loop_bootstrap(*, app, window, application_controller, start_i
         f"{(_time.perf_counter() - t_bridge) * 1000:.0f}ms",
     )
 
-    # Приоритет окна над фоновыми потоками (короткий интервал переключения
-    # замка Python) нужен, только пока окно на экране: в трее ждущие потоки
-    # зря крутили бы процессор. Ссылка держится на окне, как и мост выше.
-    from ui.gui_thread_priority import install_window_gil_priority
+    # Присутствие окна: приоритет над фоновыми потоками, пока окно на экране,
+    # и подготовка памяти к возврату из фона (ui.window_presence). Ссылка
+    # держится на окне, как и мост выше.
+    from ui.window_presence import install_window_presence
 
-    window._gil_priority = install_window_gil_priority(window)
+    window._window_presence = install_window_presence(window)
 
     if start_in_tray:
         log("Запуск приложения скрыто в трее", "TRAY")

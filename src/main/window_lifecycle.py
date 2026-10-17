@@ -9,6 +9,7 @@ from main.window_native_commands import (
     WM_SYSCOMMAND,
     handle_minimize_request,
     handle_native_minimize_command,
+    is_native_restore_command,
 )
 from main.runtime_state import (
     log_startup_metric as emit_startup_metric,
@@ -158,6 +159,8 @@ class WindowLifecycleMixin:
             if handle_native_preset_file_drop(self, message):
                 return (True, 0)
         elif message_id == WM_SYSCOMMAND:
+            if is_native_restore_command(message):
+                self._note_return_intent()
             if handle_native_minimize_command(
                 self,
                 message,
@@ -167,6 +170,16 @@ class WindowLifecycleMixin:
         elif message_id in SCREEN_PRESENCE_MESSAGES:
             handle_native_screen_presence(message)
         return super().nativeEvent(event_type, message)
+
+    def _note_return_intent(self) -> None:
+        """Окно сейчас вернут из фона: пусть память подтягивается до того, как Qt начнёт рисовать."""
+        presence = getattr(self, "_window_presence", None)
+        if presence is None:
+            return
+        try:
+            presence.return_intent()
+        except Exception as e:
+            log(f"Не удалось подготовить окно к возврату из фона: {e}", "DEBUG")
 
     def showMinimized(self) -> None:  # noqa: N802 (Qt override)
         if handle_minimize_request(

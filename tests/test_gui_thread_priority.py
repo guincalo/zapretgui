@@ -17,14 +17,12 @@ from pathlib import Path
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from PyQt6.QtCore import Qt  # noqa: E402
-from PyQt6.QtWidgets import QApplication, QWidget  # noqa: E402
+from PyQt6.QtWidgets import QApplication  # noqa: E402
 
 from ui import gui_thread_priority  # noqa: E402
 from ui.gui_thread_priority import (  # noqa: E402
     BACKGROUND_GIL_SWITCH_INTERVAL_SEC,
     GUI_GIL_SWITCH_INTERVAL_SEC,
-    WindowGilPriority,
     set_gui_gil_priority,
 )
 
@@ -62,46 +60,6 @@ class GuiGilSwitchIntervalTests(unittest.TestCase):
         self.assertEqual(BACKGROUND_GIL_SWITCH_INTERVAL_SEC, 0.005)
 
 
-class WindowGilPriorityTests(unittest.TestCase):
-    def _window(self) -> QWidget:
-        window = QWidget()
-        self.addCleanup(window.deleteLater)
-        return window
-
-    def test_hidden_window_turns_priority_off(self) -> None:
-        states: list[bool] = []
-        window = self._window()
-
-        watcher = WindowGilPriority(window, apply=states.append)
-
-        # Запуск в трей: окна нет на экране.
-        self.assertEqual(states, [False])
-        self.assertIsNotNone(watcher)
-
-    def test_priority_follows_show_minimize_and_hide(self) -> None:
-        states: list[bool] = []
-        window = self._window()
-        watcher = WindowGilPriority(window, apply=states.append)
-        states.clear()
-
-        window.show()
-        _APP.processEvents()
-        self.assertTrue(states and states[-1] is True)
-
-        window.setWindowState(Qt.WindowState.WindowMinimized)
-        _APP.processEvents()
-        self.assertIs(states[-1], False)
-
-        window.setWindowState(Qt.WindowState.WindowNoState)
-        _APP.processEvents()
-        self.assertIs(states[-1], True)
-
-        window.hide()
-        _APP.processEvents()
-        self.assertIs(states[-1], False)
-        self.assertIsNotNone(watcher)
-
-
 class GilPriorityWiringTests(unittest.TestCase):
     def test_startup_turns_it_on_before_the_window_exists(self) -> None:
         from main import qt_runtime
@@ -109,12 +67,12 @@ class GilPriorityWiringTests(unittest.TestCase):
         # На запуск приходится больше всего фоновой работы.
         self.assertIn("apply_gui_gil_switch_interval()", inspect.getsource(qt_runtime.ensure_qt_runtime))
 
-    def test_window_visibility_owns_it_after_startup(self) -> None:
+    def test_window_presence_owns_it_after_startup(self) -> None:
         from main import entry
 
         source = inspect.getsource(entry._finish_event_loop_bootstrap)
 
-        self.assertIn("install_window_gil_priority(window)", source)
+        self.assertIn("install_window_presence(window)", source)
 
     def test_program_does_not_change_the_system_clock_step(self) -> None:
         # Точный системный таймер Windows (timeBeginPeriod) был нужен только

@@ -8,6 +8,7 @@ from log.log import log
 
 WM_SYSCOMMAND = 0x0112
 SC_MINIMIZE = 0xF020
+SC_RESTORE = 0xF120
 _SC_COMMAND_MASK = 0xFFF0
 
 
@@ -25,6 +26,20 @@ def handle_native_minimize_command(window, message, *, minimize_to_tray_enabled=
         return False
 
     return handle_minimize_request(window, minimize_to_tray_enabled=minimize_to_tray_enabled)
+
+
+def is_native_restore_command(message) -> bool:
+    """Команда Windows «развернуть» (клик по окну в панели задач, Alt+Tab).
+
+    Приходит раньше, чем Qt покажет и нарисует окно: это самый ранний сигнал
+    возврата, нужный ``ui.window_presence``. Сообщение не «съедается».
+    """
+    if sys.platform != "win32":
+        return False
+    msg = _read_msg(message)
+    if msg is None or int(msg.message) != WM_SYSCOMMAND:
+        return False
+    return (int(msg.wParam) & _SC_COMMAND_MASK) == SC_RESTORE
 
 
 def handle_minimize_request(window, *, minimize_to_tray_enabled=None) -> bool:

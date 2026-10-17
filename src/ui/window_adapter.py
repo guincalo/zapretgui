@@ -124,6 +124,13 @@ def _refresh_window_after_show(window) -> None:
 
 
 def show_window(window) -> None:
+    # Самый ранний сигнал возврата из трея: память подтягивается, пока строится показ.
+    presence = getattr(window, "_window_presence", None)
+    if presence is not None:
+        try:
+            presence.return_intent()
+        except Exception:
+            pass
     try:
         from ui.navigation.sidebar_builder import sync_existing_nav_visibility
 
