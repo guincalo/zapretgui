@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
 import socket
 import unittest
 from unittest.mock import Mock, patch
@@ -131,14 +132,17 @@ class HttpsDnsFallbackTests(unittest.TestCase):
         adapter.add_headers(request)
         self.assertEqual(request.headers["Host"], "service.example")
 
-    def test_transport_does_not_embed_current_service_ip(self) -> None:
+    def test_transport_does_not_embed_service_addresses(self) -> None:
         source = (
             Path(__file__).resolve().parents[1]
             / "src"
             / "utils"
             / "https_dns_fallback.py"
         ).read_text(encoding="utf-8")
-        self.assertNotIn("144.31.107.88", source)
+        # Only the public DNS-over-HTTPS resolvers may appear as addresses;
+        # our own services are reached by name, never by a hardcoded IP.
+        literals = set(re.findall(r"\b(?:\d{1,3}\.){3}\d{1,3}\b", source))
+        self.assertLessEqual(literals, {"1.1.1.1", "1.0.0.1"})
 
 
 if __name__ == "__main__":

@@ -112,7 +112,7 @@ class ReportMappingTests(unittest.TestCase):
         # Проверено вживую 15.10.2026: имя отвечает адресом кэша Google.
         self.assertEqual(cluster_to_host("muc12s10"), "rr1---sn-h0jelne7.googlevideo.com")
         self.assertEqual(
-            parse_report_mapping("144.31.107.88 => muc12s10 (144.31.107.0/24)\n"),
+            parse_report_mapping("198.51.100.23 => muc12s10 (198.51.100.0/24)\n"),
             "rr1---sn-h0jelne7.googlevideo.com",
         )
         # Страница-заглушка провайдера или мусор — не видеосервер.

@@ -64,7 +64,7 @@ class JudgeTests(unittest.TestCase):
         self.assertIn("прямое подключение", lines["Адрес компьютера"].text)
 
     def test_public_local_address_that_differs_from_external_means_proxy_or_vpn(self) -> None:
-        lines = self._lines(external_ip="203.0.113.7", owner=OWNER, local_ip="144.31.107.88")
+        lines = self._lines(external_ip="203.0.113.7", owner=OWNER, local_ip="8.8.4.4")
 
         self.assertIn("прокси, VPN или общий адрес провайдера", lines["Адрес компьютера"].text)
 
