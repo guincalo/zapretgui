@@ -261,9 +261,6 @@ class DomainLookupReport:
     # Запись этой проверки в истории вкладки — та самая, что сохранена в настройки (с путём
     # к файлу полного текста). None — проверку прервали, в историю она не попала.
     history_entry: dict | None = None
-    # Прошла ли вторая волна — подробный разбор (``run_lookup``). Без сигнала беды её нет:
-    # пинга, пути, сертификатов и соседей тогда не ищут — «не понадобилось», а не «не вышло».
-    deep: bool = False
     finished: bool = False
     stopped: bool = False
     timed_out: bool = False
@@ -1092,15 +1089,14 @@ def run_domain_lookup(
     on_stage: Callable[[DomainLookupReport], None] | None = None,
     should_stop: Callable[[], bool] | None = None,
 ) -> DomainLookupReport:
-    """Проверка домена или адреса — двумя волнами (``utils.probe_gate``).
+    """Проверка домена или адреса — двумя волнами.
 
     Первая волна — то, что делает и браузер: адрес у Windows, у DNS компьютера и у
     шифрованного эталона, затем сайт открывается так, как его открыл бы Chrome.
     Вторая волна — подробный разбор: десятки DNS-серверов, пинг, путь до сервера,
-    сертификаты, сведения о сети и соседи по адресу. Она идёт только по сигналу
-    беды (``needs_deep``): сайт не открылся, DNS компьютера врёт или человек ввёл
-    сам адрес. Иначе программа без повода устраивала бы пачку запросов, по которой
-    её узнаёт провайдер.
+    сертификаты, сведения о сети и соседи по адресу. Она идёт всегда, даже когда
+    сайт открылся и DNS честный: человек сам нажал кнопку, и ему удобнее видеть
+    полную картину (решение пользователя от 2026-10-17).
 
     ``on_stage`` получает промежуточный отчёт каждый раз, когда готова очередная
     часть, — страница показывает результаты по мере появления.
@@ -1135,8 +1131,7 @@ def run_domain_lookup(
 
         if primary_ip and not run.halted():
             report = _browser_stage(run, report, publish)
-        if not run.halted() and needs_deep(report):
-            report = publish(replace(report, deep=True))
+        if not run.halted():
             if kind == KIND_DOMAIN:
                 report = _resolve_stage(run, report, rest, publish, canary=True)
             if report.primary_ip and not run.halted():
@@ -1173,21 +1168,6 @@ def _unique_servers(servers: Iterable[DnsServer]) -> tuple[DnsServer, ...]:
 # Кого спрашивают всегда: Windows, DNS компьютера, свои серверы человека и шифрованный эталон —
 # столько же запросов делает и сам компьютер. Остальные (провайдеры и общедоступные) — во второй волне.
 QUICK_SERVER_KINDS = frozenset({SERVER_SYSTEM, SERVER_CUSTOM, SERVER_DOH})
-
-
-def needs_deep(report: DomainLookupReport) -> bool:
-    """Сигнал беды для второй волны: без него подробный разбор не нужен."""
-    if report.kind != KIND_DOMAIN or not report.primary_ip:
-        # Человек спросил про сам адрес — или адреса нет вовсе: разбор и есть ответ.
-        return True
-    if windows_blind(report.answers) or forged_answers(report.answers):
-        return True
-    if any(item.level in (LEVEL_WARN, LEVEL_FAIL) for item in report.answers):
-        return True
-    if road_trouble(report):
-        return True
-    site = report.site or {}
-    return str(site.get("level") or "") != LEVEL_OK
 
 
 def _resolve_stage(run: _Run, report: DomainLookupReport, servers, publish, *, canary: bool) -> DomainLookupReport:

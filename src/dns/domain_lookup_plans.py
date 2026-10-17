@@ -442,31 +442,11 @@ def build_path_text(report: DomainLookupReport) -> str:
     return "\n".join(rows)
 
 
-# Что сказать вместо пинга, пути и соседей, когда подробный разбор не понадобился.
-NOT_NEEDED_TEXT = (
-    "Подробный разбор — пинг, путь до сервера, сертификаты и соседи по адресу — не понадобился: "
-    "сайт открывается так, как его открыл бы браузер, и DNS компьютера отвечает честно. "
-    "Лишние запросы провайдер увидел бы, поэтому без повода они не делаются."
-)
-
-
-def deep_skipped(report: DomainLookupReport) -> bool:
-    """Проверка закончилась без второй волны: пинга и соседей нет, потому что не понадобились.
-
-    Прошлые отчёты (до двух волн) этого признака не знают, но пинг в них есть — их это не касается.
-    """
-    deep = getattr(report, "deep", True)
-    return bool(report.finished and not deep and getattr(report, "ping", None) is None and report.primary_ip)
-
-
 def build_ping_lines(report: DomainLookupReport) -> tuple[InfoLine, ...]:
     if not report.primary_ip:
         if report.kind == KIND_DOMAIN and report.finished:
             return (InfoLine("Пинговать нечего: ни один DNS-сервер не назвал адрес.", TONE_WARNING),)
         return ()
-    if deep_skipped(report):
-        # Вторая волна идёт только по сигналу беды (dns.domain_lookup.run_lookup).
-        return (InfoLine(NOT_NEEDED_TEXT, TONE_MUTED),)
     lines: list[InfoLine] = []
     lines.append(_ping_line(report.ping, "Пинг") if report.ping else InfoLine(f"Пинг {report.primary_ip}: проверяем…"))
     if report.ping6 is not None:
@@ -642,8 +622,6 @@ def build_status(report: DomainLookupReport) -> InfoLine:
     trouble = own_dns_trouble(report)
     if trouble:
         return InfoLine(f"Готово за {seconds}. {trouble} (карточка «Адреса с разных DNS-серверов»).", TONE_WARNING)
-    if deep_skipped(report):
-        return InfoLine(f"Готово за {seconds}: {report.target} открывается так, как его открыл бы браузер (адрес {report.primary_ip}).", TONE_SUCCESS)
     return InfoLine(f"Готово за {seconds}: адрес {report.primary_ip}, доменов найдено: {count_neighbors(report)}.", TONE_SUCCESS)
 
 

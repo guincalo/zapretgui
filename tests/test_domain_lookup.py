@@ -116,7 +116,7 @@ class _Network:
 
 
 class WaveTests(unittest.TestCase):
-    """Две волны: открытому сайту без беды хватает того, что делает и браузер (utils.probe_gate)."""
+    """Две волны: после того, что делает и браузер, подробный разбор идёт всегда."""
 
     def _run(self, site_level):
         net = _Network(self)
@@ -135,28 +135,24 @@ class WaveTests(unittest.TestCase):
             report = engine.run_domain_lookup("example.com", servers=[SECURE, GOOD])
         return report, net, asked, canary
 
-    def test_open_site_with_honest_dns_gets_no_second_wave(self) -> None:
+    def test_open_site_with_honest_dns_still_gets_the_full_check(self) -> None:
         report, net, asked, canary = self._run("ok")
 
-        self.assertFalse(report.deep)
         self.assertEqual(net.site_calls, ["example.com"])
-        # Ни общедоступных DNS-серверов, ни пробного запроса, ни пинга, пути и сторонних служб.
-        self.assertNotIn(GOOD.address, asked)
-        self.assertEqual(canary, [])
-        self.assertIsNone(report.ping)
-        self.assertIsNone(report.route)
-        self.assertEqual(net.http_calls, [])
-        self.assertEqual([line.text for line in plans.build_ping_lines(report)], [plans.NOT_NEEDED_TEXT])
-        self.assertIn("открывается так, как его открыл бы браузер", plans.build_status(report).text)
+        # Подробный разбор идёт всегда (решение пользователя 2026-10-17): общедоступные
+        # DNS-серверы, пробный запрос, пинг и путь — даже когда сайт открылся.
+        self.assertIn(GOOD.address, asked)
+        self.assertEqual(canary, ["example.com"])
+        self.assertIsNotNone(report.ping)
+        self.assertIsNotNone(report.route)
         from dns.ui.domain_lookup_cards import KEY_PING, build_lookup_cards
 
         ping_card = next(card for card in build_lookup_cards(report) if card.key == KEY_PING)
-        self.assertEqual((ping_card.level, ping_card.status), ("ok", "Подробный разбор не понадобился"))
+        self.assertNotEqual(ping_card.status, "Подробный разбор не понадобился")
 
-    def test_closed_site_is_a_signal_for_the_full_check(self) -> None:
+    def test_closed_site_gets_the_full_check(self) -> None:
         report, _net, asked, canary = self._run("fail")
 
-        self.assertTrue(report.deep)
         self.assertIn(GOOD.address, asked)
         self.assertEqual(canary, ["example.com"])
         self.assertIsNotNone(report.ping)
@@ -164,7 +160,8 @@ class WaveTests(unittest.TestCase):
 
     def test_address_typed_by_hand_is_checked_in_full(self) -> None:
         _Network(self)
-        self.assertTrue(engine.run_domain_lookup("93.184.216.34", servers=[SECURE, GOOD]).deep)
+        report = engine.run_domain_lookup("93.184.216.34", servers=[SECURE, GOOD])
+        self.assertIsNotNone(report.ping)
 
 
 class TargetTests(unittest.TestCase):

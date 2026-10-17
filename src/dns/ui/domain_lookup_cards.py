@@ -73,8 +73,6 @@ def _ping_card(report, title: str) -> Card | None:
         level, status = "fail", "Программам некуда идти: IPv6 не работает"
     elif plans.road_problem(report):
         level, status = "warn", "IPv6 не работает, а Windows ставит его первым"
-    elif plans.deep_skipped(report):
-        level, status = "ok", "Подробный разбор не понадобился"
     elif "ok" in states:
         level, status = "ok", "Сервер отвечает"
     elif "warn" in states:
