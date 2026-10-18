@@ -22,7 +22,7 @@ from PyQt6.QtWidgets import QApplication, QWidget  # noqa: E402
 
 from ui import window_presence  # noqa: E402
 from ui.window_presence import WindowPresence  # noqa: E402
-from utils.windows_working_set import PrefetchResult, WorkingSetSnapshot  # noqa: E402
+from utils.windows_working_set import PrefetchResult, WorkingSetHold, WorkingSetSnapshot  # noqa: E402
 
 
 _APP = QApplication.instance() or QApplication([])
@@ -203,6 +203,108 @@ class WindowPresenceTests(unittest.TestCase):
         message = log.call_args.args[0]
         self.assertIn("Окно вернулось из фона (600 с)", message)
         self.assertIn("подтянуто", message)
+
+
+class WorkingSetHoldTests(unittest.TestCase):
+    """Пока окно скрыто, рабочий набор удерживается, чтобы Windows не отобрала страницы."""
+
+    def _window(self, *, shown: bool = True) -> QWidget:
+        window = QWidget()
+        self.addCleanup(window.deleteLater)
+        if shown:
+            window.show()
+            _APP.processEvents()
+        return window
+
+    def _make(self, window):
+        events: list[str] = []
+        presence, _calls, clock = _make(
+            window,
+            hold=lambda: events.append("hold") or WorkingSetHold(bytes=80 << 20, ok=True, error=0),
+            release_hold=lambda: events.append("release"),
+        )
+        events.clear()
+        return presence, events, clock
+
+    def test_going_away_holds_at_once_and_again_after_the_settle_time(self) -> None:
+        window = self._window()
+        presence, events, _clock = self._make(window)
+
+        window.hide()
+        self.assertEqual(events, ["hold"])
+
+        presence._on_settle_timeout()
+        self.assertEqual(events, ["hold", "hold"])
+
+    def test_return_releases_the_hold(self) -> None:
+        window = self._window()
+        presence, events, clock = self._make(window)
+        window.hide()
+        clock.now += 600
+        events.clear()
+
+        presence.return_intent()
+
+        self.assertEqual(events, ["release"])
+
+    def test_hold_never_outlives_the_return(self) -> None:
+        # Поток «удержать» опоздал и дошёл до замка уже после возврата окна.
+        window = self._window()
+        started: list = []
+        presence, _calls, _clock = _make(
+            window,
+            hold=lambda: WorkingSetHold(bytes=1, ok=True, error=0),
+            release_hold=lambda: started.append("release"),
+        )
+        presence._start_worker = started.append  # рабочие потоки не запускаем, копим
+        window.hide()
+        late_hold = [job for job in started if callable(job)][-1]
+        started.clear()
+
+        presence.return_intent()
+        late_hold()
+
+        self.assertIsNone(presence._held)
+
+    def test_failed_hold_does_not_break_return_and_is_reported(self) -> None:
+        window = self._window()
+        presence, _calls, clock = _make(
+            window,
+            hold=lambda: WorkingSetHold(bytes=80 << 20, ok=False, error=1314),
+            release_hold=lambda: None,
+        )
+        window.hide()
+        clock.now += 600
+        presence.return_intent()
+
+        with patch.object(window_presence, "log") as log:
+            presence._report_return()
+
+        self.assertIn("удержать не вышло (код 1314)", log.call_args.args[0])
+
+    def test_error_in_hold_is_swallowed(self) -> None:
+        def broken() -> None:
+            raise OSError("нет права")
+
+        window = self._window()
+        presence, _calls, clock = _make(window, hold=broken, release_hold=lambda: None)
+        window.hide()
+        clock.now += 600
+        presence.return_intent()  # не падает
+
+        self.assertFalse(presence.away)
+
+    def test_report_names_the_held_size(self) -> None:
+        window = self._window()
+        presence, events, clock = self._make(window)
+        window.hide()
+        clock.now += 600
+        presence.return_intent()
+
+        with patch.object(window_presence, "log") as log:
+            presence._report_return()
+
+        self.assertIn("удержано 80 МБ", log.call_args.args[0])
 
 
 class NoMemoryChurnTests(unittest.TestCase):

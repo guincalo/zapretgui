@@ -38,9 +38,40 @@ class OutsideWindowsTests(unittest.TestCase):
         self.assertIsNone(ws.prefetch_working_set(empty))
 
     def test_module_never_empties_the_working_set(self) -> None:
+        # «Минус единицы» в SetProcessWorkingSetSizeEx — это выгрузка памяти; хватку
+        # отпускаем малым минимумом, а не ею.
         source = Path(ws.__file__).read_text(encoding="utf-8")
         self.assertNotIn("EmptyWorkingSet(", source)
-        self.assertNotIn("SetProcessWorkingSetSize", source)
+        self.assertNotIn("(-1", source)
+        self.assertNotIn("c_size_t(-1)", source)
+
+    def test_hold_and_release_do_nothing_outside_windows(self) -> None:
+        with patch.object(ws.sys, "platform", "linux"):
+            self.assertIsNone(ws.hold_working_set(100 << 20))
+            self.assertFalse(ws.release_working_set_hold())
+            self.assertIsNone(ws.current_working_set_bytes())
+            self.assertIsNone(ws.available_physical_bytes())
+
+
+class HoldSizeTests(unittest.TestCase):
+    MB = 1 << 20
+
+    def test_holds_the_working_set_plus_a_margin(self) -> None:
+        size = ws.hold_size_for(80 * self.MB, 8 * 1024 * self.MB)
+        self.assertEqual(size, 80 * self.MB + ws.HOLD_MARGIN_BYTES)
+
+    def test_large_working_set_is_capped(self) -> None:
+        self.assertEqual(ws.hold_size_for(900 * self.MB, 8 * 1024 * self.MB), ws.HOLD_MAX_BYTES)
+
+    def test_tiny_or_unknown_working_set_is_not_held(self) -> None:
+        self.assertIsNone(ws.hold_size_for(None, None))
+        self.assertIsNone(ws.hold_size_for(ws.HOLD_MIN_BYTES - 1, None))
+
+    def test_tight_memory_is_not_made_tighter(self) -> None:
+        self.assertIsNone(ws.hold_size_for(80 * self.MB, ws.HOLD_MIN_AVAILABLE_BYTES - 1))
+
+    def test_unknown_free_memory_does_not_block_the_hold(self) -> None:
+        self.assertIsNotNone(ws.hold_size_for(80 * self.MB, None))
 
 
 if __name__ == "__main__":

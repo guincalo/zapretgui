@@ -12,10 +12,14 @@
 Теперь одно место знает состояние и делает всё нужное на двух границах.
 
 Уход в фон (свёрнуто или скрыто в трей):
+- сразу в отдельном потоке рабочий набор объявляется «жёстким минимумом»
+  (``hold_working_set``): Windows не отбирает эти страницы, пока окно скрыто, и
+  возврат идёт из памяти, а не с диска. Через AWAY_SETTLE_MS размер уточняется;
 - интервал переключения замка Python возвращается к обычному — рывков никто не
   видит, а ждущие замка потоки зря крутили бы процессор;
 - через AWAY_SETTLE_MS, если окно всё ещё в фоне, запоминается, какие страницы
-  памяти программе нужны (снимок рабочего набора).
+  памяти программе нужны (снимок рабочего набора) — на случай, если система всё
+  же отобрала часть (нехватка памяти, отказ в праве на удержание).
 
 Сборки мусора и возврата кучи системе при уходе в фон здесь нет. Раньше они
 были: через 2 минуты и затем каждые 30 минут. Но собирали они единицы объектов
@@ -27,6 +31,8 @@
 Возврат (самый ранний из сигналов: команда Windows «развернуть» ``SC_RESTORE``,
 показ из трея, событие показа Qt):
 - сразу включается приоритет окна над фоновыми потоками;
+- хватка рабочего набора снимается (окно снова на виду, система вправе
+  распоряжаться памятью как обычно);
 - если окно было в фоне заметно долго, в отдельном потоке запрашивается
   подтягивание запомненных страниц большими пачками (PrefetchVirtualMemory) —
   до того, как главный поток начнёт ходить по ним по одной;
@@ -46,8 +52,14 @@ from log.log import log
 from ui.gui_thread_priority import set_gui_gil_priority
 from utils.windows_working_set import (
     PrefetchResult,
+    WorkingSetHold,
     WorkingSetSnapshot,
+    available_physical_bytes,
+    current_working_set_bytes,
+    hold_size_for,
+    hold_working_set,
     prefetch_working_set,
+    release_working_set_hold,
     snapshot_working_set,
 )
 
@@ -72,6 +84,12 @@ def _page_faults() -> int | None:
         return None
 
 
+def _hold_current_working_set() -> WorkingSetHold | None:
+    """Удержать столько рабочего набора, сколько программа держит сейчас (в разумных пределах)."""
+    size = hold_size_for(current_working_set_bytes(), available_physical_bytes())
+    return None if size is None else hold_working_set(size)
+
+
 def _run_in_thread(target: Callable[[], None]) -> None:
     threading.Thread(target=target, name="window-presence", daemon=True).start()
 
@@ -89,6 +107,8 @@ class WindowPresence(QObject):
         apply_priority: Callable[[bool], object] = set_gui_gil_priority,
         take_snapshot: Callable[[], WorkingSetSnapshot | None] = snapshot_working_set,
         prefetch: Callable[[WorkingSetSnapshot | None], PrefetchResult | None] = prefetch_working_set,
+        hold: Callable[[], WorkingSetHold | None] = _hold_current_working_set,
+        release_hold: Callable[[], object] = release_working_set_hold,
         start_worker: Callable[[Callable[[], None]], object] = _run_in_thread,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
@@ -99,6 +119,8 @@ class WindowPresence(QObject):
         self._apply_priority = apply_priority
         self._take_snapshot = take_snapshot
         self._prefetch = prefetch
+        self._hold = hold
+        self._release_hold = release_hold
         self._start_worker = start_worker
         self._clock = clock
 
@@ -107,8 +129,13 @@ class WindowPresence(QObject):
         self._snapshot: WorkingSetSnapshot | None = None
         self._snapshot_lock = threading.Lock()
         self._last_prefetch: PrefetchResult | None = None
+        # Хватку включает и снимает рабочий поток; замок держит их по порядку, а
+        # проверка «окно всё ещё в фоне» внутри замка не даёт хватке пережить возврат.
+        self._hold_lock = threading.Lock()
+        self._held: WorkingSetHold | None = None
         self._return_faults: int | None = None
         self._return_away_s = 0.0
+        self._return_hold: WorkingSetHold | None = None
 
         self._settle_timer = QTimer(self)
         self._settle_timer.setSingleShot(True)
@@ -163,10 +190,30 @@ class WindowPresence(QObject):
         self._report_timer.stop()
         self._safe_apply_priority(False)
         self._settle_timer.start()
+        self._start_worker(self._hold_if_away)
 
     def _on_settle_timeout(self) -> None:
         if self._away:
+            self._start_worker(self._hold_if_away)
             self._start_worker(self._store_snapshot)
+
+    def _hold_if_away(self) -> None:
+        with self._hold_lock:
+            if not self._away:
+                return
+            try:
+                self._held = self._hold()
+            except Exception:
+                self._held = None
+
+    def _release_if_shown(self) -> None:
+        with self._hold_lock:
+            if self._away:
+                return
+            try:
+                self._release_hold()
+            except Exception:
+                pass
 
     def _store_snapshot(self) -> None:
         try:
@@ -185,8 +232,11 @@ class WindowPresence(QObject):
         with self._snapshot_lock:
             snapshot = self._snapshot
         self._last_prefetch = None
+        held, self._held = self._held, None
+        self._return_hold = held
         if snapshot is not None and away_s >= self._min_away_for_prefetch_s:
             self._start_worker(lambda: self._run_prefetch(snapshot))
+        self._start_worker(self._release_if_shown)
         if away_s >= self._min_away_for_prefetch_s:
             self._return_away_s = away_s
             self._return_faults = _page_faults()
@@ -206,8 +256,15 @@ class WindowPresence(QObject):
             pulled = "страницы не подтягивались"
         else:
             pulled = f"подтянуто {prefetch.total_bytes / (1024 * 1024):.0f} МБ за {prefetch.elapsed_ms:.0f} мс"
+        hold = self._return_hold
+        if hold is None:
+            kept = "память не удерживалась"
+        elif hold.ok:
+            kept = f"удержано {hold.bytes / (1024 * 1024):.0f} МБ"
+        else:
+            kept = f"удержать не вышло (код {hold.error})"
         log(
-            f"Окно вернулось из фона ({self._return_away_s:.0f} с): {pulled}; "
+            f"Окно вернулось из фона ({self._return_away_s:.0f} с): {kept}; {pulled}; "
             f"подкачек за {self._report_ms / 1000:.0f} с после возврата: {faults}",
             "INFO",
         )
