@@ -1,8 +1,18 @@
 import threading
+import time
 
 from PyQt6.QtCore import QThread, pyqtSignal
 
+from core.runtime.presence import window_shown
 from winws_runtime.runtime.process_probe import WinwsProcessScan, scan_winws_processes
+
+# Пока окно скрыто (трей, свёрнуто), опрос реже: снимок всех процессов Windows
+# и сигналы окну каждые 2 с будят программу и тянут с диска страницы, которые
+# система уже отобрала, а смотреть на результат некому. Падение winws в трее
+# всё равно замечается за несколько секунд, значок трея обновится.
+HIDDEN_INTERVAL_MS = 8000
+# Как часто пауза проверяет, не вернули ли окно: на виду опрос снова частый.
+_PAUSE_SLICE_S = 1.0
 
 
 class ProcessMonitorThread(QThread):
@@ -17,13 +27,15 @@ class ProcessMonitorThread(QThread):
     checkingStarted = pyqtSignal()                   # Начало проверки
     checkingFinished = pyqtSignal()                  # Конец проверки
 
-    def __init__(self, interval_ms: int = 5000):
+    def __init__(self, interval_ms: int = 5000, hidden_interval_ms: int = HIDDEN_INTERVAL_MS):
         """
         Args:
             interval_ms: Интервал проверки в миллисекундах (по умолчанию 5 сек)
+            hidden_interval_ms: Интервал, пока окно скрыто (не меньше основного)
         """
         super().__init__()
         self.interval_ms   = interval_ms
+        self.hidden_interval_ms = max(int(hidden_interval_ms), int(interval_ms))
         self._running      = True
         # Пауза между проверками ждёт это событие, а не просто спит: остановка
         # будит поток сразу, и его можно дождаться за миллисекунды.
@@ -52,16 +64,21 @@ class ProcessMonitorThread(QThread):
         log("Process-monitor thread started (WinAPI canonical mode)", level="INFO")
 
         while self._running:
+            # Мигание «идёт проверка» нужно только на виду; решаем один раз на
+            # проход, чтобы пара сигналов не разошлась.
+            show_progress = window_shown() is not False
             try:
                 # 🔄 Сигнализируем о начале проверки
-                self.checkingStarted.emit()
-                
+                if show_progress:
+                    self.checkingStarted.emit()
+
                 scan = self._scan_processes_fast()
                 details = scan.canonical_pids
                 is_running = bool(details)
-                
+
                 # 🔄 Сигнализируем об окончании проверки
-                self.checkingFinished.emit()
+                if show_progress:
+                    self.checkingFinished.emit()
 
                 # Если детали изменились — отдаём сигнал в GUI (важно: PID может поменяться без смены bool)
                 if details != self._cur_details:
@@ -83,10 +100,27 @@ class ProcessMonitorThread(QThread):
                 from log.log import log
 
                 log(f"Ошибка в потоке мониторинга: {e}", level="❌ ERROR")
-                self.checkingFinished.emit()  # На случай ошибки тоже завершаем
+                if show_progress:
+                    self.checkingFinished.emit()  # На случай ошибки тоже завершаем
 
-            if self._stop_requested.wait(self.interval_ms / 1000.0):
+            if self._pause_between_scans():
                 break
+
+    def _pause_between_scans(self) -> bool:
+        """Ждёт до следующей проверки. True — просили остановиться.
+
+        На виду пауза ``interval_ms``, при скрытом окне ``hidden_interval_ms``;
+        окно вернули — пауза укорачивается, и проверка идёт сразу по её сроку.
+        """
+        started = time.monotonic()
+        while True:
+            shown = window_shown() is not False
+            interval_s = (self.interval_ms if shown else self.hidden_interval_ms) / 1000.0
+            remaining = interval_s - (time.monotonic() - started)
+            if remaining <= 0:
+                return False
+            if self._stop_requested.wait(min(remaining, _PAUSE_SLICE_S)):
+                return True
 
     # ------------------------ СТАНДАРТНЫЙ STOP ------------------------
     def stop(self):

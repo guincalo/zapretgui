@@ -28,6 +28,20 @@ def handle_native_minimize_command(window, message, *, minimize_to_tray_enabled=
     return handle_minimize_request(window, minimize_to_tray_enabled=minimize_to_tray_enabled)
 
 
+def is_native_minimize_command(message) -> bool:
+    """Команда Windows «свернуть» (кнопка в заголовке, клик по значку в панели задач).
+
+    Приходит до того, как Windows сожмёт рабочный набор свёрнутого окна: самый
+    ранний сигнал ухода, нужный ``ui.window_presence``. Сообщение не «съедается».
+    """
+    if sys.platform != "win32":
+        return False
+    msg = _read_msg(message)
+    if msg is None or int(msg.message) != WM_SYSCOMMAND:
+        return False
+    return (int(msg.wParam) & _SC_COMMAND_MASK) == SC_MINIMIZE
+
+
 def is_native_restore_command(message) -> bool:
     """Команда Windows «развернуть» (клик по окну в панели задач, Alt+Tab).
 
@@ -78,4 +92,5 @@ __all__ = [
     "WM_SYSCOMMAND",
     "handle_minimize_request",
     "handle_native_minimize_command",
+    "is_native_minimize_command",
 ]

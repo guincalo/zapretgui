@@ -9,6 +9,7 @@ from main.window_native_commands import (
     WM_SYSCOMMAND,
     handle_minimize_request,
     handle_native_minimize_command,
+    is_native_minimize_command,
     is_native_restore_command,
 )
 from main.runtime_state import (
@@ -142,6 +143,7 @@ class WindowLifecycleMixin:
 
     def close_to_tray(self) -> bool:
         """Скрывает окно в трей (без выхода из GUI)."""
+        self._note_away_intent()
         return self._require_application_lifecycle().close_to_tray()
 
     def _minimize_to_tray_enabled(self) -> bool:
@@ -161,6 +163,8 @@ class WindowLifecycleMixin:
         elif message_id == WM_SYSCOMMAND:
             if is_native_restore_command(message):
                 self._note_return_intent()
+            elif is_native_minimize_command(message):
+                self._note_away_intent()
             if handle_native_minimize_command(
                 self,
                 message,
@@ -170,6 +174,16 @@ class WindowLifecycleMixin:
         elif message_id in SCREEN_PRESENCE_MESSAGES:
             handle_native_screen_presence(message)
         return super().nativeEvent(event_type, message)
+
+    def _note_away_intent(self) -> None:
+        """Окно сейчас уйдёт в фон: запомнить «горячую» память, пока Windows её не сжала."""
+        presence = getattr(self, "_window_presence", None)
+        if presence is None:
+            return
+        try:
+            presence.away_intent()
+        except Exception as e:
+            log(f"Не удалось подготовить окно к уходу в фон: {e}", "DEBUG")
 
     def _note_return_intent(self) -> None:
         """Окно сейчас вернут из фона: пусть память подтягивается до того, как Qt начнёт рисовать."""
@@ -182,6 +196,7 @@ class WindowLifecycleMixin:
             log(f"Не удалось подготовить окно к возврату из фона: {e}", "DEBUG")
 
     def showMinimized(self) -> None:  # noqa: N802 (Qt override)
+        self._note_away_intent()
         if handle_minimize_request(
             self,
             minimize_to_tray_enabled=self._minimize_to_tray_enabled,

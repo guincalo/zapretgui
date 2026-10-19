@@ -21,7 +21,7 @@ from collections.abc import Callable
 from ctypes import wintypes
 from dataclasses import dataclass
 
-from PyQt6.QtCore import QObject, QTimer
+from PyQt6.QtCore import QEvent, QObject, QTimer
 
 from log.log import log
 
@@ -31,6 +31,7 @@ VK_LBUTTON = 0x01
 KEY_PRESSED_FLAG = 0x8000
 SHELL_DRAG_IMAGE_CLASS = "SysDragImage"
 DEFAULT_POLL_INTERVAL_MS = 120
+_WINDOW_EVENTS = (QEvent.Type.Show, QEvent.Type.Hide, QEvent.Type.WindowStateChange)
 
 
 @dataclass(frozen=True)
@@ -120,17 +121,47 @@ class WindowsDragHoverDetector(QObject):
         self._platform = platform
         self._hovering = False
         self._shell_drag_session = False
+        self._enabled = False
         self._timer = QTimer(self)
         self._timer.setInterval(int(interval_ms))
         self._timer.timeout.connect(self.poll)
+        # Над скрытым или свёрнутым окном переносить файл некуда, а опрос мыши
+        # 8 раз в секунду будит программу в трее и держит в памяти её страницы:
+        # таймер идёт только пока окно на экране.
+        if isinstance(window, QObject):
+            window.installEventFilter(self)
 
     def start(self) -> bool:
         if (self._platform or sys.platform) != "win32":
             return False
-        self._timer.start()
+        self._enabled = True
+        self._sync_timer()
         return True
 
     def stop(self) -> None:
+        self._enabled = False
+        self._timer.stop()
+        self._shell_drag_session = False
+        self._apply_hover_state(False)
+
+    def eventFilter(self, obj, event):  # noqa: N802 (Qt API)
+        if obj is self._window and event.type() in _WINDOW_EVENTS:
+            self._sync_timer()
+        return False
+
+    def _window_on_screen(self) -> bool:
+        try:
+            return bool(self._window.isVisible()) and not bool(self._window.isMinimized())
+        except Exception:
+            return True
+
+    def _sync_timer(self) -> None:
+        if not self._enabled:
+            return
+        if self._window_on_screen():
+            if not self._timer.isActive():
+                self._timer.start()
+            return
         self._timer.stop()
         self._shell_drag_session = False
         self._apply_hover_state(False)

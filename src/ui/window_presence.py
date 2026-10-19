@@ -11,15 +11,23 @@
 
 Теперь одно место знает состояние и делает всё нужное на двух границах.
 
-Уход в фон (свёрнуто или скрыто в трей):
-- сразу в отдельном потоке рабочий набор объявляется «жёстким минимумом»
-  (``hold_working_set``): Windows не отбирает эти страницы, пока окно скрыто, и
-  возврат идёт из памяти, а не с диска. Через AWAY_SETTLE_MS размер уточняется;
+Уход в фон (свёрнуто или скрыто в трей). Самый ранний сигнал — ``away_intent``
+(команда Windows «свернуть», сворачивание в трей): Windows ещё не успела
+сжать рабочий набор свёрнутого окна, поэтому именно сейчас видно, какие
+страницы программе нужны. Раньше это смотрели уже после ухода, когда набор был
+сжат (в журнале пользователя: «память не удерживалась» или удержан обрезок).
+- здесь же запоминается, сколько памяти программа держала на виду (самое
+  большое значение за время показа: ``_hot_bytes``), и снимок нужных страниц;
+- рабочий набор объявляется «жёстким минимумом» (``hold_working_set``) по этому
+  размеру: Windows не отбирает эти страницы, пока окно скрыто, и возврат идёт
+  из памяти, а не с диска. Через AWAY_SETTLE_MS размер уточняется;
 - интервал переключения замка Python возвращается к обычному — рывков никто не
   видит, а ждущие замка потоки зря крутили бы процессор;
-- через AWAY_SETTLE_MS, если окно всё ещё в фоне, запоминается, какие страницы
-  памяти программе нужны (снимок рабочего набора) — на случай, если система всё
-  же отобрала часть (нехватка памяти, отказ в праве на удержание).
+- через AWAY_SETTLE_MS, если окно всё ещё в фоне, снимок берётся ещё раз, но
+  более скудный (уже сжатый) снимок не затирает полный, взятый на виду;
+- если «свернуть» пришло не командой (Win+D и т. п.), сигналом служит событие
+  Qt, а снимок и размер берутся из того, что запомнено через SAMPLE_AFTER_SHOW_MS
+  после показа окна.
 
 Сборки мусора и возврата кучи системе при уходе в фон здесь нет. Раньше они
 были: через 2 минуты и затем каждые 30 минут. Но собирали они единицы объектов
@@ -59,6 +67,7 @@ from utils.windows_working_set import (
     hold_size_for,
     hold_working_set,
     prefetch_working_set,
+    process_page_faults,
     release_working_set_hold,
     snapshot_working_set,
 )
@@ -71,23 +80,18 @@ AWAY_SETTLE_MS = 5 * 1000
 MIN_AWAY_FOR_PREFETCH_S = 20.0
 # Через сколько после возврата писать итог в журнал.
 RETURN_REPORT_MS = 3 * 1000
+# Через сколько после показа окна запомнить, сколько памяти и каких страниц ему
+# нужно (окно уже отрисовано и «прогрелось»), — на случай ухода без команды «свернуть».
+SAMPLE_AFTER_SHOW_MS = 4 * 1000
+# Сколько ждать, что окно, собравшееся уйти, действительно ушло.
+INTENT_CONFIRM_MS = 2 * 1000
 
 _WATCHED_EVENTS = (QEvent.Type.Hide, QEvent.Type.Show, QEvent.Type.WindowStateChange)
 
 
-def _page_faults() -> int | None:
-    try:
-        import psutil
-
-        return int(psutil.Process().memory_info().num_page_faults)
-    except Exception:
-        return None
-
-
-def _hold_current_working_set() -> WorkingSetHold | None:
-    """Удержать столько рабочего набора, сколько программа держит сейчас (в разумных пределах)."""
-    size = hold_size_for(current_working_set_bytes(), available_physical_bytes())
-    return None if size is None else hold_working_set(size)
+# Читается напрямую через WinAPI: раньше здесь подгружался psutil, и его первый
+# импорт читал диск ровно на пути возврата из фона.
+_page_faults = process_page_faults
 
 
 def _run_in_thread(target: Callable[[], None]) -> None:
@@ -103,11 +107,12 @@ class WindowPresence(QObject):
         *,
         settle_ms: int = AWAY_SETTLE_MS,
         report_ms: int = RETURN_REPORT_MS,
+        sample_ms: int = SAMPLE_AFTER_SHOW_MS,
         min_away_for_prefetch_s: float = MIN_AWAY_FOR_PREFETCH_S,
         apply_priority: Callable[[bool], object] = set_gui_gil_priority,
         take_snapshot: Callable[[], WorkingSetSnapshot | None] = snapshot_working_set,
         prefetch: Callable[[WorkingSetSnapshot | None], PrefetchResult | None] = prefetch_working_set,
-        hold: Callable[[], WorkingSetHold | None] = _hold_current_working_set,
+        hold: Callable[[], WorkingSetHold | None] | None = None,
         release_hold: Callable[[], object] = release_working_set_hold,
         start_worker: Callable[[Callable[[], None]], object] = _run_in_thread,
         clock: Callable[[], float] = time.monotonic,
@@ -119,7 +124,9 @@ class WindowPresence(QObject):
         self._apply_priority = apply_priority
         self._take_snapshot = take_snapshot
         self._prefetch = prefetch
-        self._hold = hold
+        # Без своей подмены удерживаем по размеру, запомненному на виду.
+        self._hold = hold if hold is not None else self._hold_hot_set
+        self._hot_bytes = 0
         self._release_hold = release_hold
         self._start_worker = start_worker
         self._clock = clock
@@ -142,6 +149,16 @@ class WindowPresence(QObject):
         self._settle_timer.setInterval(int(settle_ms))
         self._settle_timer.timeout.connect(self._on_settle_timeout)
 
+        self._sample_timer = QTimer(self)
+        self._sample_timer.setSingleShot(True)
+        self._sample_timer.setInterval(int(sample_ms))
+        self._sample_timer.timeout.connect(self._on_sample_timeout)
+
+        self._intent_timer = QTimer(self)
+        self._intent_timer.setSingleShot(True)
+        self._intent_timer.setInterval(INTENT_CONFIRM_MS)
+        self._intent_timer.timeout.connect(self._on_intent_timeout)
+
         self._report_timer = QTimer(self)
         self._report_timer.setSingleShot(True)
         self._report_timer.setInterval(self._report_ms)
@@ -149,6 +166,8 @@ class WindowPresence(QObject):
 
         window.installEventFilter(self)
         self._sync(initial=True)
+        if not self._away:
+            self._sample_timer.start()
 
     # ---- состояние -----------------------------------------------------
 
@@ -182,12 +201,65 @@ class WindowPresence(QObject):
         if self._away:
             self._enter_shown()
 
+    def away_intent(self) -> None:
+        """Окно сейчас уйдёт в фон (команда Windows «свернуть», сворачивание в трей).
+
+        Windows сжимает рабочий набор свёрнутого окна сразу, поэтому защита
+        ставится здесь, пока память на месте: запоминается, сколько программа
+        держала на виду, тут же (в потоке окна, это один быстрый вызов, а фоновый
+        поток мог бы не успеть) ставится удержание, а снимок страниц берётся в
+        фоне — удержание уже не даст набору сжаться. Состояние «в фоне» сам этот
+        сигнал не ставит: сворачивание могло не состояться (трей выключен, окно
+        осталось). Его по-прежнему переключают события Qt; если окно так и не
+        ушло, защита снимается через INTENT_CONFIRM_MS.
+        """
+        if self._away:
+            return
+        self._remember_hot_bytes()
+        with self._hold_lock:
+            try:
+                self._held = self._hold()
+            except Exception:
+                self._held = None
+        self._start_worker(lambda: self._store_snapshot(from_view=True))
+        self._intent_timer.start()
+
+    def _on_intent_timeout(self) -> None:
+        """Окно, которое собралось уйти, осталось на экране: защита больше не нужна."""
+        if not self._away:
+            self._held = None
+            self._start_worker(self._release_if_shown)
+
+    def _remember_hot_bytes(self) -> None:
+        try:
+            current = current_working_set_bytes() or 0
+        except Exception:
+            current = 0
+        self._hot_bytes = max(self._hot_bytes, int(current))
+
+    def _hold_hot_set(self) -> WorkingSetHold | None:
+        """Удержать столько, сколько программа держала на виду (в разумных пределах)."""
+        try:
+            current = current_working_set_bytes() or 0
+        except Exception:
+            current = 0
+        size = hold_size_for(max(int(current), self._hot_bytes), available_physical_bytes())
+        return None if size is None else hold_working_set(size)
+
+    def _on_sample_timeout(self) -> None:
+        if self._away:
+            return
+        self._remember_hot_bytes()
+        self._start_worker(lambda: self._store_snapshot(from_view=True))
+
     # ---- границы --------------------------------------------------------
 
     def _enter_away(self) -> None:
         self._away = True
         self._away_since = self._clock()
         self._report_timer.stop()
+        self._sample_timer.stop()
+        self._intent_timer.stop()
         self._safe_apply_priority(False)
         self._settle_timer.start()
         self._start_worker(self._hold_if_away)
@@ -215,17 +287,27 @@ class WindowPresence(QObject):
             except Exception:
                 pass
 
-    def _store_snapshot(self) -> None:
+    def _store_snapshot(self, from_view: bool = False) -> None:
+        """Запоминает страницы, нужные программе.
+
+        Снимок, взятый на виду, полный. Взятый уже в фоне (Windows успела сжать
+        набор) беднее: он заменяет запомненное, только если не меньше его.
+        """
         try:
             snapshot = self._take_snapshot()
         except Exception:
             snapshot = None
+        if snapshot is None:
+            return
         with self._snapshot_lock:
-            self._snapshot = snapshot
+            current = self._snapshot
+            if from_view or current is None or snapshot.total_bytes >= current.total_bytes:
+                self._snapshot = snapshot
 
     def _enter_shown(self) -> None:
         self._away = False
         self._settle_timer.stop()
+        self._sample_timer.start()
         self._safe_apply_priority(True)
         since, self._away_since = self._away_since, None
         away_s = 0.0 if since is None else max(0.0, self._clock() - since)
@@ -282,8 +364,10 @@ def install_window_presence(window) -> WindowPresence:
 
 __all__ = [
     "AWAY_SETTLE_MS",
+    "INTENT_CONFIRM_MS",
     "MIN_AWAY_FOR_PREFETCH_S",
     "RETURN_REPORT_MS",
+    "SAMPLE_AFTER_SHOW_MS",
     "WindowPresence",
     "install_window_presence",
 ]

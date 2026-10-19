@@ -14,7 +14,7 @@ import time
 from bisect import bisect_right
 
 from PyQt6.QtCore import QEvent, QPoint, QPointF, QRect, QRectF, Qt, QTimer, pyqtSignal
-from PyQt6.QtGui import QColor, QCursor, QFont, QFontMetrics, QGuiApplication, QPainter, QPen
+from PyQt6.QtGui import QColor, QCursor, QFont, QFontMetrics, QGuiApplication, QPainter, QPen, QPixmap
 from PyQt6.QtWidgets import QApplication, QWidget
 
 from ui.popup_menu import VK_LBUTTON, VK_RBUTTON, _global_mouse_button_down
@@ -225,6 +225,23 @@ class TrayMenuPopup(QWidget):
         self.setFocus(Qt.FocusReason.PopupFocusReason)
         self._mouse_was_down = self._any_mouse_button_down()
         self._outside_timer.start()
+
+    def warm_up(self) -> None:
+        """Один раз рисует меню в картинку, на экран не выводя.
+
+        Первое открытие после долгого простоя было медленным: шрифты, их
+        метрики и код рисования подгружались с диска прямо под щелчком по
+        значку (в журнале пользователя меню рисовалось 2–3 с). Заранее
+        прогретое меню открывается из памяти.
+        """
+        self._palette = style.menu_palette()
+        self.open_page(MAIN_PAGE)
+        width = style.WIDTH + 2 * style.SHADOW
+        height = self._content_height() + 2 * style.SHADOW
+        pixmap = QPixmap(width, height)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        self.resize(width, height)
+        self.render(pixmap)
 
     def _available(self) -> QRect:
         screen = QGuiApplication.screenAt(self._anchor) or QGuiApplication.primaryScreen()

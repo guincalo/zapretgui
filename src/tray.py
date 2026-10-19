@@ -401,6 +401,10 @@ class SystemTrayManager:
     """
 
     STOPPED_NOTIFY_DELAY_MS = 1500
+    # Меню собирается и прогревается заранее, когда окно уже построено и
+    # запуск не спешит: иначе первое открытие после долгого простоя читало
+    # шрифты и код рисования с диска прямо под щелчком по значку.
+    PREWARM_MENU_DELAY_MS = 6000
 
     def __init__(self, window_port, icon_path, app_version, *, tray_feature):
         self.window_port = window_port
@@ -437,6 +441,7 @@ class SystemTrayManager:
         self._taskbar_created_message = self._message_window.taskbar_created_message
         self._add_icon()
         self._connect_proxy_status_signal()
+        QTimer.singleShot(self.PREWARM_MENU_DELAY_MS, self.prewarm_menu)
 
     def _load_icon_handle(self, icon_path: str):
         if sys.platform != "win32":
@@ -711,6 +716,17 @@ class SystemTrayManager:
             self._tray_feature.refresh_preset_snapshot()
         except Exception:
             pass
+
+    def prewarm_menu(self) -> None:
+        """Создаёт меню и один раз рисует его в картинку (на экран не выводит)."""
+        try:
+            popup = self._ensure_popup()
+            if popup.isVisible():
+                return
+            popup.set_model(self._menu_model())
+            popup.warm_up()
+        except Exception as e:
+            log(f"Не удалось заранее подготовить меню трея: {e}", "DEBUG")
 
     def _ensure_popup(self):
         if self._popup is None:

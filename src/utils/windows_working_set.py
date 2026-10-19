@@ -46,8 +46,12 @@ HOLD_MIN_BYTES = 24 * _MB
 HOLD_MAX_BYTES = 320 * _MB
 # Запас сверху к тому, что программа держала в момент ухода окна.
 HOLD_MARGIN_BYTES = 12 * _MB
-# Если свободной оперативной памяти меньше этого, ничего не удерживаем: ПК и так тесно.
-HOLD_MIN_AVAILABLE_BYTES = 1024 * _MB
+# Удержание ничего нового не занимает, оно лишь не даёт системе отобрать то, что программа
+# уже держит. Но системе должен остаться запас: если после удержания свободной памяти
+# окажется меньше этого, ничего не удерживаем (ПК и так тесно). Раньше стояла жёсткая
+# отметка «свободно меньше 1 ГБ — не удерживать»: на слабом ПК, где отбор страниц и бьёт
+# сильнее всего, защита не включалась вовсе.
+HOLD_SPARE_BYTES = 256 * _MB
 # Малый минимум, к которому возвращается рабочий набор, когда хватку отпускаем.
 RELEASED_MIN_BYTES = 1 * _MB
 
@@ -197,13 +201,25 @@ def hold_size_for(working_set_bytes: int | None, available_bytes: int | None) ->
     """Сколько удерживать при таком рабочем наборе и такой свободной памяти, либо None — не надо."""
     if not working_set_bytes or working_set_bytes < HOLD_MIN_BYTES:
         return None
-    if available_bytes is not None and available_bytes < HOLD_MIN_AVAILABLE_BYTES:
+    size = min(working_set_bytes + HOLD_MARGIN_BYTES, HOLD_MAX_BYTES)
+    if available_bytes is not None and available_bytes < size + HOLD_SPARE_BYTES:
         return None
-    return min(working_set_bytes + HOLD_MARGIN_BYTES, HOLD_MAX_BYTES)
+    return size
+
+
+def process_page_faults() -> int | None:
+    """Сколько подкачек (всех: мягких и с диска) было у программы с начала. Не Windows или сбой — None."""
+    counters = _process_memory_counters()
+    return None if counters is None else int(counters.PageFaultCount)
 
 
 def current_working_set_bytes() -> int | None:
     """Сколько оперативной памяти программа держит сейчас. Не Windows или сбой — None."""
+    counters = _process_memory_counters()
+    return None if counters is None else int(counters.WorkingSetSize)
+
+
+def _process_memory_counters() -> _ProcessMemoryCounters | None:
     if sys.platform != "win32":
         return None
     try:
@@ -215,7 +231,7 @@ def current_working_set_bytes() -> int | None:
         counters.cb = ctypes.sizeof(counters)
         if not psapi.GetProcessMemoryInfo(kernel32.GetCurrentProcess(), ctypes.byref(counters), counters.cb):
             return None
-        return int(counters.WorkingSetSize)
+        return counters
     except Exception:
         return None
 
@@ -324,8 +340,8 @@ def release_working_set_hold() -> bool:
 __all__ = [
     "HOLD_MARGIN_BYTES",
     "HOLD_MAX_BYTES",
-    "HOLD_MIN_AVAILABLE_BYTES",
     "HOLD_MIN_BYTES",
+    "HOLD_SPARE_BYTES",
     "PAGE_SIZE",
     "PrefetchResult",
     "WorkingSetHold",
@@ -335,6 +351,7 @@ __all__ = [
     "hold_size_for",
     "hold_working_set",
     "prefetch_working_set",
+    "process_page_faults",
     "release_working_set_hold",
     "snapshot_working_set",
 ]

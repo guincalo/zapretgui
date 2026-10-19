@@ -106,6 +106,46 @@ class TrayMenuContractTests(unittest.TestCase):
         popup.set_model(manager._menu_model())
         return popup
 
+    def test_menu_is_built_and_drawn_before_the_first_click(self) -> None:
+        manager, _feature, _port = self._manager(snapshot=self._snapshot())
+
+        manager.prewarm_menu()
+        popup = manager._popup
+        self.addCleanup(popup.deleteLater)
+
+        self.assertIsNotNone(popup)
+        self.assertFalse(popup.isVisible())  # на экран прогрев ничего не выводит
+        # Первый щелчок открывает уже созданное меню, а не строит новое.
+        self.assertIs(manager._ensure_popup(), popup)
+
+    def test_warm_up_really_paints_the_menu(self) -> None:
+        manager, _feature, _port = self._manager(snapshot=self._snapshot())
+        popup = manager._ensure_popup()
+        self.addCleanup(popup.deleteLater)
+        popup.set_model(manager._menu_model())
+
+        with patch.object(type(popup), "paintEvent", autospec=True, side_effect=lambda self_, event: None) as paint:
+            popup.warm_up()
+
+        self.assertTrue(paint.called)
+        self.assertFalse(popup.isVisible())
+
+    def test_prewarm_failure_is_swallowed(self) -> None:
+        manager, _feature, _port = self._manager()
+        manager._create_popup = Mock(side_effect=RuntimeError("нет экрана"))
+
+        manager.prewarm_menu()  # не падает
+
+        self.assertIsNone(manager._popup)
+
+    def test_native_backend_schedules_the_prewarm(self) -> None:
+        import inspect
+
+        import tray
+
+        source = inspect.getsource(tray.SystemTrayManager._create_native_backend)
+        self.assertIn("prewarm_menu", source)
+
     def test_tray_menu_main_action_follows_launch_phase(self) -> None:
         cases = {
             "running": ("Остановить Zapret", True),

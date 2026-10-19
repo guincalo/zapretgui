@@ -69,6 +69,59 @@ class ProcessMonitorNonblockingTests(unittest.TestCase):
                     monitor.terminate()
                     monitor.wait(3000)
 
+    def _paused_for(self, shown_by_second) -> float:
+        """Сколько секунд пауза между проверками, если окно видно/скрыто по секундам."""
+        from winws_runtime.monitoring import process_monitor
+
+        monitor = process_monitor.ProcessMonitorThread(interval_ms=2000, hidden_interval_ms=8000)
+        now = [0.0]
+
+        def wait(timeout=None) -> bool:
+            now[0] += timeout
+            return False
+
+        monitor._stop_requested.wait = wait
+        with (
+            patch.object(process_monitor, "window_shown", lambda: shown_by_second(now[0])),
+            patch.object(process_monitor.time, "monotonic", lambda: now[0]),
+        ):
+            self.assertFalse(monitor._pause_between_scans())
+        return now[0]
+
+    def test_hidden_window_slows_the_scan(self) -> None:
+        self.assertAlmostEqual(self._paused_for(lambda _t: True), 2.0, delta=0.01)
+        self.assertAlmostEqual(self._paused_for(lambda _t: False), 8.0, delta=0.01)
+        # None — окно ещё не показывалось: опрашиваем как на виду.
+        self.assertAlmostEqual(self._paused_for(lambda _t: None), 2.0, delta=0.01)
+
+    def test_returned_window_cuts_the_long_pause_short(self) -> None:
+        # Окно вернули на третьей секунде скрытой паузы: проверка идёт по короткому сроку.
+        self.assertAlmostEqual(self._paused_for(lambda t: t >= 3.0), 3.0, delta=0.01)
+
+    def test_progress_signals_are_silent_while_hidden(self) -> None:
+        from PyQt6.QtCore import QCoreApplication
+
+        from winws_runtime.monitoring import process_monitor
+
+        _app = QCoreApplication.instance() or QCoreApplication([])
+        empty_scan = process_monitor.WinwsProcessScan(canonical_pids={}, foreign_paths={})
+        for shown, expected in ((False, 0), (True, 1)):
+            started: list[int] = []
+            monitor = process_monitor.ProcessMonitorThread(interval_ms=60_000)
+            monitor.checkingStarted.connect(lambda: started.append(1))
+            monitor._pause_between_scans = lambda: True  # один проход и выход
+            with (
+                patch.object(process_monitor, "scan_winws_processes", lambda: empty_scan),
+                patch.object(process_monitor, "window_shown", return_value=shown),
+            ):
+                monitor.run()
+            self.assertEqual(len(started), expected, shown)
+
+    def test_hidden_interval_is_never_shorter_than_the_normal_one(self) -> None:
+        from winws_runtime.monitoring.process_monitor import ProcessMonitorThread
+
+        self.assertEqual(ProcessMonitorThread(interval_ms=9000, hidden_interval_ms=1000).hidden_interval_ms, 9000)
+
     def test_shutdown_waits_for_current_and_retired_monitors(self) -> None:
         from PyQt6.QtCore import QCoreApplication
 

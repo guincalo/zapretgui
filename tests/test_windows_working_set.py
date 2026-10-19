@@ -45,6 +45,10 @@ class OutsideWindowsTests(unittest.TestCase):
         self.assertNotIn("(-1", source)
         self.assertNotIn("c_size_t(-1)", source)
 
+    def test_page_faults_are_unknown_outside_windows(self) -> None:
+        with patch.object(ws.sys, "platform", "linux"):
+            self.assertIsNone(ws.process_page_faults())
+
     def test_hold_and_release_do_nothing_outside_windows(self) -> None:
         with patch.object(ws.sys, "platform", "linux"):
             self.assertIsNone(ws.hold_working_set(100 << 20))
@@ -68,7 +72,14 @@ class HoldSizeTests(unittest.TestCase):
         self.assertIsNone(ws.hold_size_for(ws.HOLD_MIN_BYTES - 1, None))
 
     def test_tight_memory_is_not_made_tighter(self) -> None:
-        self.assertIsNone(ws.hold_size_for(80 * self.MB, ws.HOLD_MIN_AVAILABLE_BYTES - 1))
+        size = 80 * self.MB + ws.HOLD_MARGIN_BYTES
+        self.assertIsNone(ws.hold_size_for(80 * self.MB, size + ws.HOLD_SPARE_BYTES - 1))
+        self.assertEqual(ws.hold_size_for(80 * self.MB, size + ws.HOLD_SPARE_BYTES), size)
+
+    def test_weak_pc_with_under_a_gigabyte_free_is_still_protected(self) -> None:
+        # Раньше «свободно меньше 1 ГБ» отключало защиту именно там, где Windows
+        # отбирает страницы сильнее всего.
+        self.assertIsNotNone(ws.hold_size_for(80 * self.MB, 700 * self.MB))
 
     def test_unknown_free_memory_does_not_block_the_hold(self) -> None:
         self.assertIsNotNone(ws.hold_size_for(80 * self.MB, None))

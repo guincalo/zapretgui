@@ -307,6 +307,142 @@ class WorkingSetHoldTests(unittest.TestCase):
         self.assertIn("удержано 80 МБ", log.call_args.args[0])
 
 
+class EarlyAwayIntentTests(unittest.TestCase):
+    """Windows сжимает набор свёрнутого окна сразу: защита ставится до этого, а не после."""
+
+    def _window(self) -> QWidget:
+        window = QWidget()
+        self.addCleanup(window.deleteLater)
+        window.show()
+        _APP.processEvents()
+        return window
+
+    def _make(self, window, *, snapshots=None):
+        events: list[str] = []
+        queue = list(snapshots or [SNAPSHOT])
+        presence, calls, clock = _make(
+            window,
+            hold=lambda: events.append("hold") or WorkingSetHold(bytes=80 << 20, ok=True, error=0),
+            release_hold=lambda: events.append("release"),
+            take_snapshot=lambda: events.append("snapshot") or (queue.pop(0) if len(queue) > 1 else queue[0]),
+        )
+        events.clear()
+        calls.clear()
+        return presence, events, calls, clock
+
+    def test_intent_holds_and_remembers_pages_before_the_window_leaves(self) -> None:
+        window = self._window()
+        presence, events, calls, _clock = self._make(window)
+
+        presence.away_intent()
+
+        self.assertEqual(events, ["hold", "snapshot"])
+        # Состояние «в фоне» сам сигнал не ставит: сворачивание могло не состояться.
+        self.assertFalse(presence.away)
+        self.assertEqual(calls, [])
+
+    def test_the_late_qt_event_does_not_repeat_the_snapshot_but_keeps_the_hold(self) -> None:
+        window = self._window()
+        presence, events, _calls, _clock = self._make(window)
+        presence.away_intent()
+        events.clear()
+
+        window.hide()
+        _APP.processEvents()
+
+        self.assertTrue(presence.away)
+        self.assertEqual(events, ["hold"])
+
+    def test_window_that_stayed_on_screen_gets_its_protection_removed(self) -> None:
+        window = self._window()
+        presence, events, _calls, _clock = self._make(window)
+        presence.away_intent()
+        events.clear()
+
+        presence._on_intent_timeout()
+
+        self.assertEqual(events, ["release"])
+        self.assertFalse(presence.away)
+
+    def test_window_that_left_is_not_released_by_the_intent_timer(self) -> None:
+        window = self._window()
+        presence, events, _calls, _clock = self._make(window)
+        presence.away_intent()
+        window.hide()
+        _APP.processEvents()
+        events.clear()
+
+        presence._on_intent_timeout()
+
+        self.assertEqual(events, [])
+
+    def test_intent_while_already_away_does_nothing(self) -> None:
+        window = self._window()
+        presence, events, _calls, _clock = self._make(window)
+        window.hide()
+        _APP.processEvents()
+        events.clear()
+
+        presence.away_intent()
+
+        self.assertEqual(events, [])
+
+    def test_poorer_snapshot_taken_after_the_trim_does_not_replace_the_full_one(self) -> None:
+        full = WorkingSetSnapshot(ranges=((0x1000, 0x9000),), total_bytes=0x9000, taken_ms=1.0)
+        trimmed = WorkingSetSnapshot(ranges=((0x1000, 0x1000),), total_bytes=0x1000, taken_ms=1.0)
+        window = self._window()
+        presence, _events, _calls, _clock = self._make(window, snapshots=[full, trimmed])
+
+        presence.away_intent()  # снимок на виду: полный
+        window.hide()
+        _APP.processEvents()
+        presence._on_settle_timeout()  # через 5 с в фоне: набор уже сжат
+
+        self.assertIs(presence._snapshot, full)
+
+    def test_view_snapshot_replaces_an_older_bigger_one(self) -> None:
+        old = WorkingSetSnapshot(ranges=((0x1000, 0x9000),), total_bytes=0x9000, taken_ms=1.0)
+        new = WorkingSetSnapshot(ranges=((0x1000, 0x2000),), total_bytes=0x2000, taken_ms=1.0)
+        window = self._window()
+        presence, _events, _calls, _clock = self._make(window, snapshots=[old, new])
+
+        presence._store_snapshot(from_view=True)
+        presence._store_snapshot(from_view=True)
+
+        self.assertIs(presence._snapshot, new)
+
+    def test_hold_size_follows_the_hot_size_not_the_trimmed_one(self) -> None:
+        window = self._window()
+        presence = WindowPresence(window, start_worker=lambda fn: fn())
+        presence._hot_bytes = 150 << 20
+
+        with (
+            patch.object(window_presence, "current_working_set_bytes", return_value=10 << 20),
+            patch.object(window_presence, "available_physical_bytes", return_value=4096 << 20),
+            patch.object(window_presence, "hold_working_set") as hold,
+        ):
+            presence._hold_hot_set()
+
+        # 10 МБ после сжатия не достойны защиты, а 150 МБ на виду — достойны.
+        self.assertGreaterEqual(hold.call_args.args[0], 150 << 20)
+
+    def test_hot_size_is_remembered_after_the_window_settles_on_screen(self) -> None:
+        window = self._window()
+        presence = WindowPresence(window, start_worker=lambda fn: fn(), take_snapshot=lambda: SNAPSHOT)
+
+        with patch.object(window_presence, "current_working_set_bytes", return_value=90 << 20):
+            presence._on_sample_timeout()
+        with patch.object(window_presence, "current_working_set_bytes", return_value=30 << 20):
+            presence._on_sample_timeout()
+
+        self.assertEqual(presence._hot_bytes, 90 << 20)  # самое большое за время показа
+        self.assertIs(presence._snapshot, SNAPSHOT)
+
+    def test_page_faults_come_from_winapi_not_from_a_late_psutil_import(self) -> None:
+        source = Path(window_presence.__file__).read_text(encoding="utf-8")
+        self.assertNotIn("import psutil", source)
+
+
 class NoMemoryChurnTests(unittest.TestCase):
     def test_going_away_never_walks_the_python_heap_or_trims_the_working_set(self) -> None:
         # Сборка мусора обходит всю кучу и сама тянет с диска страницы, которые
@@ -341,6 +477,35 @@ class NativeRestoreCommandTests(unittest.TestCase):
         source = inspect.getsource(window_lifecycle.WindowLifecycleMixin.nativeEvent)
         self.assertLess(source.index("is_native_restore_command"), source.index("handle_native_minimize_command"))
         self.assertIn("_note_return_intent", source)
+
+    def test_minimize_command_is_recognised_before_qt_handles_it(self) -> None:
+        import inspect
+
+        from main import window_lifecycle
+        from main import window_native_commands as commands
+
+        def message(command: int):
+            fake = Mock()
+            fake.message = commands.WM_SYSCOMMAND
+            fake.wParam = command
+            return fake
+
+        with patch.object(commands.sys, "platform", "win32"), patch.object(commands, "_read_msg", side_effect=message):
+            self.assertTrue(commands.is_native_minimize_command(commands.SC_MINIMIZE))
+            self.assertFalse(commands.is_native_minimize_command(commands.SC_RESTORE))
+
+        source = inspect.getsource(window_lifecycle.WindowLifecycleMixin.nativeEvent)
+        self.assertLess(source.index("is_native_minimize_command"), source.index("handle_native_minimize_command"))
+        self.assertIn("_note_away_intent", source)
+
+    def test_tray_and_minimize_calls_tell_presence_first(self) -> None:
+        import inspect
+
+        from main import window_lifecycle
+
+        for name in ("close_to_tray", "showMinimized"):
+            source = inspect.getsource(getattr(window_lifecycle.WindowLifecycleMixin, name))
+            self.assertIn("_note_away_intent", source, name)
 
     def test_tray_show_tells_presence_first(self) -> None:
         import inspect

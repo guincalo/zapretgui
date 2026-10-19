@@ -240,6 +240,49 @@ class WindowsDragHoverDetectorTests(unittest.TestCase):
         ended.assert_called_once_with()
         self.assertFalse(detector._shell_drag_session)
 
+class HoverPollingFollowsTheWindowTests(unittest.TestCase):
+    """Пока окно скрыто или свёрнуто, опрос мыши не идёт вовсе."""
+
+    def test_poll_timer_runs_only_while_the_window_is_on_screen(self) -> None:
+        import os
+
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PyQt6.QtWidgets import QApplication, QWidget
+
+        from ui.windows_drag_hover_detector import WindowsDragHoverDetector
+
+        app = QApplication.instance() or QApplication([])
+        window = QWidget()
+        self.addCleanup(window.deleteLater)
+        ended: list[int] = []
+        detector = WindowsDragHoverDetector(
+            window,
+            on_hover_start=lambda: None,
+            on_hover_end=lambda: ended.append(1),
+            platform="win32",
+        )
+        self.assertTrue(detector.start())
+        self.assertFalse(detector._timer.isActive())  # окна ещё нет на экране
+
+        window.show()
+        app.processEvents()
+        self.assertTrue(detector._timer.isActive())
+
+        window.hide()
+        app.processEvents()
+        self.assertFalse(detector._timer.isActive())
+
+        window.show()
+        app.processEvents()
+        self.assertTrue(detector._timer.isActive())
+
+        detector.stop()
+        window.hide()
+        window.show()
+        app.processEvents()
+        self.assertFalse(detector._timer.isActive())  # остановленный не оживает
+
+
 
 if __name__ == "__main__":
     unittest.main()
