@@ -3,7 +3,7 @@ import time
 
 from PyQt6.QtCore import QThread, pyqtSignal
 
-from core.runtime.presence import window_shown
+from core.runtime.presence import return_settle_remaining_ms, window_shown
 from winws_runtime.runtime.process_probe import WinwsProcessScan, scan_winws_processes
 
 # Пока окно скрыто (трей, свёрнуто), опрос реже: снимок всех процессов Windows
@@ -114,7 +114,9 @@ class ProcessMonitorThread(QThread):
         """
         started = time.monotonic()
         while True:
-            shown = window_shown() is not False
+            # Первые секунды после возврата из долгого фона окно само тянет память
+            # с диска: частый опрос процессов начинается после них.
+            shown = window_shown() is not False and return_settle_remaining_ms() == 0
             interval_s = (self.interval_ms if shown else self.hidden_interval_ms) / 1000.0
             remaining = interval_s - (time.monotonic() - started)
             if remaining <= 0:

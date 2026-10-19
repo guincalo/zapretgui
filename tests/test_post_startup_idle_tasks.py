@@ -43,6 +43,7 @@ class _World:
         self.mouse_pressed = False
         self.idle_ms: int | None = 10_000
         self.background_busy = False
+        self.return_settle_ms = 0
 
     def build(self) -> IdleUiTaskQueue:
         queue = IdleUiTaskQueue(
@@ -52,6 +53,7 @@ class _World:
             is_background_busy=lambda: self.background_busy,
             is_app_active=lambda: self.app_active,
             mouse_pressed=lambda: self.mouse_pressed,
+            return_settle_ms=lambda: self.return_settle_ms,
             clock=lambda: self.now,
         )
         # Таймер подменён: тест сам решает, когда «сработал» тик, и видит,
@@ -65,6 +67,56 @@ class _World:
 
 def _armed_ms(queue: IdleUiTaskQueue) -> int:
     return int(queue._timer.start.call_args.args[0])
+
+
+class IdleUiTaskQueueReturnSettleTests(unittest.TestCase):
+    """Сразу после возврата окна из долгого фона отложенные задачи ждут."""
+
+    def test_tasks_wait_out_the_settle_time_after_the_window_returns(self) -> None:
+        world = _World()
+        world.return_settle_ms = 7_000
+        queue = world.build()
+        ran: list[str] = []
+        queue.add("page", lambda: ran.append("page"), speculative=True)
+        world.idle_ms = 60_000  # человек давно не трогал мышь: раньше задача шла бы сразу
+
+        queue._on_timer()
+
+        self.assertEqual(ran, [])
+        self.assertEqual(_armed_ms(queue), 7_000)
+
+        world.return_settle_ms = 0
+        queue._on_timer()
+        self.assertEqual(ran, ["page"])
+
+    def test_ordinary_tasks_wait_too_and_short_settle_polls_not_faster_than_busy_poll(self) -> None:
+        world = _World()
+        world.return_settle_ms = 50
+        queue = world.build()
+        ran: list[str] = []
+        queue.add("whats_new", lambda: ran.append("x"))
+
+        queue._on_timer()
+
+        self.assertEqual(ran, [])
+        self.assertEqual(_armed_ms(queue), BUSY_POLL_MS)
+
+    def test_hidden_window_is_not_affected_by_the_settle_time(self) -> None:
+        world = _World()
+        world.shown = False
+        world.return_settle_ms = 9_000
+        queue = world.build()
+        ran: list[str] = []
+        queue.add("update_window", lambda: ran.append("u"), needs_shown_window=False)
+
+        queue._on_timer()
+
+        self.assertEqual(ran, ["u"])
+
+    def test_default_queue_reads_the_shared_presence_state(self) -> None:
+        import inspect
+
+        self.assertIs(inspect.signature(IdleUiTaskQueue.__init__).parameters["return_settle_ms"].default, idle_tasks.return_settle_remaining_ms)
 
 
 class IdleUiTaskQueueBackgroundTests(unittest.TestCase):

@@ -45,6 +45,7 @@ from dataclasses import dataclass
 from PyQt6.QtCore import QCoreApplication, QObject, Qt, QTimer
 from PyQt6.QtGui import QGuiApplication
 
+from core.runtime.presence import return_settle_remaining_ms
 from log.log import log
 from main import startup_audit
 from main.post_startup_threading import gui_build_turn, is_local_lane_busy
@@ -94,6 +95,7 @@ class IdleUiTaskQueue(QObject):
         is_background_busy: Callable[[], bool] = is_local_lane_busy,
         is_app_active: Callable[[], bool] | None = None,
         mouse_pressed: Callable[[], bool] | None = None,
+        return_settle_ms: Callable[[], int] = return_settle_remaining_ms,
         clock: Callable[[], float] = time.monotonic,
         parent: QObject | None = None,
     ) -> None:
@@ -104,6 +106,7 @@ class IdleUiTaskQueue(QObject):
         self._is_background_busy = is_background_busy
         self._is_app_active = is_app_active or _is_app_active
         self._mouse_pressed = mouse_pressed or _is_mouse_pressed
+        self._return_settle_ms = return_settle_ms
         self._clock = clock
         self._tasks: list[_IdleTask] = []
         self._order = 0
@@ -206,6 +209,14 @@ class IdleUiTaskQueue(QObject):
         if not shown:
             # Скрытое окно никто не видит: рывок незаметен, ждать паузы незачем.
             return HIDDEN_POLL_MS if task.needs_shown_window else 0
+        # Окно только что вернулось из долгого фона: первые секунды оно и так
+        # тянет память с диска и строит кадр — сборки «про запас» и прочие
+        # отложенные задачи делят с ним диск и замок Python. Раньше они начинались
+        # сразу и шли подряд (в журнале пользователя шесть страниц по 100–500 мс
+        # в первые секунды после показа: «жёстко лагает после открытия»).
+        settle_ms = int(self._safe(self._return_settle_ms, default=0) or 0)
+        if settle_ms > 0:
+            return max(BUSY_POLL_MS, settle_ms)
         if self._safe(self._mouse_pressed, default=False):
             return BUSY_POLL_MS
         if not self._safe(self._is_app_active, default=True):

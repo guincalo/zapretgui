@@ -69,7 +69,7 @@ class ProcessMonitorNonblockingTests(unittest.TestCase):
                     monitor.terminate()
                     monitor.wait(3000)
 
-    def _paused_for(self, shown_by_second) -> float:
+    def _paused_for(self, shown_by_second, settle_ms: int = 0) -> float:
         """Сколько секунд пауза между проверками, если окно видно/скрыто по секундам."""
         from winws_runtime.monitoring import process_monitor
 
@@ -83,6 +83,7 @@ class ProcessMonitorNonblockingTests(unittest.TestCase):
         monitor._stop_requested.wait = wait
         with (
             patch.object(process_monitor, "window_shown", lambda: shown_by_second(now[0])),
+            patch.object(process_monitor, "return_settle_remaining_ms", lambda: settle_ms),
             patch.object(process_monitor.time, "monotonic", lambda: now[0]),
         ):
             self.assertFalse(monitor._pause_between_scans())
@@ -93,6 +94,10 @@ class ProcessMonitorNonblockingTests(unittest.TestCase):
         self.assertAlmostEqual(self._paused_for(lambda _t: False), 8.0, delta=0.01)
         # None — окно ещё не показывалось: опрашиваем как на виду.
         self.assertAlmostEqual(self._paused_for(lambda _t: None), 2.0, delta=0.01)
+
+    def test_just_returned_window_does_not_wake_the_scan_early(self) -> None:
+        # Первые секунды после долгого фона окно само тянет память с диска.
+        self.assertAlmostEqual(self._paused_for(lambda _t: True, settle_ms=10_000), 8.0, delta=0.01)
 
     def test_returned_window_cuts_the_long_pause_short(self) -> None:
         # Окно вернули на третьей секунде скрытой паузы: проверка идёт по короткому сроку.

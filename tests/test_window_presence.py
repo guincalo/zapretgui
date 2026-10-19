@@ -443,6 +443,64 @@ class EarlyAwayIntentTests(unittest.TestCase):
         self.assertNotIn("import psutil", source)
 
 
+class AwayHoldRefreshTests(unittest.TestCase):
+    """Запуск в трей: хватка берётся рано, потом память растёт — хватка растёт вместе с ней."""
+
+    def _window(self) -> QWidget:
+        window = QWidget()
+        self.addCleanup(window.deleteLater)
+        return window
+
+    def _make(self, window):
+        sizes: list[int] = []
+
+        def hold():
+            size = (len(sizes) + 1) * 100 << 20
+            sizes.append(size)
+            return WorkingSetHold(bytes=size, ok=True, error=0)
+
+        window.show()
+        _APP.processEvents()
+        presence, calls, _clock = _make(window, hold=hold, release_hold=lambda: None)
+        sizes.clear()
+        window.hide()
+        _APP.processEvents()
+        return presence, sizes
+
+    def test_hold_is_raised_when_the_program_grew_while_hidden(self) -> None:
+        window = self._window()
+        presence, sizes = self._make(window)
+        self.assertEqual(sizes, [100 << 20])  # хватка, взятая при уходе
+
+        with patch.object(window_presence, "current_working_set_bytes", return_value=150 << 20):
+            presence._refresh_hold_if_grown()
+
+        self.assertEqual(sizes, [100 << 20, 200 << 20])
+
+    def test_hold_is_not_touched_when_nothing_grew(self) -> None:
+        window = self._window()
+        presence, sizes = self._make(window)
+
+        with patch.object(window_presence, "current_working_set_bytes", return_value=105 << 20):
+            presence._refresh_hold_if_grown()
+
+        self.assertEqual(sizes, [100 << 20])
+
+    def test_refresh_runs_only_while_the_window_is_away(self) -> None:
+        window = self._window()
+        presence, sizes = self._make(window)
+        self.assertTrue(presence._away_refresh_timer.isActive())
+
+        window.show()
+        _APP.processEvents()
+        self.assertFalse(presence._away_refresh_timer.isActive())
+
+        sizes.clear()
+        with patch.object(window_presence, "current_working_set_bytes", return_value=900 << 20):
+            presence._on_away_refresh()  # окно уже на экране: ничего не делает
+        self.assertEqual(sizes, [])
+
+
 class NoMemoryChurnTests(unittest.TestCase):
     def test_going_away_never_walks_the_python_heap_or_trims_the_working_set(self) -> None:
         # Сборка мусора обходит всю кучу и сама тянет с диска страницы, которые
