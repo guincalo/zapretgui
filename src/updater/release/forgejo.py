@@ -30,6 +30,7 @@ import requests
 
 from log.log import log
 from utils.https_dns_fallback import request_with_dns_fallback
+from zapret_update import mirrors as git_mirrors
 from zapret_update.manifest import MANIFEST_NAME, SIGNATURE_NAME
 
 from ..channel_utils import is_dev_release_asset_name, normalize_update_channel
@@ -46,6 +47,12 @@ FORGEJO_REPOSITORY_API_URL = f"{FORGEJO_ORIGIN}/api/v1/repos/{FORGEJO_REPOSITORY
 FORGEJO_RELEASE_DOWNLOAD_PREFIX = f"/{FORGEJO_REPOSITORY}/releases/download/"
 FORGEJO_RELEASE_PAGE_PREFIX = f"{FORGEJO_ORIGIN}/{FORGEJO_REPOSITORY}/releases/tag/"
 FORGEJO_SOURCE = "Forgejo"
+# Основное имя git.zapret.moe режут по TLS; тот же Forgejo открывается под
+# зеркалами git2, git3, … (список имён отдаёт сам сервер). Обмен идёт под первым
+# открытым именем, ссылки для человека остаются на основном.
+_MIRROR_LIST_TIMEOUT = (3, 3)
+# Дольше этого перебор имён не идёт: общий срок источника задаёт resolver.
+_MIRROR_ROUND_BUDGET_S = 14.0
 RELEASES_PAGE_LIMIT = 50
 MAX_RELEASE_PAGES = 4
 MAX_SIDECAR_BYTES = 4096
@@ -64,7 +71,7 @@ def _trusted_release_asset_url(url: str, *, tag_name: str, file_name: str) -> bo
         return False
     if (
         parsed.scheme != "https"
-        or parsed.hostname != FORGEJO_HOST
+        or not git_mirrors.is_git_host(parsed.hostname)
         or parsed.port is not None
         or parsed.username is not None
         or parsed.password is not None
@@ -92,7 +99,30 @@ def _parse_sha256_sidecar(text: str, *, expected_name: str) -> str:
     return match.group(1).lower()
 
 
-def _get(session: requests.Session, url: str, *, accept: str) -> requests.Response:
+def _fetch_mirror_list(url: str) -> bytes | None:
+    """Короткий запрос списка имён сервера: одна попытка, без повторов."""
+    session = new_session()
+    try:
+        response = request_with_dns_fallback(
+            session, "GET", url, headers={"Accept": "application/json"}, timeout=_MIRROR_LIST_TIMEOUT, verify=True
+        )
+        return response.content if response.status_code == 200 else None
+    finally:
+        session.close()
+
+
+_MIRRORS = git_mirrors.MirrorList(_fetch_mirror_list)
+
+
+def _should_try_next_name(exc: BaseException) -> bool:
+    """Сбой, от которого помогает другое имя того же сервера: сеть, TLS, ответ 5xx."""
+    if isinstance(exc, requests.HTTPError):
+        status = getattr(exc.response, "status_code", 0) or 0
+        return status >= 500 or status == 429
+    return isinstance(exc, (requests.ConnectionError, requests.Timeout, OSError))
+
+
+def _get_once(session: requests.Session, url: str, *, accept: str) -> requests.Response:
     response = request_with_dns_fallback(
         session,
         "GET",
@@ -103,6 +133,29 @@ def _get(session: requests.Session, url: str, *, accept: str) -> requests.Respon
     )
     response.raise_for_status()
     return response
+
+
+def _get(session: requests.Session, url: str, *, accept: str) -> requests.Response:
+    """GET к Forgejo под первым открытым именем сервера (основное режут по TLS)."""
+    if not git_mirrors.is_git_host(git_mirrors.host_of(url)):
+        return _get_once(session, url, accept=accept)
+    started = time.monotonic()
+    last_error: BaseException | None = None
+    for host in _MIRRORS.hosts():
+        try:
+            response = _get_once(session, git_mirrors.with_host(url, host), accept=accept)
+        except Exception as exc:
+            if not _should_try_next_name(exc):
+                raise
+            last_error = exc
+            if time.monotonic() - started >= _MIRROR_ROUND_BUDGET_S:
+                break
+            continue
+        _MIRRORS.remember(host)
+        return response
+    # Ни одно имя не ответило: список имён мог устареть.
+    _MIRRORS.forget()
+    raise last_error if last_error is not None else ForgejoReleaseError("нет ни одного имени сервера")
 
 
 def _matches_channel(release: dict[str, Any], exe_name: str, channel: str) -> bool:
