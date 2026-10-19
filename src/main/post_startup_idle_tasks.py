@@ -20,8 +20,15 @@
   раза дольше (72 мс → 113 мс рядом с одним, 254 мс рядом с тремя; замер на
   win10), а окно на это время замирает. Пока страница собирается, дорожка в
   свою очередь не начинает следующую задачу;
-* пока окно свёрнуто или убрано в трей, страницы не строятся вовсе: их никто
-  не видит, а память и процессор при входе в Windows нужны другим.
+* пока окно свёрнуто или убрано в трей, страницы «про запас» ждут: память и
+  процессор при входе в Windows нужны другим. Но запуск в трей не должен
+  означать, что первое открытие окна построит всё разом (в журнале 21.1.7.183:
+  первый показ после трея — 5,6 с замирания, шесть страниц по 100–500 мс), и
+  код, который ни разу не выполнялся, никакое удержание памяти не сохранит.
+  Поэтому через HIDDEN_WARM_AFTER_S после старта, когда человек за компьютером
+  давно ничего не делает (HIDDEN_WARM_IDLE_MS), такие страницы собираются и при
+  скрытом окне — по одной, с паузой HIDDEN_WARM_GAP_MS между ними. Это
+  решение пользователя от 2026-10-20 (цена: около 50–80 МБ памяти в трее).
 
 Страница, которую пользователь открыл раньше очереди, строится как обычно —
 по клику; задача очереди для неё превращается в пустую.
@@ -63,6 +70,12 @@ TASK_GAP_MS = 400
 BUSY_POLL_MS = 200
 # Пока окно скрыто, спешить некуда — проверяем редко, чтобы не будить процесс.
 HIDDEN_POLL_MS = 2_000
+# Скрытое окно: страницы про запас собираются не раньше чем через столько после
+# старта, только когда человек не трогал мышь и клавиатуру столько же, и с такой
+# паузой между сборками (чтобы не занимать диск и процессор в трее надолго).
+HIDDEN_WARM_AFTER_S = 120.0
+HIDDEN_WARM_IDLE_MS = 60_000
+HIDDEN_WARM_GAP_MS = 3_000
 # Сколько человек должен не трогать мышь и клавиатуру, чтобы страницу можно
 # было собрать про запас при открытом и активном окне: он, скорее всего, отошёл.
 SPECULATIVE_IDLE_MS = 20_000
@@ -108,6 +121,7 @@ class IdleUiTaskQueue(QObject):
         self._mouse_pressed = mouse_pressed or _is_mouse_pressed
         self._return_settle_ms = return_settle_ms
         self._clock = clock
+        self._started_at = clock()
         self._tasks: list[_IdleTask] = []
         self._order = 0
         self._last_task_ms = 0.0
@@ -192,7 +206,9 @@ class IdleUiTaskQueue(QObject):
             self._tasks.pop(index)
             self._run(task)
             if self._tasks:
-                self._arm(max(TASK_GAP_MS, self._ms_until(self._tasks[0].ready_at)))
+                hidden = not self._safe(self._is_window_shown, default=True)
+                gap_ms = HIDDEN_WARM_GAP_MS if hidden else TASK_GAP_MS
+                self._arm(max(gap_ms, self._ms_until(self._tasks[0].ready_at)))
             return
         if next_check_ms is not None:
             self._arm(next_check_ms)
@@ -207,8 +223,12 @@ class IdleUiTaskQueue(QObject):
             return BUSY_POLL_MS
         shown = self._safe(self._is_window_shown, default=True)
         if not shown:
-            # Скрытое окно никто не видит: рывок незаметен, ждать паузы незачем.
-            return HIDDEN_POLL_MS if task.needs_shown_window else 0
+            if not task.needs_shown_window:
+                # Скрытое окно никто не видит: рывок незаметен, ждать паузы незачем.
+                return 0
+            if task.speculative and self._hidden_warm_allowed():
+                return 0
+            return HIDDEN_POLL_MS
         # Окно только что вернулось из долгого фона: первые секунды оно и так
         # тянет память с диска и строит кадр — сборки «про запас» и прочие
         # отложенные задачи делят с ним диск и замок Python. Раньше они начинались
@@ -230,6 +250,13 @@ class IdleUiTaskQueue(QObject):
             # Страница соберётся по щелчку или когда он отойдёт.
             return 0 if int(idle) >= SPECULATIVE_IDLE_MS else SPECULATIVE_POLL_MS
         return 0 if int(idle) >= self.required_idle_ms() else BUSY_POLL_MS
+
+    def _hidden_warm_allowed(self) -> bool:
+        """Можно ли собрать страницу про запас при скрытом окне: давно после старта и человек давно ушёл."""
+        if self._clock() - self._started_at < HIDDEN_WARM_AFTER_S:
+            return False
+        idle = self._safe(self._idle_ms, default=None)
+        return idle is not None and int(idle) >= HIDDEN_WARM_IDLE_MS
 
     def _run(self, task: _IdleTask) -> None:
         startup_audit.audit_timer_fired(task.name, 0)
@@ -282,6 +309,9 @@ __all__ = [
     "BACKGROUND_WAIT_MAX_MS",
     "BUSY_POLL_MS",
     "HIDDEN_POLL_MS",
+    "HIDDEN_WARM_AFTER_S",
+    "HIDDEN_WARM_GAP_MS",
+    "HIDDEN_WARM_IDLE_MS",
     "IDLE_AFTER_TASK_FACTOR",
     "IDLE_REQUIRED_MAX_MS",
     "IDLE_REQUIRED_MS",

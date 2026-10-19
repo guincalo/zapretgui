@@ -20,6 +20,9 @@ from main.post_startup_idle_tasks import (  # noqa: E402
     SPECULATIVE_POLL_MS,
     BUSY_POLL_MS,
     HIDDEN_POLL_MS,
+    HIDDEN_WARM_AFTER_S,
+    HIDDEN_WARM_GAP_MS,
+    HIDDEN_WARM_IDLE_MS,
     IDLE_REQUIRED_MAX_MS,
     IDLE_REQUIRED_MS,
     TASK_GAP_MS,
@@ -67,6 +70,77 @@ class _World:
 
 def _armed_ms(queue: IdleUiTaskQueue) -> int:
     return int(queue._timer.start.call_args.args[0])
+
+
+class IdleUiTaskQueueHiddenWarmupTests(unittest.TestCase):
+    """Запуск в трей: страницы про запас собираются и при скрытом окне, но тихо и один раз."""
+
+    def _queue(self, world: _World, *names: str):
+        world.shown = False
+        queue = world.build()
+        ran: list[str] = []
+        for name in names:
+            queue.add(name, lambda name=name: ran.append(name), speculative=True)
+        return queue, ran
+
+    def test_hidden_window_builds_nothing_during_the_first_two_minutes(self) -> None:
+        world = _World()
+        world.idle_ms = 10 * 60_000
+        queue, ran = self._queue(world, "page")
+        world.advance(int(HIDDEN_WARM_AFTER_S * 1000) - 1_000)
+
+        queue._on_timer()
+
+        self.assertEqual(ran, [])
+        self.assertEqual(_armed_ms(queue), HIDDEN_POLL_MS)
+
+    def test_page_is_built_when_hidden_long_enough_and_the_user_is_away(self) -> None:
+        world = _World()
+        world.idle_ms = HIDDEN_WARM_IDLE_MS
+        queue, ran = self._queue(world, "page")
+        world.advance(int(HIDDEN_WARM_AFTER_S * 1000) + 1)
+
+        queue._on_timer()
+
+        self.assertEqual(ran, ["page"])
+
+    def test_page_waits_while_the_user_works_even_with_a_hidden_window(self) -> None:
+        world = _World()
+        world.idle_ms = HIDDEN_WARM_IDLE_MS - 1
+        queue, ran = self._queue(world, "page")
+        world.advance(int(HIDDEN_WARM_AFTER_S * 1000) + 1)
+
+        queue._on_timer()
+
+        self.assertEqual(ran, [])
+
+        world.idle_ms = None  # время простоя неизвестно: ничего не строим втихую
+        queue._on_timer()
+        self.assertEqual(ran, [])
+
+    def test_pages_are_built_one_by_one_with_a_long_pause(self) -> None:
+        world = _World()
+        world.idle_ms = 10 * 60_000
+        queue, ran = self._queue(world, "one", "two")
+        world.advance(int(HIDDEN_WARM_AFTER_S * 1000) + 1)
+
+        queue._on_timer()
+
+        self.assertEqual(ran, ["one"])
+        self.assertGreaterEqual(_armed_ms(queue), HIDDEN_WARM_GAP_MS)
+
+    def test_a_task_that_is_not_a_spare_page_still_waits_for_the_window(self) -> None:
+        world = _World()
+        world.idle_ms = 10 * 60_000
+        world.shown = False
+        queue = world.build()
+        ran: list[str] = []
+        queue.add("ordinary", lambda: ran.append("x"))  # не «про запас»: нужна видимому окну
+        world.advance(int(HIDDEN_WARM_AFTER_S * 1000) + 1)
+
+        queue._on_timer()
+
+        self.assertEqual(ran, [])
 
 
 class IdleUiTaskQueueReturnSettleTests(unittest.TestCase):
