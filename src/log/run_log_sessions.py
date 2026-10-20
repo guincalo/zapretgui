@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import threading
 from pathlib import Path
 from typing import TextIO
 
 from utils.exit_steps import register_exit_step
+
+logger = logging.getLogger(__name__)
 
 
 class RunLogSessionRegistry:
@@ -39,6 +42,7 @@ class RunLogSessionRegistry:
                 self._handles[key] = handle
                 return True
             except Exception:
+                logger.warning("Не удалось открыть журнал запуска: %s", file_path, exc_info=True)
                 return False
 
     def append(self, path: str | os.PathLike[str] | None, text: str) -> None:

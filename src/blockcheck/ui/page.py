@@ -822,6 +822,8 @@ class BlockcheckPage(BasePage):
         if self._run_runtime.is_running() or self._cleanup_in_progress:
             return
         self._last_report = None
+        # Отчёт прошлого запуска не должен уйти в обращение, если у этого запуска сохранить отчёт не вышло.
+        self._run_log_file = None
         self._report_lines = []
         self._summary_panel.set_pending()
         self._drop_partial()

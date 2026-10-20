@@ -484,6 +484,9 @@ def summarize_service(
             advice = _advice_for(
                 states, zapret_running=zapret_running, cert_cause=cause, kind=_leading_kind(secondary_broken)
             )
+            if stale and ADVICE_HOSTS_STALE not in advice:
+                # Нерабочий адрес в hosts ломает сайт в браузере и при другом сломанном адресе.
+                advice = advice + (ADVICE_HOSTS_STALE,)
         if spoofed and _ADVICE_DNS not in advice:
             advice = advice + (_ADVICE_DNS,)
         return ServiceVerdict(level, headline, advice, dns_note, own_kind or _leading_kind(secondary_broken))

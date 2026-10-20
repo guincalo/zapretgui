@@ -962,6 +962,9 @@ class StrategySearch:
                             attempts,
                             "без обхода цель тоже открылась — сеть нестабильна, успех не засчитан",
                         )
+                # Stop в последней пробе: она провалилась из-за отмены, а не потому, что цель закрыта.
+                if self.cancelled:
+                    return _StrategyRun(rules.VERDICT_CANCELLED, attempts)
             return _StrategyRun(verdict, attempts, reason)
         return _StrategyRun(rules.VERDICT_CRASH, [], crash_reason or "winws2 падает при запуске")
 

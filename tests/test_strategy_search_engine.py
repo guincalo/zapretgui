@@ -411,6 +411,26 @@ class StrategyVerdictTests(unittest.TestCase):
         self.assertEqual(events.results[0].verdict, rules.VERDICT_NOT_COUNTED)
         self.assertFalse(events.results[0].success)
 
+    def test_stop_during_last_control_probe_does_not_record_a_working_strategy(self) -> None:
+        state = {"flipped": False, "controls": 0}
+        events = FakeEvents()
+        events.is_cancelled = lambda: state["controls"] >= 2
+
+        def network(running, _number):
+            if running == "good":
+                state["flipped"] = True
+                return OK
+            if running is None and state["flipped"]:
+                state["controls"] += 1  # проба «без обхода»; на второй нажали «Стоп», она оборвана
+            return RESET
+
+        env = FakeEnv(network=network, candidates=[cand("good")])
+        report, events = run(env, events)
+
+        self.assertTrue(report.cancelled)
+        self.assertEqual(report.working_strategies, [])
+        self.assertEqual(events.results, [])
+
     def test_winws2_crash_during_probe_is_retried_not_counted_as_failure(self) -> None:
         env = FakeEnv(network=blocked_unless("good"), candidates=[cand("good")])
         env.die_during_probe["good"] = 1

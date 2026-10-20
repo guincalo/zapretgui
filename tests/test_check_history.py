@@ -406,6 +406,22 @@ class SingleReportFileTests(unittest.TestCase):
             self.assertEqual(report["text"][:2], ["строка первая", "строка вторая"])
             self.assertEqual((remembered, announced), ([], [path]))
 
+    def test_failed_write_keeps_the_old_report_whole_and_leaves_no_temp_file(self) -> None:
+        import tempfile
+
+        from blockcheck import commands
+
+        with tempfile.TemporaryDirectory() as folder:
+            path = str(Path(folder) / "blockcheck_run_1_full.json")
+            self.assertEqual(commands.save_blockcheck_report({"scope": "full", "text": ["старый"]}, path), path)
+
+            with patch("blockcheck.commands.os.replace", side_effect=OSError("disk full")):
+                self.assertEqual(commands.save_blockcheck_report({"scope": "full", "text": ["новый"]}, path), "")
+
+            # Оборванная запись не портит отчёт, лежавший на этом месте, и не оставляет мусора.
+            self.assertEqual(commands.load_past_blockcheck_report(path)["text"], ["старый"])
+            self.assertEqual(sorted(item.name for item in Path(folder).iterdir()), ["blockcheck_run_1_full.json"])
+
     def test_saved_file_is_read_back_as_a_past_report(self) -> None:
         import tempfile
 

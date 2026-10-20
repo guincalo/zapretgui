@@ -19,6 +19,7 @@ from diagnostics.tls_probe import (
 )
 from utils.chrome_https import chrome_get
 from diagnostics.verdict import (
+    ADVICE_HOSTS_STALE,
     DnsState,
     Level,
     ReachState,
@@ -1633,6 +1634,19 @@ class EngineMixedAnswerTests(unittest.TestCase):
         self.assertIn("hosts", verdict.headline)
         self.assertTrue(any("hosts" in item for item in verdict.advice))
         self.assertFalse(any("антивирус" in item for item in verdict.advice))
+
+    def test_stale_hosts_advice_is_kept_when_another_address_is_blocked_too(self) -> None:
+        verdict = summarize_service(
+            "Discord",
+            [
+                TargetOutcome("discord.com", "сайт", ReachState.OK, DnsState.LOCAL, main=True, hosts_stale=True),
+                TargetOutcome("cdn.discordapp.com", "картинки", ReachState.DPI, DnsState.OK),
+            ],
+            zapret_running=True,
+        )
+
+        self.assertIn("не работают картинки", verdict.headline)
+        self.assertIn(ADVICE_HOSTS_STALE, verdict.advice)
 
     def test_user_domains_only_in_all_sites_scope(self) -> None:
         self.assertNotIn("user:example.org", engine.build_services("main", ["example.org"]))

@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 from datetime import datetime
+import logging
 import os
 
 from log.log import global_logger
 from log.run_log_sessions import run_log_sessions
+
+logger = logging.getLogger(__name__)
 
 
 def load_page_initial_state():
@@ -70,11 +73,19 @@ def save_blockcheck_report(report: dict, path: str | None, *, entry: dict | None
     except Exception:
         APP_VERSION = ""
     entry = entry or {"time": datetime.now().isoformat(timespec="seconds"), "title": "", "level": "unknown"}
+    temp_path = f"{path}.tmp"
     try:
         os.makedirs(os.path.dirname(str(path)) or ".", exist_ok=True)
-        with open(path, "w", encoding="utf-8") as stream:
+        # Через временный файл: оборванная запись не оставит половину JSON на месте отчёта.
+        with open(temp_path, "w", encoding="utf-8") as stream:
             stream.write(history.report_json(report, entry, app_version=str(APP_VERSION)))
+        os.replace(temp_path, path)
     except OSError:
+        logger.warning("Не удалось сохранить отчёт BlockCheck: %s", path, exc_info=True)
+        try:
+            os.remove(temp_path)
+        except OSError:
+            pass
         return ""
     return str(path)
 
