@@ -1075,6 +1075,8 @@ class StrategySearch:
                 "transfer": run.transfer,
                 # Какой хост открывали: у googlevideo.com это видеосервер rr…, а не сама цель.
                 "probe_host": self._target.host,
+                # Остальные имена сервиса (хост для пробы): после «Применить» открываться должны и они.
+                "companions": [host for host, _addresses in self._target.companions],
             },
         )
 

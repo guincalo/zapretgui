@@ -41,8 +41,27 @@ class ApplyCheck:
     text: str = ""
 
 
-def check_site(host: str, *, cancel) -> ApplyCheck:
-    """Открыть сайт так же, как подбор: адреса из разных подсетей, объём по соединению."""
+def check_companions(hosts, *, cancel) -> ApplyCheck:
+    """Остальные имена сервиса (видеосервер, превью) открываются так же, как и сам сайт. ``CHECK_OK`` — все."""
+    from blockcheck.strategy_search import probes
+    from blockcheck.strategy_search import verdict as rules
+
+    for host in hosts:
+        addresses, error = probes.resolve_target_addresses(host, 443)
+        stubs = set(probes.stub_addresses(addresses))
+        picked = [address for address in addresses if address not in stubs][:2]
+        if error or not picked:
+            continue
+        outcomes = probes.probe_https_addresses(host, picked, cancel=cancel)
+        if cancel.cancelled:
+            return ApplyCheck(CHECK_SKIPPED, "проверку остановили")
+        if not rules.attempt_passed(outcomes):
+            return ApplyCheck(CHECK_FAILED, f"{host}: {rules.attempt_reason(outcomes)}")
+    return ApplyCheck(CHECK_OK)
+
+
+def check_site(host: str, *, cancel, companions=()) -> ApplyCheck:
+    """Открыть сайт так же, как подбор: адреса из разных подсетей, объём по соединению; затем остальные имена сервиса."""
     from blockcheck.strategy_search import probes
     from blockcheck.strategy_search import verdict as rules
 
@@ -62,6 +81,9 @@ def check_site(host: str, *, cancel) -> ApplyCheck:
     if cancel.cancelled:
         return ApplyCheck(CHECK_SKIPPED, "проверку остановили")
     if rules.attempt_passed(outcomes):
+        other = check_companions(companions, cancel=cancel)
+        if other.code != CHECK_OK:
+            return other
         unknown = any(outcome.volume == rules.VOLUME_UNKNOWN for outcome in outcomes)
         return ApplyCheck(CHECK_OK, "объём не проверен: сайт отвечает коротко" if unknown else "")
     return ApplyCheck(CHECK_FAILED, rules.attempt_reason(outcomes))
@@ -84,7 +106,7 @@ def wait_until_running(is_running: Callable[[], bool], *, restarting: bool, slee
     return False
 
 
-def run_apply_check(host: str, *, is_running, restarting: bool, cancel, open_browser=None) -> ApplyCheck:
+def run_apply_check(host: str, *, is_running, restarting: bool, cancel, open_browser=None, companions=()) -> ApplyCheck:
     """Дождаться Zapret и проверить сайт; при провале — ещё раз чуть позже; открылся — и в браузере.
 
     Второй заход нужен, если работающий Zapret перечитал пресет позже, чем мы
@@ -92,11 +114,11 @@ def run_apply_check(host: str, *, is_running, restarting: bool, cancel, open_bro
     """
     if not wait_until_running(is_running, restarting=restarting, sleep=cancel.sleep, cancelled=lambda: cancel.cancelled):
         return ApplyCheck(CHECK_SKIPPED, "Zapret не запустился")
-    check = check_site(host, cancel=cancel)
+    check = check_site(host, cancel=cancel, companions=companions)
     if check.code == CHECK_FAILED:
         if not cancel.sleep(RESTART_SETTLE_SECONDS):
             return ApplyCheck(CHECK_SKIPPED, "проверку остановили")
-        check = check_site(host, cancel=cancel)
+        check = check_site(host, cancel=cancel, companions=companions)
     if check.code != CHECK_OK:
         return check
     return _confirm_in_browser(host, check, cancel=cancel, open_browser=open_browser)
@@ -122,13 +144,14 @@ class StrategyApplyCheckWorker(QThread):
 
     completed = pyqtSignal(str, str, str)  # host, code, text
 
-    def __init__(self, host: str, *, is_running, restarting: bool, parent=None) -> None:
+    def __init__(self, host: str, *, is_running, restarting: bool, companions=(), parent=None) -> None:
         super().__init__(parent)
         from utils.socket_cancel import SocketCancel
 
         self._host = str(host or "")
         self._is_running = is_running
         self._restarting = bool(restarting)
+        self._companions = tuple(str(name) for name in companions or ())
         self._cancel = SocketCancel()
 
     def cancel(self) -> None:
@@ -136,7 +159,9 @@ class StrategyApplyCheckWorker(QThread):
 
     def run(self) -> None:
         try:
-            check = run_apply_check(self._host, is_running=self._is_running, restarting=self._restarting, cancel=self._cancel)
+            check = run_apply_check(
+                self._host, is_running=self._is_running, restarting=self._restarting, cancel=self._cancel, companions=self._companions
+            )
         except Exception as error:  # проверка — подсказка, её сбой не должен ронять окно
             check = ApplyCheck(CHECK_SKIPPED, str(error))
         self.completed.emit(self._host, check.code, check.text)

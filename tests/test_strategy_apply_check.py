@@ -98,6 +98,41 @@ class CheckSiteTests(unittest.TestCase):
         self.assertIn("16 КБ", result.text)
 
 
+class CompanionTests(unittest.TestCase):
+    """Сервис из нескольких имён: после «Применить» открываться должны все."""
+
+    def _run(self, answers: dict):
+        asked: list[str] = []
+
+        def probe(host, addresses, cancel):
+            asked.append(host)
+            return answers[host]
+
+        with (
+            patch("blockcheck.strategy_search.probes.resolve_target_addresses", return_value=(["1.1.1.1", "1.1.2.1"], "")),
+            patch("blockcheck.strategy_search.probes.probe_https_addresses", side_effect=probe),
+        ):
+            return check.check_site("www.youtube.com", cancel=SocketCancel(), companions=("rr1---sn-x.googlevideo.com", "i.ytimg.com")), asked
+
+    def test_page_open_but_video_server_closed_is_a_failure_naming_it(self) -> None:
+        result, asked = self._run({"www.youtube.com": [OK], "rr1---sn-x.googlevideo.com": [RESET], "i.ytimg.com": [OK]})
+
+        self.assertEqual(result.code, check.CHECK_FAILED)
+        self.assertTrue(result.text.startswith("rr1---sn-x.googlevideo.com:"))
+        # Дальше первого закрытого имени не идём.
+        self.assertEqual(asked, ["www.youtube.com", "rr1---sn-x.googlevideo.com"])
+
+    def test_every_name_open_is_ok(self) -> None:
+        result, asked = self._run({"www.youtube.com": [OK], "rr1---sn-x.googlevideo.com": [OK], "i.ytimg.com": [OK]})
+
+        self.assertEqual(result.code, check.CHECK_OK)
+        self.assertEqual(len(asked), 3)
+
+    def test_name_that_cannot_be_resolved_is_skipped(self) -> None:
+        with patch("blockcheck.strategy_search.probes.resolve_target_addresses", return_value=([], "нет адреса")):
+            self.assertEqual(check.check_companions(("a.example",), cancel=SocketCancel()).code, check.CHECK_OK)
+
+
 class MessageTests(unittest.TestCase):
     def test_messages(self) -> None:
         kind, _title, body = check.apply_check_message("discord.com", check.CHECK_OK, "")

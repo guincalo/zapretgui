@@ -404,6 +404,8 @@ class CompanionTests(unittest.TestCase):
 
         both = next(result for result in events.results if result.strategy_id == "both")
         self.assertIn("--hostlist-domains=youtube.com,googlevideo.com", both.apply_lines)
+        # «Применить» проверит после запуска и остальные имена сервиса.
+        self.assertEqual(both.raw_data["companions"], ["video.example.com"])
 
     def test_open_page_with_a_closed_video_server_is_still_searched(self) -> None:
         env = self._env(lambda running, _n: OK, lambda running: OK if running == "both" else RESET)

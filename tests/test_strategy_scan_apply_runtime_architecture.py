@@ -84,6 +84,7 @@ class StrategyScanApplyRuntimeArchitectureTests(unittest.TestCase):
                 "apply_lines": ("--b",),
                 # Сайт для проверки после «Применить»: пусто, когда результат его не назвал.
                 "probe_host": "",
+                "companions": (),
             },
         )
 

@@ -98,6 +98,7 @@ class StrategyScanPage(BasePage):
         self._zapret_is_running = zapret_is_running
         self._apply_check_worker = None
         self._apply_check_host = ""
+        self._apply_check_companions: tuple[str, ...] = ()
         super().__init__(
             title=tr_catalog("page.blockcheck_public.title", default="Подбор стратегии"),
             subtitle=tr_catalog("page.blockcheck_public.subtitle",
@@ -1190,6 +1191,7 @@ class StrategyScanPage(BasePage):
             "scan_protocol": str(getattr(result, "scan_protocol", "") or ""),
             "apply_lines": tuple(getattr(result, "apply_lines", ()) or ()),
             "probe_host": str((getattr(result, "raw_data", None) or {}).get("probe_host") or ""),
+            "companions": tuple((getattr(result, "raw_data", None) or {}).get("companions") or ()),
         }
         state = self._strategy_apply_state_obj()
         if state.is_busy():
@@ -1201,8 +1203,10 @@ class StrategyScanPage(BasePage):
     def _start_strategy_apply_worker(self, payload: dict) -> None:
         if str(payload.get("scan_protocol") or "") == PROTOCOL_TCP_HTTPS:
             self._apply_check_host = str(payload.get("probe_host") or payload.get("scan_target") or "")
+            self._apply_check_companions = tuple(payload.get("companions") or ())
         else:
             self._apply_check_host = ""
+            self._apply_check_companions = ()
 
         def worker_factory(request_id: int):
             return self.create_strategy_apply_worker(
@@ -1254,7 +1258,9 @@ class StrategyScanPage(BasePage):
         previous = self._apply_check_worker
         if previous is not None:
             previous.cancel()
-        worker = StrategyApplyCheckWorker(host, is_running=self._zapret_is_running, restarting=restarting, parent=self)
+        worker = StrategyApplyCheckWorker(
+            host, is_running=self._zapret_is_running, restarting=restarting, companions=self._apply_check_companions, parent=self
+        )
         worker.completed.connect(self._on_apply_check_finished)
         worker.finished.connect(worker.deleteLater)
         self._apply_check_worker = worker
