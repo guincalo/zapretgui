@@ -288,6 +288,19 @@ def _shown_state(value) -> str:
     return state if state in (OK, WARN, FAIL, INFO, UNKNOWN) else UNKNOWN
 
 
+# Уверенность вывода о шаге пути словами: сколько проверок его подтверждает.
+_CONFIDENCE_WORDS = {"low": "низкая", "medium": "средняя", "high": "высокая"}
+
+
+def _path_line(step: dict) -> Line:
+    """Строка шага пути запроса: слова и уровень приходят из отчёта, экран их не выводит."""
+    text = str(step.get("text") or "")
+    confidence = _CONFIDENCE_WORDS.get(str(step.get("confidence") or ""))
+    if confidence:
+        text = f"{text} (уверенность {confidence})"
+    return Line(_shown_state(step.get("level")), str(step.get("title") or step.get("key") or ""), text)
+
+
 def _site_card(service: dict) -> Card:
     key = str(service.get("key") or "")
     targets = list(service.get("targets") or ())
@@ -380,6 +393,9 @@ def _site_card(service: dict) -> Card:
         transfer = item.get("transfer") or {}
         if transfer.get("text") and transfer.get("code") != "unknown":
             rows.append(Line(_shown_state(transfer.get("level")), "Скорость ответа", str(transfer["text"])))
+        path = [step for step in item.get("path") or () if isinstance(step, dict)]
+        if path and item.get("main"):
+            detail.append(Section("Путь запроса", tuple(_path_line(step) for step in path)))
         if item.get("dns_reason"):
             rows.append(Line(WARN if item.get("dns_state") == "spoofed" else INFO, "DNS", str(item["dns_reason"])))
         if item.get("note"):

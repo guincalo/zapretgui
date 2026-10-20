@@ -12,7 +12,7 @@
 
 from __future__ import annotations
 
-from diagnostics import block_kind, outside_check, protocol_probe, quic_probe, telegram_check, transfer_probe, volume_probe
+from diagnostics import block_kind, outside_check, path_report, protocol_probe, quic_probe, telegram_check, transfer_probe, volume_probe
 from diagnostics.limits import DNS_ATTEMPTS, HTTPS_TIMEOUT, SOURCE_HOSTS, SOURCE_REFERENCE
 from diagnostics.run_context import RECHECK_OPENED, RECHECK_SAME, Probe
 from diagnostics.services import (
@@ -173,6 +173,7 @@ def probe_lines(probe: Probe, *, full: bool) -> list[str]:
         # Проверка сайт открыла, а браузер по записи в hosts — не откроет.
         icon = "⚠️"
     lines = [f"{icon} {title}: {reach_text(probe)}"]
+    lines.append(f"   🧭 Путь запроса: {path_report.chain_text(path_report.build(probe))}")
     if probe.kind:
         lines.append(f"   🏷 Вид блокировки: {block_kind.kind_info(probe.kind).title}")
     if probe.cause is not None:
@@ -218,6 +219,8 @@ def target_report(probe: Probe) -> dict:
         "volume_text": probe.volume.text if probe.volume else "",
         # Скорость ответов по замерам пробы объёма: пауза, медленный ответ, число замеров и уверенность.
         "transfer": probe.transfer.as_dict() if probe.transfer else None,
+        # Путь запроса по шагам (DNS → TCP → TLS → QUIC → передача): уровень, слова и уверенность каждого.
+        "path": [step.as_dict() for step in path_report.build(probe)] if probe.reach is not None else None,
         "cause": probe.cause.code if probe.cause else "",
         "cause_text": sentence(probe.cause.text) if probe.cause else "",
         "quic": probe.quic.code if probe.quic else "",

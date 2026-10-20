@@ -48,6 +48,21 @@ def _target(host: str, purpose: str, *, ok: bool = True, main: bool = False, **e
     return item
 
 
+def _blocked_path() -> list[dict]:
+    """Путь запроса сайта, закрытого по имени: ломается шифрование, остальные шаги не дошли."""
+
+    def step(key: str, title: str, level: str, text: str, confidence: str = "") -> dict:
+        return {"key": key, "title": title, "level": level, "text": text, "confidence": confidence}
+
+    return [
+        step("dns", "DNS", "ok", "ответ DNS совпал с эталоном", "high"),
+        step("tcp", "Соединение (TCP)", "ok", "соединение с сервером установлено", "high"),
+        step("tls", "Шифрование (TLS)", "fail", "соединение сброшено сразу после приветствия: режут по имени сайта", "high"),
+        step("quic", "QUIC", "unknown", "QUIC не проверялся"),
+        step("data", "Передача данных", "unknown", "объём и скорость ответов не проверялись"),
+    ]
+
+
 def _blocked_by_name(host: str, purpose: str, address: str, *, main: bool = False) -> dict:
     return _target(
         host,
@@ -58,6 +73,7 @@ def _blocked_by_name(host: str, purpose: str, address: str, *, main: bool = Fals
         cause="by_name",
         cause_text="Блокировка по имени сайта: тот же адрес с другим именем отвечает.",
         protocols=_protocols(tls12=False, tls13=False) if main else [],
+        path=_blocked_path() if main else None,
         tried=[{"address": address, "result": "reset"}],
         rechecked="same",
     )

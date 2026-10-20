@@ -541,14 +541,17 @@ TEXTS_TOUR: dict[str, dict[str, str]] = {
     "onboarding.step.blockcheck_card_detail.body": {
         "ru": (
             "Нажатие на любую карточку открывает все измерения по ней — экскурсия открыла Discord. "
-            "По каждому адресу видно, чем кончилось соединение, какие адреса пробовали, что с TLS 1.2, "
-            "TLS 1.3 и HTTP, как быстро идут ответы и как именно блокируют. Внизу — «Что делать».\n\n"
+            "Сверху — путь запроса: пять шагов от DNS до передачи данных, у каждого вывод и уверенность, "
+            "так видно, на каком шаге ломается. Ниже по каждому адресу: чем кончилось соединение, какие адреса "
+            "пробовали, что с TLS 1.2, TLS 1.3 и HTTP, как быстро идут ответы и как именно блокируют. Внизу — «Что делать».\n\n"
             "Назад ведёт строка пути сверху или клавиша Esc. «Скопировать» кладёт отчёт в буфер обмена."
         ),
         "en": (
             "Clicking any card opens all measurements for it — the tour opened Discord. For each address "
-            "you see how the connection ended, which addresses were tried, what happened with TLS 1.2, "
-            "TLS 1.3 and HTTP, how fast answers come and how exactly it is blocked. At the bottom is What to do.\n\n"
+            "you see the request path first: five steps from DNS to data transfer, each with a verdict and a "
+            "confidence level, so it is clear which step breaks. Then per address: how the connection ended, "
+            "which addresses were tried, what happened with TLS 1.2, TLS 1.3 and HTTP, how fast answers come and "
+            "how exactly it is blocked. At the bottom is What to do.\n\n"
             "The path row at the top or the Esc key leads back. Copy puts the report on the clipboard."
         ),
     },
