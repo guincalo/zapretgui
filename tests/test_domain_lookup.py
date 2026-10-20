@@ -677,6 +677,33 @@ class PlansTests(unittest.TestCase):
         self.assertEqual(summary.tone, plans.TONE_ERROR)
         self.assertIn("4 из 5", summary.text)
 
+    def test_text_report_carries_transfer_and_path_of_the_main_address(self) -> None:
+        steps = [
+            {"key": "dns", "title": "DNS", "level": "ok", "text": "ответ DNS совпал с эталоном", "confidence": "high"},
+            {"key": "data", "title": "Передача", "level": "warn", "text": "ответ пришёл после паузы", "confidence": "medium"},
+            {"key": "quic", "title": "QUIC", "level": "unknown", "text": "не проверялся", "confidence": ""},
+        ]
+        target = {"host": "youtube.com", "main": True, "text": "открывается", "path": steps,
+                  "transfer": {"code": "pause", "level": "warn", "text": "пауза 2,9 с перед первым байтом"}}
+        site = {"headline": "открывается", "targets": [target, dict(target, host="other.com", main=False)]}
+
+        text = plans.build_text_report(self._youtube_report(site))
+
+        self.assertIn("    Скорость ответа: пауза 2,9 с перед первым байтом", text)
+        self.assertIn("        ✅ DNS: ответ DNS совпал с эталоном (уверенность высокая)", text)
+        self.assertIn("        ⚠️ Передача: ответ пришёл после паузы (уверенность средняя)", text)
+        self.assertIn("        ❔ QUIC: не проверялся\n", text)
+        # Путь печатается один раз — для главного адреса, а не для каждого.
+        self.assertEqual(text.count("    Путь запроса:"), 1)
+
+    def test_text_report_of_an_old_site_record_has_no_new_lines(self) -> None:
+        site = {"headline": "открывается", "targets": [{"host": "youtube.com", "main": True, "text": "открывается"}]}
+
+        text = plans.build_text_report(self._youtube_report(site))
+
+        self.assertNotIn("Путь запроса", text)
+        self.assertNotIn("Скорость ответа", text)
+
     def _youtube_report(self, site: dict | None = None) -> engine.DomainLookupReport:
         """Случай 2026-10-13: фильтр отвечает «домена нет» вместо 8.8.8.8, Windows верит и адрес не получает."""
         answers = engine.annotate_answers(

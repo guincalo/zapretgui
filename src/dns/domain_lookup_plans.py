@@ -668,6 +668,24 @@ def build_history_entry(report: DomainLookupReport) -> dict | None:
     return history.domain_entry(report.target, level, problems[0] if problems else build_status(report).text, problems)
 
 
+_PATH_ICONS = {"ok": "✅", "warn": "⚠️", "fail": "❌"}
+_PATH_CONFIDENCE = {"low": "низкая", "medium": "средняя", "high": "высокая"}
+
+
+def _path_lines(target: dict) -> list[str]:
+    """Путь запроса по шагам для текста отчёта: слова, уровень и уверенность берутся из записи сайта."""
+    steps = [step for step in target.get("path") or () if isinstance(step, dict)]
+    if not steps or not target.get("main"):
+        return []
+    lines = ["    Путь запроса:"]
+    for step in steps:
+        confidence = _PATH_CONFIDENCE.get(str(step.get("confidence") or ""))
+        tail = f" (уверенность {confidence})" if confidence else ""
+        icon = _PATH_ICONS.get(str(step.get("level") or ""), "❔")
+        lines.append(f"        {icon} {step.get('title', '')}: {step.get('text', '')}{tail}")
+    return lines
+
+
 def build_site_lines(report: DomainLookupReport) -> list[str]:
     """Раздел текстового отчёта «как открывается сайт»: те же пробы, что в BlockCheck."""
     site = getattr(report, "site", None)
@@ -680,6 +698,10 @@ def build_site_lines(report: DomainLookupReport) -> list[str]:
         for title, key in (("Как блокируют", "cause_text"), ("QUIC (UDP 443)", "quic_text"), ("DNS", "dns_reason")):
             if target.get(key):
                 lines.append(f"    {title}: {target[key]}")
+        transfer = target.get("transfer") or {}
+        if transfer.get("text") and transfer.get("code") != "unknown":
+            lines.append(f"    Скорость ответа: {transfer['text']}")
+        lines += _path_lines(target)
         registry = target.get("registry") or {}
         if registry.get("listed"):
             lines.append("    Реестр РКН: сайт в реестре")
