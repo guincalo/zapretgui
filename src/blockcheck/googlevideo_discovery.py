@@ -20,7 +20,7 @@ from dataclasses import dataclass
 import html
 import re
 import time
-from urllib.parse import unquote
+from urllib.parse import unquote, urlparse
 
 from blockcheck.hosts import host_of
 
@@ -35,6 +35,8 @@ _WATCH_URLS: tuple[str, ...] = (
 _STREAMING_URL_RE = re.compile(
     r'(?i)"serverAbrStreamingUrl"\s*:\s*"https?:(?:\\/\\/|//)((?:rr|r)\d+---sn-[a-z0-9-]+\.googlevideo\.com)'
 )
+# Адрес, по которому плеер сам замеряет скорость до узла: настоящий, подписанный под ваш адрес и отвечает без входа.
+_PROBE_URL_RE = re.compile(r'"probeUrl"\s*:\s*"(https:[^"]+)"')
 _GOOGLEVIDEO_RR_RE = re.compile(
     r"(?i)\b((?:rr|r)\d+(?:---|\.)sn-[a-z0-9-]+\.googlevideo\.com)\b"
 )
@@ -114,6 +116,23 @@ def normalize_googlevideo_host(value: str | None) -> str:
     if not _GOOGLEVIDEO_RR_RE.fullmatch(host):
         return ""
     return host
+
+
+def extract_probe_url(page: str) -> tuple[str, str]:
+    """(узел, путь с параметрами) из ``probeUrl`` страницы ролика. Пусто — адреса замера в странице нет."""
+    match = _PROBE_URL_RE.search(str(page or ""))
+    if match is None:
+        return "", ""
+    try:
+        import json
+
+        url = json.loads(f'"{match.group(1)}"')
+    except ValueError:
+        return "", ""
+    parsed = urlparse(url)
+    host = normalize_googlevideo_host(parsed.hostname or "")
+    path = f"{parsed.path}?{parsed.query}" if parsed.query else parsed.path
+    return (host, path) if host and path.startswith("/") else ("", "")
 
 
 def extract_googlevideo_hosts(page: str) -> tuple[str, ...]:

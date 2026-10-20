@@ -19,9 +19,10 @@ import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
-from diagnostics import net_access
+from diagnostics import net_access, transfer_probe, volume_probe
 from diagnostics.limits import DISCOVERY_READ_BUDGET_S, DISCOVERY_TIMEOUT, VIDEO_SERVERS
 from diagnostics.services import YOUTUBE_HOST
+from diagnostics.verdict import ReachState
 
 __all__ = [
     "SOURCE_PLAYER",
@@ -29,6 +30,7 @@ __all__ = [
     "VideoNodes",
     "combine",
     "discover",
+    "goodput_volume",
     "owner_note",
     "spare_note",
 ]
@@ -36,8 +38,10 @@ __all__ = [
 SOURCE_PLAYER = "player"
 SOURCE_REDIRECTOR = "redirector"
 
-_WATCH_PAGE = "/watch?v=jNQXAC9IVRw&hl=en"
+_WATCH_PAGE = "/watch?v=dQw4w9WgXcQ&hl=en"
 _WATCH_PAGE_MAX_BYTES = 2_000_000
+# Сколько ещё читать страницу после имён узлов, пока не встретится адрес замера скорости.
+_PROBE_URL_WAIT_BYTES = 60_000
 # Сколько ждать ответ редиректора: это одна короткая строка, живой ответ приходит за доли секунды.
 MAPPING_TIMEOUT_S = 3.0
 
@@ -52,13 +56,20 @@ class VideoNodes:
     sources: tuple[str, ...]
     # Пояснение для отчёта: откуда список и чем он ограничен.
     note: str
+    # Адрес, по которому плеер сам замеряет скорость до узла: (узел, путь с подписью). Пусто — страница его не дала.
+    goodput: tuple[str, str] = ("", "")
 
     def source_of(self, host: str) -> str:
         return dict(zip(self.hosts, self.sources, strict=False)).get(host, "")
 
 
 def combine(
-    player: Sequence[str], mapped: str, *, page_failure: str = "", limit: int = VIDEO_SERVERS
+    player: Sequence[str],
+    mapped: str,
+    *,
+    page_failure: str = "",
+    limit: int = VIDEO_SERVERS,
+    goodput: tuple[str, str] = ("", ""),
 ) -> VideoNodes:
     """Узлы плеера, затем узел редиректора (если он не повторяет их), иначе общий адрес.
 
@@ -89,7 +100,7 @@ def combine(
             f"{page_failure or 'YouTube не назвал видеосервер'}, а узел вашей сети узнать не удалось: "
             "видеосервер не проверялся (общий адрес googlevideo.com — не видеосервер и отвечает ошибкой)",
         )
-    return VideoNodes(tuple(hosts), tuple(sources), note)
+    return VideoNodes(tuple(hosts), tuple(sources), note, goodput)
 
 
 def _mapped_host(run) -> str:
@@ -99,21 +110,34 @@ def _mapped_host(run) -> str:
     return fetch_mapped_host(timeout=MAPPING_TIMEOUT_S, cancelled=run.dns_cancelled)
 
 
-def _player_hosts(run) -> tuple[tuple[str, ...], str]:
-    """Узлы со страницы ролика. (узлы, почему страницы нет — пусто, если она была)."""
-    from blockcheck.googlevideo_discovery import extract_googlevideo_hosts
+def _player_hosts(run) -> tuple[tuple[str, ...], str, tuple[str, str]]:
+    """Узлы со страницы ролика и адрес замера скорости. (узлы, почему страницы нет — пусто, если она была, замер)."""
+    from blockcheck.googlevideo_discovery import (
+        extract_googlevideo_hosts,
+        extract_probe_url,
+    )
 
     found: list[str] = []
+    probe: list[tuple[str, str]] = []
     # Когда начали читать страницу и вышел ли срок чтения.
     reading: list[float] = []
     late: list[bool] = []
 
+    seen_at: list[int] = []
+
     def _done(body: bytes) -> bool:
         if b"googlevideo" in body:
-            hosts = extract_googlevideo_hosts(body.decode("utf-8", errors="ignore"))
+            text = body.decode("utf-8", errors="ignore")
+            hosts = extract_googlevideo_hosts(text)
             if hosts:
-                found.extend(hosts[:VIDEO_SERVERS])
-                return True
+                if not seen_at:
+                    seen_at.append(len(body))
+                found[:] = list(hosts[:VIDEO_SERVERS])
+                # Адрес замера скорости лежит рядом с адресом потока, но может прийти следующим куском.
+                got = extract_probe_url(text)
+                probe[:] = [got] if got[0] else []
+                if probe or len(body) - seen_at[0] > _PROBE_URL_WAIT_BYTES:
+                    return True
         if not reading:
             reading.append(time.monotonic())
         if time.monotonic() - reading[0] >= DISCOVERY_READ_BUDGET_S:
@@ -128,19 +152,49 @@ def _player_hosts(run) -> tuple[tuple[str, ...], str]:
         page = dict(timeout=DISCOVERY_TIMEOUT, read_limit=_WATCH_PAGE_MAX_BYTES, body_done=_done, decode_body=True)
         result = net_access.fetch(run, YOUTUBE_HOST, ip, _WATCH_PAGE, **page)
         if found:
-            return tuple(found), ""
+            return tuple(found), "", (probe[0] if probe else ("", ""))
         if late:
-            return (), "страница YouTube грузилась слишком медленно"
+            return (), "страница YouTube грузилась слишком медленно", ("", "")
         if result.ok:
-            return (), "YouTube не назвал видеосервер"
-    return (), "страница YouTube не открылась"
+            return (), "YouTube не назвал видеосервер", ("", "")
+    return (), "страница YouTube не открылась", ("", "")
 
 
 def discover(run, *, player: Callable | None = None, mapped: Callable | None = None) -> VideoNodes:
     """Узлы, которые YouTube отдаёт этой сети. ``player`` и ``mapped`` — подмена источников для тестов."""
     mapped_host = (mapped or _mapped_host)(run)
-    hosts, failure = (player or _player_hosts)(run)
-    return combine(hosts, mapped_host, page_failure=failure)
+    hosts, failure, *rest = (player or _player_hosts)(run)
+    return combine(hosts, mapped_host, page_failure=failure, goodput=rest[0] if rest else ("", ""))
+
+
+def goodput_volume(run, probe) -> None:
+    """Объём и скорость по настоящему адресу замера, который плеер YouTube получил для вас.
+
+    Видеоузел на ``generate_204`` ответа не имеет, и объём по нему не проверить. Запрос замера скорости —
+    настоящий, подписан под ваш адрес и отвечает без входа, поэтому серия таких запросов даёт и объём, и паузы.
+    """
+    host, path = run.video_goodput
+    if not host or not path or run.dns_cancelled():
+        return
+    if probe.volume is not None and probe.volume.code != volume_probe.VOLUME_UNKNOWN:
+        return
+    ips = net_access.browser_ipv4(run, host)
+    if not ips:
+        return
+    facts = volume_probe.collect(host, ips[0], path, cancel=run.probe_cancel)
+    if run.dns_cancelled():
+        return
+    verdict = volume_probe.judge(facts)
+    if verdict.code == volume_probe.VOLUME_UNKNOWN:
+        return
+    probe.volume = verdict
+    probe.transfer = transfer_probe.judge(facts.first.samples)
+    probe.unstable = probe.unstable or transfer_probe.shaky_reason(probe.transfer)
+    if verdict.code == volume_probe.VOLUME_CUT:
+        probe.reach_state = ReachState.FREEZE
+    probe.discovery_note = "; ".join(
+        part for part in (probe.discovery_note, f"объём и скорость сняты по запросу замера скорости самого YouTube ({host})") if part
+    )
 
 
 def owner_note(run, ip: str) -> str:

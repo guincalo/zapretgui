@@ -50,6 +50,7 @@ from diagnostics import (
     protocol_probe,
     quic_probe,
     registry,
+    report_text,
     sections,
     system_state,
     telegram_check,
@@ -58,28 +59,35 @@ from diagnostics import (
     volume_probe,
 )
 from diagnostics import problems as problem_rules
-from diagnostics import report_text
 from diagnostics.levels import level_rank
-from diagnostics.report_upgrade import REPORT_VERSION
 from diagnostics.limits import (
-    FREEZE_MAX_BYTES,
     DNS_ATTEMPTS,
-    REGISTRY_WAIT_S,
+    FREEZE_MAX_BYTES,
     RECHECK_AT_ONCE,
     RECHECK_LIGHT_AT_ONCE,
     RECHECK_NEEDS_S,
     RECHECK_SITES,
+    REGISTRY_WAIT_S,
     RUN_DEADLINE,
     RUN_DEADLINE_ALL,
     RUN_DEADLINE_FULL,
     SITES_AT_ONCE,
 )
-from diagnostics.reach import check_reach as _check_reach, same_network
-from diagnostics.run_context import RECHECK_OPENED, RECHECK_SAME, RECHECK_UNSTABLE, Probe as _Probe, Run as _Run
-from diagnostics.run_context import Live as _Live, Steps as _Steps, Stopped as _Stopped
+from diagnostics.reach import check_reach as _check_reach
+from diagnostics.reach import same_network
+from diagnostics.report_upgrade import REPORT_VERSION
+from diagnostics.run_context import RECHECK_OPENED, RECHECK_SAME, RECHECK_UNSTABLE
+from diagnostics.run_context import Live as _Live
+from diagnostics.run_context import Probe as _Probe
+from diagnostics.run_context import Run as _Run
+from diagnostics.run_context import Steps as _Steps
+from diagnostics.run_context import Stopped as _Stopped
 from diagnostics.services import (  # noqa: F401  (GOOGLEVIDEO_FALLBACK_HOST отсюда берут и тесты)
     GOOGLEVIDEO_FALLBACK_HOST,
     PROGRESS_STEPS,
+    SCOPE_ALL,
+    SCOPE_FULL,
+    SCOPE_MAIN,
     STEP_DNS_SERVERS,
     STEP_FILTER,
     STEP_HOSTINGS,
@@ -87,18 +95,17 @@ from diagnostics.services import (  # noqa: F401  (GOOGLEVIDEO_FALLBACK_HOST о�
     STEP_SITES,
     STEP_SYSTEM,
     STEP_VOICE,
-    SCOPE_ALL,
-    SCOPE_FULL,
-    SCOPE_MAIN,
-    SCOPE_TITLES as _SCOPE_TITLES,
     Service,
     Target,
     build_services,
     site_service,
 )
+from diagnostics.services import (
+    SCOPE_TITLES as _SCOPE_TITLES,
+)
 from diagnostics.tls_probe import (
-    KIND_CERT,
     KIND_CANCELLED,
+    KIND_CERT,
 )
 from diagnostics.verdict import (
     DnsState,
@@ -157,6 +164,7 @@ _WORKERS_PER_TARGET = 28 + 2 * len(REFERENCE_RESOLVERS)
 def _discover_googlevideo(run: _Run) -> tuple[tuple[str, ...], str]:
     """Видеосерверы, которые YouTube выдаёт этой сети. (хосты, пояснение); источники — ``diagnostics.video_nodes``."""
     nodes = video_nodes.discover(run)
+    run.video_goodput = nodes.goodput
     return nodes.hosts, nodes.note
 
 
@@ -199,6 +207,8 @@ def _probe_target(run: _Run, target: Target, service: str, *, full: bool, volume
     best = probe if probe.reach_state == ReachState.OK else first
     if full and best.reach is not None and best.reach_state == ReachState.OK:
         _describe_node(run, nodes, best, volume=volume, target=target, service=service)
+        if volume:
+            video_nodes.goodput_volume(run, best)
     return best
 
 

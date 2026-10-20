@@ -305,6 +305,8 @@ class Run:
         self.probe_cancel = SocketCancel()
         # Сервер проверки обрыва → адрес, по которому к нему ходили.
         self.freeze_addresses: dict[str, str] = {}
+        # Адрес, по которому плеер YouTube сам замеряет скорость до узла: (узел, путь с подписью). Пусто — не нашли.
+        self.video_goodput: tuple[str, str] = ("", "")
         self._reference_lock = threading.Lock()
         # Эталонный сервер → [сколько раз ответил, сколько раз нет, последняя причина].
         self._reference: dict[ReferenceResolver, list] = {}

@@ -67,6 +67,53 @@ class DiscoverTests(unittest.TestCase):
         self.assertEqual(nodes.hosts, (MAPPED,))
 
 
+class GoodputTests(unittest.TestCase):
+    """Объём и скорость по настоящему адресу замера, который плеер YouTube получил для вас."""
+
+    def _probe(self, volume=None):
+        return SimpleNamespace(volume=volume, transfer=None, unstable="", reach_state="ok", discovery_note="")
+
+    def _run(self, goodput):
+        return SimpleNamespace(video_goodput=goodput, dns_cancelled=lambda: False, probe_cancel=None)
+
+    def test_page_without_the_probe_url_changes_nothing(self) -> None:
+        probe = self._probe()
+        vn.goodput_volume(self._run(("", "")), probe)
+
+        self.assertIsNone(probe.volume)
+
+    def test_unknown_volume_is_replaced_by_the_goodput_series(self) -> None:
+        from unittest.mock import patch
+
+        from diagnostics import volume_probe
+
+        samples = SimpleNamespace(samples=())
+        facts = SimpleNamespace(first=samples)
+        verdict = volume_probe.VolumeVerdict(volume_probe.VOLUME_OK, "по одному соединению получено 48 КБ без обрыва")
+        probe = self._probe(volume_probe.VolumeVerdict(volume_probe.VOLUME_UNKNOWN, "набрать только 1 КБ"))
+        with (
+            patch.object(vn.net_access, "browser_ipv4", return_value=("74.125.1.1",)),
+            patch.object(vn.volume_probe, "collect", return_value=facts) as collect,
+            patch.object(vn.volume_probe, "judge", return_value=verdict),
+            patch.object(vn.transfer_probe, "judge", return_value=None),
+            patch.object(vn.transfer_probe, "shaky_reason", return_value=""),
+        ):
+            vn.goodput_volume(self._run(("r3---sn-tn.googlevideo.com", "/videogoodput?x=1")), probe)
+
+        self.assertEqual(collect.call_args.args[:3], ("r3---sn-tn.googlevideo.com", "74.125.1.1", "/videogoodput?x=1"))
+        self.assertIs(probe.volume, verdict)
+        self.assertIn("замера скорости самого YouTube", probe.discovery_note)
+
+    def test_a_known_volume_verdict_is_kept(self) -> None:
+        from diagnostics import volume_probe
+
+        known = volume_probe.VolumeVerdict(volume_probe.VOLUME_OK, "уже есть")
+        probe = self._probe(known)
+        vn.goodput_volume(self._run(("r3---sn-tn.googlevideo.com", "/videogoodput?x=1")), probe)
+
+        self.assertIs(probe.volume, known)
+
+
 class OwnerNoteTests(unittest.TestCase):
     def _note(self, owner):
         with patch("utils.ip_owner.lookup_ip_owner", return_value=owner):
