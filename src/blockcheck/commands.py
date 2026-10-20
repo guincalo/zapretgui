@@ -146,7 +146,7 @@ def remember_blockcheck_run(report: dict, log_file: str | None, *, preset: str =
     ``{"changes": [...], "previous_time": "...", "json_file": "...", "lines": [...]}``;
     ``lines`` — строки, дописанные к тексту отчёта.
     """
-    from diagnostics import compare, history
+    from diagnostics import block_view, compare, history
     from settings.store import add_check_history_run, get_check_history
 
     entry = history.blockcheck_entry(report, log_file=str(log_file or ""), preset=preset)
@@ -159,7 +159,7 @@ def remember_blockcheck_run(report: dict, log_file: str | None, *, preset: str =
     report["changes"] = list(changes)
     report["previous_time"] = previous_time
     report["compare"] = compare.compare_runs(entry, compare.counterpart(past, entry))
-    lines = compare.lines(report["compare"], format_time=history.format_time)
+    lines = block_view.text_lines("compare", report["compare"])
     if changes:
         lines += ["", f"🕘 С прошлой проверки ({history.format_time(previous_time)}) {'; '.join(changes)}."]
     # Текст отчёта лежит в том же файле: дописанное должно попасть и в него.

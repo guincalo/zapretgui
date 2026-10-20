@@ -332,7 +332,7 @@ class _Net:
             patch.object(sections, "check_ipv6", side_effect=lambda _run: self.ipv6),
             # «Ваша сеть» и дата-центры Telegram ходят в сеть сами: в сценариях движка их нет.
             patch.object(sections, "check_network", side_effect=lambda _run, _tools: self.network),
-            patch.object(sections, "check_speed", side_effect=lambda _run, _emit, *_sites: self.speed),
+            patch.object(sections, "check_speed", side_effect=lambda _run, *_sites: self.speed),
             # Замер потока по имени в проверке одного сайта качает файл с постороннего сервера.
             patch.object(sections, "check_name_speed", side_effect=lambda *_a, **_k: self.names),
             # Пачка одновременных соединений — настоящие приветствия в сеть.
@@ -351,19 +351,20 @@ class _Net:
             # Список реестра РКН качается из сети и лежит на диске: в сценариях движка его нет.
             patch.object(sections, "start_registry", return_value=lambda _seconds, _cancel: self.registry),
             # Пробы «как работает фильтр» шлют свои приветствия в сеть.
-            patch.object(sections, "check_filter_habits", side_effect=lambda _run, _collected, _emit, **_kwargs: self.habits),
+            patch.object(sections, "check_filter_habits", side_effect=lambda _run, _collected, **_kwargs: self.habits),
             # Место перехвата DNS — настоящие пакеты в сеть: в сценариях движка его нет.
             patch.object(sections, "_dns_place", side_effect=lambda _run, _trace: self.dns_place),
             # Серии пакетов UDP уходят на настоящие серверы.
             patch.object(sections, "check_udp_burst", side_effect=lambda _run: self.burst),
             patch.object(engine, "running_bypass_tools", return_value=self.bypass_tools),
             patch.object(engine, "_discover_googlevideo", return_value=(("rr1---sn-test.googlevideo.com",), "")),
+            patch.object(engine.video_nodes, "owner_note", return_value=""),
             # Звонки и обрыв 16 КБ проверяются в любом режиме — без сети в тестах.
             patch("diagnostics.voice_check.check_voice", return_value=self.voice),
             patch("diagnostics.freeze_check.check_freeze", return_value=self.freeze),
         )
 
-    def _crowd(self, _run, _collected, _services, _emit, *, tools=()):
+    def _crowd(self, _run, _collected, _services, *, tools=()):
         self.crowd_tools = list(tools)
         return self.crowd
 
@@ -643,10 +644,10 @@ class Ipv6InReportTests(unittest.TestCase):
         self.assertEqual(result["ipv6"], {"state": "broken", "text": "настроен, но не работает"})
 
     def test_absent_and_working_ipv6_are_only_lines_in_report(self) -> None:
-        for code, icon in ((sections.ipv6_check.IPV6_ABSENT, "ℹ️"), (sections.ipv6_check.IPV6_OK, "✅")):
+        for code, icon in ((sections.ipv6_check.IPV6_ABSENT, "❔"), (sections.ipv6_check.IPV6_OK, "✅")):
             with self.subTest(code=code):
                 result, lines = self._run(code, "текст")
-                self.assertIn(f"{icon} IPv6 текст", lines)
+                self.assertIn(f"   {icon} IPv6 текст", lines)
                 self.assertFalse([item for item in result["problems"] if item["text"].startswith("IPv6")])
 
     def test_ipv6_section_comes_after_sites_and_before_summary(self) -> None:
@@ -1027,9 +1028,9 @@ class SystemStateInReportTests(unittest.TestCase):
         note = self._item("antivirus", "info", "работает Kaspersky", "Добавьте в исключения")
         result, lines = self._run(ok, note)
 
-        self.assertIn("━━━━━━━━ Состояние системы ━━━━━━━━", lines)
-        self.assertIn("✅ Заголовок admin: есть", lines)
-        self.assertIn("ℹ️ Заголовок antivirus: работает Kaspersky", lines)
+        self.assertIn("━━━━━━━━ Этот компьютер ━━━━━━━━", lines)
+        self.assertIn("   ✅ Заголовок admin: есть", lines)
+        self.assertIn("   ℹ️ Заголовок antivirus: работает Kaspersky", lines)
         self.assertEqual([item["key"] for item in result["system"]], ["admin", "antivirus"])
         self.assertEqual(result["system"][1]["advice"], "Добавьте в исключения")
         # Пометки и «всё хорошо» в список проблем не попадают.
@@ -1204,7 +1205,7 @@ class FullCheckTests(unittest.TestCase):
         self.assertEqual([hop["owner"] for hop in place["hops"][:2]], ["ваш роутер", "внутренняя сеть провайдера"])
         self.assertEqual(len(place["hops"]), 7)
         text = "\n".join(lines)
-        self.assertIn("━━━━━━━━ Где стоит фильтр ━━━━━━━━", text)
+        self.assertIn("━━━━━━━━ Место фильтра ━━━━━━━━", text)
         self.assertIn("── здесь стоит фильтр ──", text)
 
     def test_without_blocks_by_name_the_road_is_still_shown(self) -> None:

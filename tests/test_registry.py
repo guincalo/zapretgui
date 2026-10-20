@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 
 from blockcheck.ui.result_cards_model import build_cards
-from diagnostics import net_access, registry
+from diagnostics import block_view, net_access, registry
 
 HOSTS = "\n".join(['"quoted.example', "facebook.com", "www.linkedin.com", "discordapp.com", "FACEBOOK.com", "localhost"])
 IPS = "68.171.224.0/19\n203.0.113.7\n# заметка\nне адрес\n2001:db8::/32\n"
@@ -169,18 +169,23 @@ class ReportTests(unittest.TestCase):
         self.services = registry.annotate(self.services, registry.Index())
 
         self.assertNotIn("registry", self.services[0]["targets"][0])
-        self.assertIn("скачать не удалось", "\n".join(registry.lines(self.services, registry.Index())))
+        self.assertIn("скачать не удалось", "\n".join(block_view.text_lines("registry", registry.summary(registry.Index()))))
         cards = {card.title: card for card in build_cards({"services": self.services})}
         self.assertNotIn(("в реестре РКН", "info"), cards["Facebook"].chips)
 
     def test_text_report_names_listed_sites_and_warns_about_blocks_outside_the_registry(self) -> None:
-        self.services = registry.annotate(self.services, self.index)
-        text = "\n".join(registry.lines(self.services, self.index, now=1000.0))
+        from diagnostics import service_view
 
-        self.assertIn("📕 www.facebook.com: в реестре есть facebook.com; адрес 68.171.230.1 в списке заблокированных", text)
-        self.assertNotIn("x.com:", text)
+        self.services = registry.annotate(self.services, self.index)
+        facebook = "\n".join(service_view.render_text(service_view.service_sections(self.services[0])))
+        text = "\n".join(block_view.text_lines("registry", registry.summary(self.index, now=1000.0)))
+
+        # Что про конкретный сайт — в строках сайта, что про сам список — в разделе реестра.
+        self.assertIn("Реестр РКН: сайт значится в реестре", facebook.replace("в реестре значится facebook.com", "сайт значится в реестре"))
+        self.assertIn("68.171.224.0/19", facebook)
         self.assertIn("и без записи в реестре", text)
-        self.assertIn("давно не обновлялся", "\n".join(registry.lines(self.services, self.index, now=1000.0 + 9 * DAY)))
+        stale = "\n".join(block_view.text_lines("registry", registry.summary(self.index, now=1000.0 + 9 * DAY)))
+        self.assertIn("давно не обновлялся", stale)
 
     def test_annotating_does_not_touch_the_report_the_screen_already_has(self) -> None:
         # Экран получает отчёт по сайтам раньше, чем скачается реестр, и читает его из

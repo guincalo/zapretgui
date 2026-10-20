@@ -17,8 +17,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 
+from diagnostics.block_view import COMPARE_STATES, FILTER_MARK, BlockView, build_blocks, one_preset_note, registry_rows
+from diagnostics.compare import GROUP_TITLES
 from diagnostics.levels import level_rank
-from diagnostics.service_view import name_speed_sections, service_sections
+from diagnostics.service_view import service_sections
 from diagnostics.service_view import site_kind as view_site_kind
 from diagnostics.service_view import site_level as view_site_level
 
@@ -43,7 +45,6 @@ FAIL = "fail"
 UNKNOWN = "unknown"
 INFO = "info"
 
-FILTER_MARK = "здесь стоит фильтр"
 # Сколько строк помещается на карточке; остальное — в подробностях.
 PREVIEW_LINES = 4
 
@@ -229,11 +230,6 @@ def site_kind(service: dict, level: str) -> str:
     return view_site_kind(service, level)
 
 
-def _sections_from_view(sections) -> list[Section]:
-    """Разделы общего модуля — разделами карточки: уровень и слова уже решены там."""
-    return [Section(item.title, tuple(Line(row.level, row.title, row.text) for row in item.rows)) for item in sections]
-
-
 def _target_state(item: dict) -> str:
     if item.get("ok"):
         return OK
@@ -324,40 +320,44 @@ def _site_card(service: dict) -> Card:
 
 _SERVER_STATE = {"ok": OK, "freeze": FAIL, "fail": FAIL, "unknown": UNKNOWN}
 
+# Значок карточки отдельной проверки: это про экран, поэтому живёт здесь, а не в общем модуле слов.
+_BLOCK_ICONS = {
+    "network": "fa5s.wifi",
+    "hostings": "fa5s.server",
+    "voice": "fa5s.phone-alt",
+    "telegram": "fa5b.telegram-plane",
+    "dns": "fa5s.exchange-alt",
+    "dns_servers": "fa5s.network-wired",
+    "speed": "fa5s.tachometer-alt",
+    "ipv6": "fa5s.project-diagram",
+    "filter": "fa5s.route",
+    "habits": "fa5s.cut",
+    "system": "fa5s.desktop",
+    "crowd": "fa5s.layer-group",
+    "compare": "fa5s.balance-scale",
+}
 
-def _hostings_card(freeze: dict) -> Card:
-    servers = list(freeze.get("servers") or ())
+
+def _line_of(row) -> Line:
+    """Строка карточки по строке общего модуля слов; находка про DNS-серверы несёт свои части."""
+    parts = read_finding_parts(row.extra) if isinstance(row.extra, dict) else None
+    return Line(row.level, row.title, row.text, parts=parts)
+
+
+def _sections_from_view(sections) -> list[Section]:
+    """Разделы общего модуля слов — разделами карточки: уровень и слова уже решены там."""
+    return [
+        Section(item.title, tuple(_line_of(row) for row in item.rows), text=item.text, tiles=item.tiles, tile_icon=item.tile_icon)
+        for item in sections
+    ]
+
+
+def _hostings_dots(freeze: dict) -> tuple[DotGroup, ...]:
+    """Точки по серверам каждого провайдера: цвет — исход, подсказка — слова сервера."""
     by_provider: dict[str, list[dict]] = {}
-    for item in servers:
+    for item in freeze.get("servers") or ():
         by_provider.setdefault(str(item.get("provider") or "Без названия"), []).append(item)
-
-    def _count(state: str, direction: str = "") -> int:
-        return sum(
-            1
-            for item in servers
-            if item.get("state") == state and (not direction or item.get("direction") == direction)
-        )
-
-    cut_down, cut_up = _count("freeze", "download"), _count("freeze", "upload")
-    fine, unknown = _count("ok"), _count("unknown")
-    cut = cut_down + cut_up
-    level = _state(freeze.get("level"))
-    if cut:
-        status = f"Обрыв у {cut} из {len(servers)}"
-    elif fine:
-        status = f"Обрыва нет: {fine} из {len(servers)}"
-    else:
-        status = "Не удалось проверить"
-
-    lines = [Line(OK, "Проходит без обрыва", str(fine))]
-    if cut_down:
-        lines.append(Line(FAIL, "Обрыв загрузки на 16–20 КБ", str(cut_down)))
-    if cut_up:
-        lines.append(Line(FAIL, "Обрыв отправки", str(cut_up)))
-    if unknown:
-        lines.append(Line(UNKNOWN, "Сервер не ответил", str(unknown)))
-
-    dots = tuple(
+    return tuple(
         DotGroup(
             name,
             tuple(_SERVER_STATE.get(str(item.get("state")), UNKNOWN) for item in items),
@@ -365,539 +365,37 @@ def _hostings_card(freeze: dict) -> Card:
         )
         for name, items in by_provider.items()
     )
-    sections = [
-        Section(
-            f"{name} — обрыв у {sum(1 for item in items if item.get('state') == 'freeze')} из {len(items)}",
-            tuple(
-                Line(
-                    _SERVER_STATE.get(str(item.get("state")), UNKNOWN),
-                    " · ".join(part for part in (str(item.get("id") or ""), str(item.get("host") or "")) if part),
-                    _with_seconds(str(item.get("text") or ""), item.get("seconds")),
-                )
-                for item in items
-            ),
-        )
-        for name, items in by_provider.items()
-    ]
-    advice = [str(item) for item in freeze.get("advice") or ()]
-    if advice:
-        sections.insert(0, Section("Что делать", tuple(Line(INFO, item) for item in advice)))
-    sections.insert(
-        0,
-        Section(
-            "Что это за проверка",
-            (
-                Line(
-                    INFO,
-                    "С каждого сервера качается около 32 КБ. Если загрузка прошла, на тот же сервер "
-                    "отправляется 64 КБ одним потоком и 64 байта мелкими пакетами. Обрыв засчитывается, "
-                    "только когда короткий запрос тот же сервер принимает.",
-                ),
-            ),
-        ),
-    )
+
+
+def _block_card(view: BlockView, report: dict) -> Card:
+    """Карточка отдельной проверки: слова из ``block_view``, от себя — значок и то, что есть только на экране."""
+    extras: dict = {}
+    if view.key == "hostings":
+        extras = {"dots": _hostings_dots(report["freeze"]), "wide": True}
+    sections = tuple(_sections_from_view(view.sections))
+    if view.key == "compare":
+        sections = tuple(_with_site_pages(section, report) for section in sections)
     return Card(
-        key="hostings",
-        icon="fa5s.server",
-        title="Зарубежные хостинги",
-        level=level,
-        status=status,
-        lines=tuple(lines),
-        dots=dots,
-        sections=tuple(sections),
-        wide=True,
+        key=view.key,
+        icon=_BLOCK_ICONS.get(view.key, "fa5s.circle"),
+        title=view.title,
+        level=view.level,
+        status=view.status,
+        lines=tuple(_line_of(row) for row in view.preview),
+        sections=sections,
+        **extras,
     )
 
 
-def _with_seconds(text: str, seconds: object) -> str:
-    if isinstance(seconds, (int, float)) and seconds > 0:
-        return f"{text} · {seconds:.1f} с"
-    return text
-
-
-_VOICE_STATUS = {OK: "Работают", WARN: "С перебоями", FAIL: "Не работают", UNKNOWN: "Не удалось проверить"}
-
-
-def _voice_card(voice: dict) -> Card:
-    items = list(voice.get("items") or ())
-    level = _state(voice.get("level"))
-    lines = tuple(
-        Line(_SERVER_STATE.get(str(item.get("state")), UNKNOWN), str(item.get("name") or ""), str(item.get("text") or ""))
-        for item in items
-    )
-    answered = sum(1 for item in items if item.get("ok"))
-    sections = [Section(str(voice.get("headline") or "Голосовые серверы"), lines)]
-    burst = voice.get("burst") or {}
-    if burst.get("text"):
-        burst_state = {"ok": OK, "freeze": WARN}.get(str(burst.get("state")), UNKNOWN)
-        rows = [Line(burst_state, "Тридцать пакетов подряд", _capital(str(burst["text"])))]
-        rows += [Line(INFO, str(item.get("name") or ""), "ответов: " + ", ".join(item.get("series") or ())) for item in burst.get("servers") or ()]
-        sections.append(Section("Не замирает ли UDP", tuple(rows)))
-        if burst_state == WARN:
-            lines = lines + (Line(WARN, "UDP замирает", _capital(str(burst["text"]))),)
-            level = WARN if level == OK else level
-    advice = [str(item) for item in voice.get("advice") or ()]
-    if advice:
-        sections.append(Section("Что делать", tuple(Line(INFO, item) for item in advice)))
-    return Card(
-        key="voice",
-        icon="fa5s.phone-alt",
-        title="Голосовые звонки (UDP)",
-        level=level,
-        status=f"{_VOICE_STATUS[level]}: {answered} из {len(items)}" if items else _VOICE_STATUS[level],
-        lines=lines,
-        sections=tuple(sections),
-    )
-
-
-def _telegram_card(telegram: dict) -> Card:
-    items = list(telegram.get("items") or ())
-    level = _state(telegram.get("level"))
-    lines = tuple(
-        Line(
-            _SERVER_STATE.get(str(item.get("state")), UNKNOWN),
-            f"{item.get('name', '')} · {item.get('address', '')}",
-            str(item.get("text") or ""),
-        )
-        for item in items
-    )
-    answered = sum(1 for item in items if item.get("state") == "ok")
-    sections = [
-        Section(str(telegram.get("headline") or "Дата-центры Telegram"), lines),
-        Section(
-            "Что это за проверка",
-            (
-                Line(
-                    INFO,
-                    "Приложение Telegram ходит не на сайт, а прямо по адресам своих дата-центров. "
-                    "Здесь с каждым из них устанавливается обычное соединение; неудачное повторяется после паузы.",
-                ),
-            ),
-        ),
-    ]
-    advice = [str(item) for item in telegram.get("advice") or ()]
-    if advice:
-        sections.append(Section("Что делать", tuple(Line(INFO, item) for item in advice)))
-    return Card(
-        key="telegram",
-        icon="fa5b.telegram-plane",
-        title="Telegram: дата-центры",
-        level=level,
-        status=f"Отвечают {answered} из {len(items)}" if items else "Не проверено",
-        lines=lines,
-        sections=tuple(sections),
-    )
-
-
-_SPEED_STATUS = {OK: "Разницы нет", WARN: "Зарубежные медленнее", UNKNOWN: "Не удалось сравнить"}
-
-
-def _name_speed_sections(names: dict) -> tuple[Section, ...]:
-    """Замедление по имени сайта — разделы общего модуля слов."""
-    return tuple(_sections_from_view(name_speed_sections(names)))
-
-
-def _speed_card(speed: dict) -> Card:
-    names = speed.get("names") or {}
-    slow_names = [str(item.get("name") or "") for item in names.get("items") or () if item.get("state") == "warn"]
-    if slow_names:
-        return replace(
-            _speed_card({**speed, "names": None}),
-            level=WARN,
-            status=f"Замедляют: {', '.join(slow_names)}",
-            sections=(*_name_speed_sections(names), *_speed_card({**speed, "names": None}).sections),
-        )
-    level = _state(speed.get("level"))
-    lines = tuple(
-        Line(
-            _state(item.get("state"), INFO),
-            f"{item.get('name', '')} (Россия)" if item.get("domestic") else str(item.get("name") or ""),
-            str(item.get("text") or ""),
-        )
-        for item in speed.get("items") or ()
-    )
-    return Card(
-        key="speed",
-        icon="fa5s.tachometer-alt",
-        title="Скорость",
-        level=level,
-        status=_SPEED_STATUS.get(level, "Не проверено"),
-        lines=lines,
-        sections=(
-            Section(str(speed.get("headline") or "Скорость загрузки"), lines),
-            *_name_speed_sections(names),
-            Section(
-                "Что это за проверка",
-                (
-                    Line(
-                        INFO,
-                        "С каждого сервера качается два-три мегабайта, не дольше нескольких секунд. Сама цифра "
-                        "зависит от тарифа, поэтому зарубежные серверы сравниваются с российскими. "
-                        "«Медленнее» говорится, только когда медленны все зарубежные сразу и разница — в разы.",
-                    ),
-                ),
-            ),
-        ),
-    )
-
-
-# Состояние IPv6 → (уровень, слово). «Нет в сети» — норма, поэтому не зелёное и не красное.
-_IPV6 = {
-    "ok": (OK, "Работает"),
-    "absent": (UNKNOWN, "Нет в этой сети"),
-    "broken": (WARN, "Не работает"),
-    "unknown": (UNKNOWN, "Не проверено"),
-}
-
-
-def _ipv6_card(ipv6: dict) -> Card:
-    level, word = _IPV6.get(str(ipv6.get("state") or ""), _IPV6["unknown"])
-    text = f"IPv6 {ipv6.get('text', '')}".strip()
-    return Card(
-        key="ipv6",
-        icon="fa5s.project-diagram",
-        title="IPv6",
-        level=level,
-        status=word,
-        lines=(Line(level, text),),
-        sections=(Section("IPv6", (Line(level, text),)),),
-    )
-
-
-def _crowd_card(crowd: dict) -> Card:
-    """«Несколько соединений сразу»: замирает ли сайт, когда к нему открывают пачку соединений.
-
-    Слова берутся из отчёта как есть. Важная для человека оговорка — что при
-    «замер» остановку сайта вызвала сама проверка — приходит в ``advice`` и
-    стоит на карточке второй строкой, а не прячется в подробностях.
-    """
-    level = _state(crowd.get("level"))
-    text = str(crowd.get("text") or "")
-    advice = str(crowd.get("advice") or "")
-    lines = [Line(level, text)] + ([Line(INFO, advice)] if advice else [])
-    facts = [Line(INFO, "Сайт", " · ".join(part for part in (str(crowd.get("label") or ""), str(crowd.get("host") or "")) if part))]
-    if crowd.get("address"):
-        facts.append(Line(INFO, "Адрес сервера", str(crowd["address"])))
-    # Исходы отдельных соединений и время возвращения — готовыми строками отчёта: коды исходов
-    # и секунды экран в слова не переводит.
-    rows = [
-        Line(_shown_state(row.get("state")), str(row.get("title") or ""), str(row.get("text") or ""))
-        for row in crowd.get("rows") or ()
-    ]
-    facts += rows
-    if not rows:
-        # Отчёт, сохранённый до появления готовых строк: остаются только числа.
-        if crowd.get("recovered_s") is not None:
-            facts.append(Line(INFO, "Сайт вернулся через", f"{crowd['recovered_s']} с"))
-        if crowd.get("waited_s"):
-            facts.append(Line(INFO, "Ждали после пачки", f"{crowd['waited_s']} с"))
-    sections = [Section("Вывод", (Line(level, text),))]
-    if advice:
-        sections.append(Section(_CROWD_ADVICE_TITLE, (Line(INFO, advice),)))
-    sections.append(Section("Что проверяли", tuple(facts)))
-    return Card(
-        key="crowd",
-        icon="fa5s.layer-group",
-        title="Несколько соединений сразу",
-        level=level,
-        # Слово итога — из отчёта; у отчёта постарше, где его нет, им служит сама фраза вывода.
-        status=str(crowd.get("status") or text),
-        lines=tuple(lines),
-        sections=tuple(sections),
-    )
-
-
-_CROWD_ADVICE_TITLE = "Что это значит и что делать"
-
-
-def _dns_card(report: dict) -> Card | None:
-    reference = list(report.get("reference") or ())
-    spoofed = [str(item) for item in report.get("spoofed_hosts") or ()]
-    if not reference and not spoofed:
-        return None
-    lines = [
-        Line(
-            OK if item.get("ok") else FAIL,
-            f"{item.get('label', '')} ({item.get('address', '')})",
-            "отвечает" if item.get("ok") else str(item.get("reason") or "не отвечает"),
-        )
-        for item in reference
-    ]
-    answering = sum(1 for item in reference if item.get("ok"))
-    if spoofed:
-        level, status = WARN, f"Подмена адресов: {len(spoofed)}"
-    elif reference and answering < len(reference):
-        level, status = WARN, f"Эталоны: {answering} из {len(reference)}"
-    else:
-        level, status = OK, "Адреса не подменяются"
-    sections = []
-    if spoofed:
-        sections.append(Section("DNS подменяет адреса", tuple(Line(WARN, host) for host in spoofed)))
-        lines.insert(0, Line(WARN, "Подменены адреса", ", ".join(spoofed)))
-    sections.append(
-        Section(
-            "Эталонные серверы: по ним сверяются адреса сайтов",
-            tuple(lines[1:] if spoofed else lines),
-        )
-    )
-    return Card(
-        key="dns",
-        icon="fa5s.exchange-alt",
-        title="Подмена DNS",
-        level=level,
-        status=status,
-        lines=tuple(lines),
-        sections=tuple(sections),
-    )
-
-
-_DNS_SERVERS_STATUS = {OK: "В порядке", WARN: "Есть замечания", FAIL: "Есть проблемы", UNKNOWN: "Не проверено"}
-
-
-def _dns_servers_card(dns_servers: dict) -> Card:
-    level = _state(dns_servers.get("level"))
-    findings = [
-        Line(_state(item.get("level"), INFO), str(item.get("text") or ""), parts=read_finding_parts(item))
-        for item in dns_servers.get("findings") or ()
-    ]
-    sections = [Section("Выводы", tuple(findings))] if findings else []
-    text = str(dns_servers.get("text") or "")
-    if text:
-        sections.append(Section("Все серверы и способы связи", text=text))
-    return Card(
-        key="dns_servers",
-        icon="fa5s.network-wired",
-        title="DNS-серверы",
-        level=level,
-        status=_DNS_SERVERS_STATUS[level],
-        lines=tuple(findings) or (Line(level, "Замечаний нет"),),
-        sections=tuple(sections),
-    )
-
-
-def _hop_time(rtt: object) -> str:
-    if not isinstance(rtt, (int, float)):
-        return ""
-    return "< 1 мс" if rtt < 1 else f"{round(rtt)} мс"
-
-
-def _filter_card(place: dict) -> Card:
-    """«Место фильтра»: вывод, срок жизни для стратегий, сайты, по которым искали, и вся дорога с владельцами узлов."""
-    found = bool(place.get("found"))
-    state = str(place.get("state") or ("found" if found else "not_found"))
-    text = str(place.get("text") or "")
-    hop = place.get("hop") if found else None
-    level = WARN if found or state in ("disagree", "disturbed") else (INFO if state == "none" else UNKNOWN)
-    status = {
-        "found": "В роутере или на компьютере" if hop == 1 else f"Между узлами {(hop or 1) - 1} и {hop}",
-        "disagree": "Узлы не совпали",
-        "disturbed": "Мешает программа обхода",
-        "none": "Блокировок по имени нет",
-    }.get(state, "Не найдено")
-    # Одного места нет, но по отдельным способам блокировки оно найдено: это и есть главный итог.
-    located = [item for item in place.get("mechanisms") or () if item.get("hop")]
-    if not found and located:
-        hops = sorted({int(item["hop"]) for item in located})
-        level = WARN
-        status = f"По способам: {'узел' if len(hops) == 1 else 'узлы'} {', '.join(map(str, hops))}"
-    preview = [Line(WARN, str(item.get("title") or ""), _capital(str(item.get("text") or ""))) for item in located] if not found else []
-    preview.append(Line(level, _capital(text)))
-    if place.get("ttl_advice"):
-        preview.append(Line(INFO, "Для стратегий", str(place["ttl_advice"])))
-    sites = list(place.get("sites") or ())
-    if sites:
-        preview.append(Line(INFO, "Искали по сайтам", ", ".join(str(item.get("host") or "") for item in sites)))
-    elif place.get("host"):
-        preview.append(Line(INFO, "Дорога показана до", str(place["host"])))
-
-    sections = [Section("Вывод", tuple(line for line in preview if not line.text or line.name == "Для стратегий")[:2])]
-    mechanisms = [
-        Line(WARN if item.get("hop") else UNKNOWN, str(item.get("title") or ""), _capital(str(item.get("text") or "")))
-        for item in place.get("mechanisms") or ()
-    ]
-    if mechanisms:
-        if place.get("same_place"):
-            mechanisms.append(Line(INFO, "Один фильтр или несколько", str(place["same_place"])))
-        sections.append(Section("Чем и где режут", tuple(mechanisms)))
-    unmeasured = [Line(INFO, str(item.get("title") or ""), str(item.get("text") or "")) for item in place.get("unmeasured") or ()]
-    if unmeasured and mechanisms:
-        sections.append(Section("Место не измеряется", tuple(unmeasured)))
-    site_rows: list[Line] = []
-    for item in sites:
-        distance = f" · до сервера {item['distance']} узлов" if item.get("distance") else ""
-        site_rows.append(
-            Line(
-                # Найденное по сайту — свидетельство, а не отдельное замечание: замечание одно, в выводе.
-                INFO if item.get("found") else UNKNOWN,
-                f"{item.get('host', '')} ({item.get('address', '')}{distance})",
-                _capital(str(item.get("text") or "")),
-            )
-        )
-        for method in item.get("methods") or ():
-            site_rows.append(Line(INFO, f"   способ {method.get('title', '')}", str(method.get("text") or "")))
-    if site_rows:
-        sections.append(Section("По каким сайтам искали", tuple(site_rows)))
-    if place.get("reasons"):
-        sections.append(Section("На чём основан вывод", tuple(Line(INFO, str(reason)) for reason in place["reasons"])))
-    hops = []
-    for item in place.get("hops") or ():
-        if item.get("ttl") == hop:
-            hops.append(Line(FAIL, f"── {FILTER_MARK} ──"))
-        answered = bool(item.get("address"))
-        hops.append(
-            Line(
-                INFO,
-                f"Узел {item.get('ttl', '')}",
-                " · ".join(
-                    part
-                    for part in (
-                        str(item.get("address") or "не ответил"),
-                        _hop_time(item.get("rtt_ms")),
-                        str(item.get("owner") or "") if answered else "",
-                    )
-                    if part
-                ),
-            )
-        )
-    if hops:
-        sections.append(Section(f"Дорога до {place.get('host', '')} ({place.get('address', '')})", tuple(hops)))
-    return Card(
-        key="filter",
-        icon="fa5s.route",
-        title="Место фильтра",
-        level=level,
-        status=status,
-        lines=tuple(preview),
-        sections=tuple(sections),
-    )
-
-
-_WAY_STATES = {"passed": OK, "cut": FAIL}
-_HABIT_STATUS = {
-    "tcp": "Не склеивает пакеты",
-    "timer": "Склеивает только подряд",
-    "records": "Не разбирает записи TLS",
-    "none": "Собирает приветствие целиком",
-    "not_by_name": "По имени не режет",
-}
-
-
-def _habits_card(habits: dict) -> Card:
-    """«Как работает фильтр»: какое дробление приветствия проходит и режется ли ECH."""
-    ech = habits.get("ech") or {}
-    ech_state = {"blocked": WARN, "fine": OK}.get(str(ech.get("state")), UNKNOWN)
-    from diagnostics.filter_habits import NOT_RUN, way_text
-
-    disturbed = [str(name) for name in habits.get("disturbed") or ()]
-    lines = [Line(WARN if disturbed else INFO, _capital(str(habits.get("headline") or "")))]
-    if habits.get("advice"):
-        lines.append(Line(INFO, "Что делать" if disturbed else "Какие стратегии пробовать", str(habits["advice"])))
-    if ech.get("text"):
-        lines.append(Line(ech_state, "ECH", _capital(str(ech["text"]))))
-    sections = [Section("Что делает фильтр", tuple(lines[:2]))]
-    for site in habits.get("sites") or ():
-        rows = [Line(INFO, "Вывод", _capital(str(site.get("text") or "")))]
-        if site.get("advice"):
-            rows.append(Line(INFO, "Какие стратегии пробовать", str(site["advice"])))
-        for way in site.get("ways") or ():
-            if way.get("state") == NOT_RUN:
-                continue
-            # Строка способа: что вышло с именем сайта, что с безобидным именем и что это значит.
-            rows.append(Line(_WAY_STATES.get(str(way.get("state")), UNKNOWN), str(way.get("title") or ""), way_text(way)))
-        sections.append(Section(f"{site.get('host', '')} ({site.get('address', '')})", tuple(rows)))
-    if habits.get("sites") and habits.get("limits"):
-        sections.append(Section("Чего эта проверка не видит", (Line(INFO, str(habits["limits"])),)))
-    if ech.get("text"):
-        rows = [Line(ech_state, "Шифрованное имя сайта (ECH)", _capital(str(ech["text"])))]
-        if ech.get("advice"):
-            rows.append(Line(INFO, "Что делать", str(ech["advice"])))
-        sections.append(Section("Cloudflare и ECH", tuple(rows)))
-    return Card(
-        key="habits",
-        icon="fa5s.cut",
-        title="Как работает фильтр",
-        level=WARN if ech_state == WARN or disturbed else INFO,
-        status=_habits_status(habits, disturbed, ech_state),
-        lines=tuple(lines),
-        sections=tuple(sections),
-    )
-
-
-def _habits_status(habits: dict, disturbed: list[str], ech_state: str) -> str:
-    """Слово результата на карточке: вывод о фильтре, если он один на все сайты."""
-    if disturbed:
-        return "Мешает обход"
-    codes = {str(site.get("code")) for site in habits.get("sites") or ()} - {"unknown"}
-    if len(codes) == 1:
-        return _HABIT_STATUS.get(codes.pop(), "Проверено дробление")
-    if len(codes) > 1:
-        return "По сайтам по-разному"
-    if habits.get("sites"):
-        return "Вывода нет"
-    return "ECH режется" if ech_state == WARN else "ECH проходит"
-
-
-def _network_card(network: dict) -> Card:
-    lines = tuple(
-        Line(_state(item.get("state"), INFO), str(item.get("name") or ""), str(item.get("text") or ""))
-        for item in network.get("lines") or ()
-    )
-    provider = str(network.get("provider") or "")
-    level = WARN if any(line.state == WARN for line in lines) else (INFO if network.get("external_ip") else UNKNOWN)
-    return Card(
-        key="network",
-        icon="fa5s.wifi",
-        title="Ваша сеть",
-        level=level,
-        status=provider or ("Провайдер не определён" if network.get("external_ip") else "Не удалось узнать"),
-        lines=lines,
-        sections=(
-            Section("Под каким адресом вас видит интернет", lines),
-            Section(
-                "Зачем это",
-                (
-                    Line(
-                        INFO,
-                        "Блокировки у провайдеров разные. Если здесь чужая сеть (VPN, прокси), "
-                        "вся проверка описывает сеть вместе с ней, а не вашего провайдера.",
-                    ),
-                ),
-            ),
-        ),
-    )
-
-
-def _system_card(items: list[dict]) -> Card:
-    lines = [
-        Line(_state(item.get("level")), str(item.get("title") or ""), str(item.get("text") or "")) for item in items
-    ]
-    failed = [line for line in lines if line.state == FAIL]
-    warned = [line for line in lines if line.state == WARN]
-    if failed:
-        level, status = FAIL, f"Мешает работе: {len(failed)}"
-    elif warned:
-        level, status = WARN, f"Замечаний: {len(warned)}"
-    elif lines and all(line.state == UNKNOWN for line in lines):
-        level, status = UNKNOWN, "Не проверено"
-    else:
-        level, status = OK, f"В порядке: {sum(1 for line in lines if line.state == OK)} из {len(lines)}"
-    shown = sorted(lines, key=lambda line: level_rank(line.state))
-    advice = [
-        Line(INFO, str(item.get("title") or ""), str(item.get("advice") or ""))
-        for item in items
-        if item.get("advice") and item.get("level") in (FAIL, WARN)
-    ]
-    sections = [Section("Что проверено на компьютере", tuple(lines))]
-    if advice:
-        sections.insert(0, Section("Что делать", tuple(advice)))
-    return Card(
-        key="system",
-        icon="fa5s.desktop",
-        title="Этот компьютер",
-        level=level,
-        status=status,
-        lines=tuple(shown),
-        sections=tuple(sections),
+def _with_site_pages(section: Section, report: dict) -> Section:
+    """Плитка сайта в «С Zapret и без» открывает его страницу: что было в обеих проверках и все пробы этой."""
+    if not section.tiles:
+        return section
+    key = next((group for group, name in ((group, GROUP_TITLES[group]) for group in COMPARE_STATES) if name == section.title), "")
+    services = report.get("services") or ()
+    return replace(
+        section,
+        lines=tuple(replace(line, page=_compare_site_page(line.name, key, report["compare"], services)) for line in section.lines),
     )
 
 
@@ -910,43 +408,13 @@ def build_cards(report: dict) -> list[Card]:
     """Карточки по отчёту: сначала сайты (сломанные впереди), затем остальные проверки."""
     services = list(report.get("services") or ())
     cards = [_site_card(service) for service in sorted(services, key=lambda item: level_rank(site_level(item)))]
-    if report.get("network"):
-        cards.append(_network_card(report["network"]))
-    freeze = report.get("freeze")
-    if freeze and freeze.get("servers"):
-        cards.append(_hostings_card(freeze))
-    if report.get("voice"):
-        cards.append(_voice_card(report["voice"]))
-    if report.get("telegram"):
-        cards.append(_telegram_card(report["telegram"]))
-    dns = _dns_card(report)
-    if dns is not None:
-        cards.append(dns)
-    if report.get("dns_servers"):
-        cards.append(_dns_servers_card(report["dns_servers"]))
-    if report.get("speed"):
-        cards.append(_speed_card(report["speed"]))
-    if report.get("ipv6"):
-        cards.append(_ipv6_card(report["ipv6"]))
-    if report.get("filter"):
-        cards.append(_filter_card(report["filter"]))
-    if report.get("habits"):
-        cards.append(_habits_card(report["habits"]))
-    system = list(report.get("system") or ())
-    if system:
-        cards.append(_system_card(system))
-    if report.get("crowd"):
-        cards.append(_crowd_card(report["crowd"]))
-    if report.get("compare"):
-        cards.append(_compare_card(report["compare"], report.get("services") or ()))
+    cards.extend(_block_card(view, report) for view in build_blocks(report))
     run = _run_card(report)
     if run is not None:
         cards.append(run)
     return cards
 
 
-_COMPARE_STATES = {"helped": OK, "not_helped": FAIL, "broken": WARN, "fine_anyway": INFO}
-_COMPARE_STATUS = {OK: "Обход справляется", WARN: "Помогает не всем", FAIL: "Пресет не помог"}
 
 
 # Что было с сайтом в двух проверках — по группе сравнения: (с Zapret, без Zapret).
@@ -958,25 +426,15 @@ _COMPARE_OPENS = {
 }
 
 
-def _one_preset_note(preset: str) -> str:
-    """Оговорка, без которой сравнение читают неверно: это итог одного пресета, а не Zapret вообще."""
-    name = f"«{preset}»" if preset else "выбранного сейчас"
-    return (
-        f"Это итог одного пресета — {name}. Пресет решает, для каких сайтов и какой обход включён: "
-        "с другим пресетом или после «Подбора стратегии» результат может быть другим."
-    )
-
-
 def _compare_site_page(name: str, key: str, compare: dict, services) -> Card:
     """Страница сайта из сравнения: что было с Zapret и без, и все пробы этой проверки."""
-    from diagnostics.compare import GROUP_TITLES
     from diagnostics.history import format_time
 
     preset = str(compare.get("preset") or "")
     with_zapret, without = _COMPARE_OPENS[key]
     now, past = ("С Zapret", "Без Zapret") if compare.get("zapret_in") == "current" else ("Без Zapret", "С Zapret")
     now_text, past_text = (with_zapret, without) if compare.get("zapret_in") == "current" else (without, with_zapret)
-    state = _COMPARE_STATES[key]
+    state = COMPARE_STATES[key]
     verdict = Section(
         "С Zapret и без",
         (
@@ -988,7 +446,7 @@ def _compare_site_page(name: str, key: str, compare: dict, services) -> Card:
                 past_text,
             ),
             Line(INFO, "Пресет", preset or "не определён"),
-            Line(INFO, _one_preset_note(preset)),
+            Line(INFO, one_preset_note(preset)),
         ),
     )
     service = next((item for item in services if str(item.get("label") or "") == name), None)
@@ -998,67 +456,6 @@ def _compare_site_page(name: str, key: str, compare: dict, services) -> Card:
     site = _site_card(service)
     # Уровень остаётся от самой проверки сайта: по нему рисуется дорога и место, где режут.
     return replace(site, key=f"compare:{site.key}", status=GROUP_TITLES[key], kind="", sections=(verdict, *site.sections))
-
-
-def _compare_card(compare: dict, services=()) -> Card:
-    """«С Zapret и без»: что дала пара проверок — эта и прошлая в противоположном состоянии обхода."""
-    from diagnostics.compare import GROUP_TITLES
-    from diagnostics.history import format_time
-
-    level = _state(compare.get("level"))
-    preset = str(compare.get("preset") or "")
-    groups = [(key, [str(name) for name in compare.get(key) or ()]) for key in _COMPARE_STATES]
-    summary = tuple(
-        Line(_COMPARE_STATES[key], GROUP_TITLES[key], ", ".join(names)) for key, names in groups if names
-    )
-    other = "без Zapret" if compare.get("zapret_in") == "current" else "с Zapret"
-    facts = [Line(INFO, f"Прошлая проверка {other}", format_time(str(compare.get("other_time") or "")))]
-    if compare.get("preset"):
-        facts.append(Line(INFO, "Пресет", str(compare["preset"])))
-    # Первой строкой — что это итог одного пресета: без этого «не помог» читают как «Zapret не поможет».
-    sections = [Section(str(compare.get("headline") or "С Zapret и без"), (Line(INFO, _one_preset_note(preset)), *summary))]
-    sections += [
-        Section(
-            GROUP_TITLES[key],
-            # Плитка сайта открывает его страницу: что было в обеих проверках и все пробы этой.
-            tuple(Line(_COMPARE_STATES[key], name, page=_compare_site_page(name, key, compare, services)) for name in names),
-            tiles=True,
-        )
-        for key, names in groups
-        if names
-    ]
-    sections.append(Section("Что сравнивали", tuple(facts)))
-    notes = tuple(Line(INFO, str(note)) for note in compare.get("notes") or ())
-    if notes:
-        sections.append(Section("Как это читать", notes))
-    return Card(
-        key="compare",
-        icon="fa5s.balance-scale",
-        title="С Zapret и без",
-        level=level,
-        # В слове итога назван пресет: сравнение говорит о нём одном.
-        status=" · ".join(part for part in (_COMPARE_STATUS.get(level, "Сравнение"), f"пресет «{preset}»" if preset else "") if part),
-        lines=summary,
-        sections=tuple(sections),
-    )
-
-
-def _registry_lines(summary: dict) -> tuple[Line, ...]:
-    """Сам список реестра РКН, по которому ставятся отметки «в реестре»: свежий ли и сколько в нём записей."""
-    import time
-
-    state = str(summary.get("state") or "")
-    if not state:
-        return ()
-    if not summary.get("hosts"):
-        return (Line(UNKNOWN, "Список", "скачать не удалось — отметок «в реестре» в этой проверке нет"),)
-    when = time.strftime("%d.%m.%Y", time.localtime(float(summary.get("updated") or 0)))
-    fresh = state == "fresh"
-    return (
-        Line(OK if fresh else WARN, "Скачан", when if fresh else f"{when} — давно не обновлялся, свежий скачать не удалось"),
-        Line(INFO, "Имён сайтов", f"{int(summary['hosts']):,}".replace(",", " ")),
-        Line(INFO, "Адресов и сетей", f"{int(summary.get('networks') or 0):,}".replace(",", " ")),
-    )
 
 
 def _run_card(report: dict) -> Card | None:
@@ -1090,7 +487,7 @@ def _run_card(report: dict) -> Card | None:
     if proxies:
         conditions.append(Line(INFO, "Прокси (проверка ходит мимо него)", ", ".join(proxies)))
     tools = in_path
-    listing = _registry_lines(report.get("registry") or {})
+    listing = tuple(_line_of(row) for row in registry_rows(report.get("registry") or {}))
     if not times and not conditions and not listing:
         return None
     sections = []

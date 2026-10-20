@@ -57,7 +57,6 @@ __all__ = [
     "collect",
     "describe_hops",
     "judge_site",
-    "lines",
     "mechanisms",
     "pick_candidates",
     "report",
@@ -592,37 +591,3 @@ def mechanisms(verdicts: Iterable[SiteVerdict], dns=None) -> dict:
         "same_place": same,
         "unmeasured": [{"title": title, "text": text} for title, text in UNMEASURED],
     }
-
-
-def lines(place: dict) -> list[str]:
-    """Раздел «Где стоит фильтр» для текстового отчёта."""
-    out = ["", "━━━━━━━━ Где стоит фильтр ━━━━━━━━"]
-    icon = {STATE_FOUND: "📍", STATE_DISAGREE: "⚠️", STATE_DISTURBED: "⚠️"}.get(place.get("state"), "ℹ️")
-    out.append(f"{icon} {place.get('text', '')}")
-    if place.get("ttl_advice"):
-        out.append(f"   👉 {place['ttl_advice']}")
-    for site in place.get("sites") or ():
-        mark = "📍" if site.get("found") else "❔"
-        distance = f", до сервера {site['distance']} узлов" if site.get("distance") else ""
-        out.append(f"   {mark} {site.get('host', '')} ({site.get('address', '')}{distance}): {site.get('text', '')}")
-        for method in site.get("methods") or ():
-            out.append(f"        {method.get('title', '')}: {method.get('text', '')}")
-    if place.get("mechanisms"):
-        out.append("   Чем и где режут:")
-        for item in place["mechanisms"]:
-            out.append(f"      {'📍' if item.get('hop') else '❔'} {item.get('title', '')}: {item.get('text', '')}")
-        if place.get("same_place"):
-            out.append(f"      ℹ️ {place['same_place']}")
-        for item in place.get("unmeasured") or ():
-            out.append(f"      ➖ {item.get('title', '')}: место не измеряется — {item.get('text', '')}")
-    hops = place.get("hops") or ()
-    if hops:
-        out.append(f"   Дорога до {place.get('host', '')}:")
-        for hop in hops:
-            if place.get("found") and hop.get("ttl") == place.get("hop"):
-                out.append("      ── здесь стоит фильтр ──")
-            rtt = hop.get("rtt_ms")
-            time_text = "" if not isinstance(rtt, (int, float)) else ("< 1 мс" if rtt < 1 else f"{round(rtt)} мс")
-            parts = [part for part in (hop.get("address") or "не ответил", time_text, hop.get("owner") if hop.get("address") else "") if part]
-            out.append(f"      {hop.get('ttl', ''):>2}. {' · '.join(parts)}")
-    return out

@@ -78,6 +78,23 @@ def _fetch_report_mapping(url: str, timeout: float) -> str:
         return response.raw.read(2048, decode_content=True).decode("utf-8", errors="ignore")
 
 
+def fetch_mapped_host(*, timeout: float = 3.0, cancelled: Callable[[], bool] | None = None) -> str:
+    """Узел вашей сети по ответу редиректора (обычный HTTP). Пусто — не ответил или ответ не похож на настоящий."""
+    is_cancelled = cancelled or (lambda: False)
+    deadline = time.monotonic() + max(0.1, float(timeout))
+    for url in _REPORT_MAPPING_URLS:
+        remaining = deadline - time.monotonic()
+        if is_cancelled() or remaining <= 0:
+            break
+        try:
+            host = parse_report_mapping(_fetch_report_mapping(url, remaining))
+        except Exception:  # заглушка провайдера, обрыв или нет requests: остаётся страница ролика
+            continue
+        if host:
+            return host
+    return ""
+
+
 # Apex-домен не является видеосервером: прямая проверка всегда падает,
 # работают только rr*-поддомены или служебный redirector.
 _BARE_GOOGLEVIDEO_HOSTS = frozenset({"googlevideo.com", "www.googlevideo.com"})

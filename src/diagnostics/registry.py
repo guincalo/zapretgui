@@ -43,7 +43,6 @@ __all__ = [
     "Index",
     "Match",
     "annotate",
-    "lines",
     "summary",
     "build_hosts",
     "build_networks",
@@ -300,34 +299,6 @@ def refresh(folder: Path, fetch: Fetch, *, now: float | None = None, max_age: fl
 def summary(index: Index, now: float | None = None) -> dict:
     """Состояние списка для отчёта: есть ли он, когда скачан и сколько в нём имён."""
     return {"state": index.state(now), "updated": index.updated, "hosts": index.count, "networks": len(index.networks)}
-
-
-def lines(services: list[dict], index: Index, now: float | None = None) -> list[str]:
-    """Раздел «Реестр РКН» для текстового отчёта."""
-    out = ["", "━━━━━━━━ Реестр РКН ━━━━━━━━"]
-    if not index.hosts:
-        out.append("❔ Список реестра скачать не удалось — отметок «в реестре» в этот раз нет")
-        return out
-    when = time.strftime("%d.%m.%Y", time.localtime(index.updated))
-    stale = " (давно не обновлялся: свежий скачать не удалось)" if index.state(now) == STATE_STALE else ""
-    out.append(f"ℹ️ Список от {when}{stale}: {index.count} имён сайтов и {len(index.networks)} заблокированных адресов и сетей")
-    found = 0
-    for service in services:
-        for target in service.get("targets") or ():
-            mark = target.get("registry") or {}
-            if not mark.get("listed"):
-                continue
-            found += 1
-            parts = []
-            if mark.get("name"):
-                parts.append("имя в реестре" if mark["name"] == target.get("host") else f"в реестре есть {mark['name']}")
-            if mark.get("network"):
-                parts.append(f"адрес {target.get('address', '')} в списке заблокированных ({mark['network']})")
-            out.append(f"📕 {target.get('host', '')}: {'; '.join(parts)}")
-    if not found:
-        out.append("ℹ️ Ни один из проверенных сайтов в реестре не значится")
-    out.append("   Сайт могут блокировать и без записи в реестре — так режут, например, YouTube.")
-    return out
 
 
 # Метка сайта, который значится в списке.

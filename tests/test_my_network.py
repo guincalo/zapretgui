@@ -47,7 +47,7 @@ class JudgeTests(unittest.TestCase):
     def test_provider_network_and_router(self) -> None:
         lines = self._lines(external_ip="203.0.113.7", country="RU", owner=OWNER, local_ip="192.168.1.5")
 
-        self.assertEqual(lines["Внешний адрес"].text, "203.0.113.7 (RU)")
+        self.assertEqual(lines["Внешний адрес"].text, "203.0.113.xxx (RU) — последние цифры скрыты, чтобы отчётом можно было делиться")
         self.assertEqual(lines["Провайдер"].text, "ROSTELECOM-AS · AS12389, RU")
         self.assertEqual(lines["Сеть"].text, "203.0.113.0/24")
         self.assertIn("за роутером", lines["Адрес компьютера"].text)

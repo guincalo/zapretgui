@@ -83,7 +83,6 @@ __all__ = [
     "check_split",
     "judge_ech",
     "judge_split",
-    "lines",
     "summarize",
 ]
 
@@ -560,29 +559,3 @@ def way_text(way: dict) -> str:
     if way.get("control"):
         parts.append(f"с безобидным именем: {way['control']}")
     return " · ".join(parts) + (f" — {way['meaning']}" if way.get("meaning") else "")
-
-
-def lines(report: dict) -> list[str]:
-    """Раздел для текстового отчёта."""
-    out = ["", "━━━━━━━━ Как работает фильтр ━━━━━━━━"]
-    out.append(f"{'⚠️' if report.get('disturbed') else 'ℹ️'} {report.get('headline', '')}")
-    if report.get("advice"):
-        out.append(f"   👉 {report['advice']}")
-    for site in report.get("sites") or ():
-        out.append(f"   {site.get('host', '')} ({site.get('address', '')}): {site.get('text', '')}")
-        if site.get("advice"):
-            out.append(f"      👉 {site['advice']}")
-        for way in site.get("ways") or ():
-            if way.get("state") == NOT_RUN:
-                continue
-            icon = _STATE_ICONS.get(way["state"], "❔")
-            out.append(f"      {icon} {way['title']} — {_STATE_WORDS.get(way['state'], '')}: {way_text(way)}")
-    if report.get("sites") and report.get("limits"):
-        out.append(f"   ℹ️ {report['limits']}")
-    ech = report.get("ech") or {}
-    if ech.get("text"):
-        icon = {ECH_BLOCKED: "⚠️", ECH_FINE: "✅"}.get(ech.get("state"), "❔")
-        out.append(f"{icon} ECH: {ech['text']}")
-        if ech.get("advice"):
-            out.append(f"   👉 {ech['advice']}")
-    return out

@@ -8,7 +8,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from diagnostics import compare, history
+from diagnostics import block_view, compare, history
 from settings.normalize import normalize_check_history
 
 
@@ -107,12 +107,12 @@ class CompareTests(unittest.TestCase):
 
     def test_lines_name_every_group(self) -> None:
         result = self._pair({"YouTube": "ok", "Telegram": "fail"}, {"YouTube": "fail", "Telegram": "fail"})
-        text = "\n".join(compare.lines(result, format_time=history.format_time))
+        text = "\n".join(block_view.text_lines("compare", result))
 
-        self.assertIn("Обход помог: YouTube", text)
-        self.assertIn("Не открываются и с обходом: Telegram", text)
+        self.assertIn("✅ Обход помог: YouTube", text)
+        self.assertIn("❌ Не открываются и с обходом: Telegram", text)
         self.assertIn("08.10 12:00", text)
-        self.assertEqual(compare.lines(None), [])
+        self.assertEqual(block_view.text_lines("compare", None), [])
 
 
 class EntryAndSettingsTests(unittest.TestCase):

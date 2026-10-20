@@ -33,7 +33,6 @@ __all__ = [
     "ZAPRET_ON",
     "compare_runs",
     "counterpart",
-    "lines",
     "zapret_mark",
 ]
 
@@ -149,19 +148,3 @@ _GROUPS = (
     ("fine_anyway", "ℹ️", "Открываются и без Zapret"),
 )
 GROUP_TITLES = {key: title for key, _icon, title in _GROUPS}
-_LEVEL_ICONS = {"ok": "✅", "warn": "⚠️", "fail": "❌"}
-
-
-def lines(result: dict | None, *, format_time=str) -> list[str]:
-    """Сравнение строками для текста отчёта."""
-    if not result:
-        return []
-    state = "без Zapret" if result.get("zapret_in") == "current" else "с Zapret"
-    out = ["", f"━━━━━━━━ С Zapret и без (прошлая проверка {state} — {format_time(result.get('other_time') or '')}) ━━━━━━━━"]
-    out.append(f"{_LEVEL_ICONS.get(str(result.get('level')), 'ℹ️')} {result.get('headline')}")
-    for key, icon, title in _GROUPS:
-        names = result.get(key) or ()
-        if names:
-            out.append(f"{icon} {title}: {', '.join(names)}")
-    out.extend(f"ℹ️ {note}" for note in result.get("notes") or ())
-    return out

@@ -23,6 +23,7 @@ from diagnostics.block_kind import KIND_OTHER, KINDS, kind_info
 
 __all__ = [
     "INFO",
+    "DNS_ROWS",
     "STAGE_TITLES",
     "ViewRow",
     "ViewSection",
@@ -65,6 +66,8 @@ _OUTSIDE_WORDS = {
     "up": (INFO, "открывается — значит, закрыт он именно на вашей линии"),
     "down": (INFO, "тоже не открывается — сайт не работает сам"),
 }
+# Строки адреса, которые относятся к ответу DNS: короткая проверка показывает только их.
+DNS_ROWS = ("DNS", "Адреса DNS", "Заметка")
 _CONFIDENCE_WORDS = {"low": "низкая", "medium": "средняя", "high": "высокая"}
 
 # Части проверки одного сайта — на что ушло его время.
@@ -76,12 +79,21 @@ class ViewRow:
     level: str
     title: str
     text: str = ""
+    # Данные для экрана, которые текст не показывает (например, находка про DNS-серверы по частям).
+    extra: object = None
 
 
 @dataclass(frozen=True, slots=True)
 class ViewSection:
     title: str
     rows: tuple[ViewRow, ...] = ()
+    # Текст как есть, моноширинным: таблица узлов или полный отчёт.
+    text: str = ""
+    # Строки — однотипный перечень: экран может показать его сеткой плиток.
+    tiles: bool = False
+    tile_icon: str = ""
+    # Пояснение «что это за проверка»: на экране оно нужно, в текстовом отчёте повторять его незачем.
+    screen_only: bool = False
 
 
 def shown_level(value: object, default: str = UNKNOWN) -> str:
@@ -240,6 +252,7 @@ def name_speed_sections(names: dict) -> tuple[ViewSection, ...]:
                     "перепроверяется, контроль в конце повторяется.",
                 ),
             ),
+            screen_only=True,
         ),
     )
 
@@ -267,7 +280,10 @@ def render_text(sections: Iterable[ViewSection], indent: str = "") -> list[str]:
     """Разделы строками текста: заголовок раздела и под ним строки со значком уровня."""
     lines: list[str] = []
     for section in sections:
+        if section.screen_only:
+            continue
         lines.append(f"{indent}{section.title}")
+        lines.extend(f"{indent}   {line}" for line in section.text.splitlines())
         for row in section.rows:
             body = f"{row.title}: {row.text}" if row.text else row.title
             lines.append(f"{indent}   {TEXT_ICONS.get(row.level, TEXT_ICONS[UNKNOWN])} {body}")

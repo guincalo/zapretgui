@@ -6,6 +6,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from diagnostics import block_view
 from diagnostics import crowd_probe as cp
 from diagnostics import sections
 from diagnostics.block_cause import HELLO_CANCELLED, HELLO_OK, HELLO_RESET, HELLO_TIMEOUT
@@ -175,7 +176,7 @@ class SectionTests(unittest.TestCase):
         run = SimpleNamespace(dns_cancelled=lambda: False, pause=lambda _seconds: True, probe_cancel=None, submit=None, deadline=10**9)
         lines: list[str] = []
         with patch.object(cp, "collect", side_effect=collect):
-            result = sections.check_crowd(run, collected, services, lines.append, tools=tools)
+            result = sections.check_crowd(run, collected, services, tools=tools)
         return result, asked, lines
 
     def test_first_open_main_site_is_taken(self) -> None:
@@ -191,7 +192,9 @@ class SectionTests(unittest.TestCase):
         self.assertEqual(result["crowd"], [HELLO_OK] * 4)
         self.assertEqual(result["status"], "Не замирает")
         self.assertEqual(len(result["rows"]), 6)
-        self.assertTrue(any("Несколько соединений сразу" in line for line in lines))
+        # Строки журнала раздел печатает движок из этого словаря, сама проверка ничего не печатает.
+        self.assertEqual(lines, [])
+        self.assertIn("━━━━━━━━ Несколько соединений сразу ━━━━━━━━", block_view.text_lines("crowd", result))
 
     def test_probe_is_not_run_with_a_bypass_working(self) -> None:
         collected = {"ya": [self._probe("ya.ru")], "b": [self._probe("b.example")]}

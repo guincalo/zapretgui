@@ -30,7 +30,7 @@ from blockcheck.stun_tester import build_stun_request
 from utils.net_resolve import resolve_addrinfo
 from utils.socket_cancel import SocketCancel, close_quietly
 
-__all__ = ["BURST_OK", "BURST_FREEZE", "BURST_UNKNOWN", "BurstVerdict", "check_bursts", "judge", "lines", "send_burst"]
+__all__ = ["BURST_OK", "BURST_FREEZE", "BURST_UNKNOWN", "BurstVerdict", "check_bursts", "judge", "send_burst"]
 
 SERVERS = (("Google", "stun.l.google.com", 19302), ("Cloudflare", "stun.cloudflare.com", 3478))
 PACKETS = 30
@@ -134,16 +134,6 @@ def check_bursts(send: Callable[[str, int], tuple[bool, ...] | None], *, submit:
 
     futures = [(name, submit(one, host, port)) for name, host, port in SERVERS]
     return tuple((name, future.result()) for name, future in futures)
-
-
-def lines(verdict: BurstVerdict | None) -> list[str]:
-    """Строки для текстового отчёта. Пусто — вывода нет."""
-    if verdict is None:
-        return []
-    icon = {BURST_OK: "✅", BURST_FREEZE: "⚠️"}.get(verdict.code, "❔")
-    return [f"{icon} Серия пакетов UDP: {verdict.text}"] + [
-        f"   {name}: ответов {', '.join(series)}" for name, series in verdict.servers
-    ]
 
 
 def judge(facts) -> BurstVerdict | None:

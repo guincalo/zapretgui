@@ -26,6 +26,7 @@ import socket
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from diagnostics.privacy import MASK_NOTE, mask_ip, mask_prefix, mask_public_ip
 from utils.address_kinds import AddressKind, address_kind
 from utils.ip_owner import IpOwner
 
@@ -247,40 +248,41 @@ def judge(facts: NetworkFacts, *, bypass_tools=()) -> tuple[NetworkLine, ...]:
     lines: list[NetworkLine] = []
     if facts.external_ip:
         place = f" ({facts.country})" if facts.country else ""
-        lines.append(NetworkLine("info", "Внешний адрес", f"{facts.external_ip}{place}"))
+        lines.append(NetworkLine("info", "Внешний адрес", f"{mask_ip(facts.external_ip)}{place} — {MASK_NOTE}"))
         owner = _owner_text(facts.owner)
         if owner:
             country = facts.owner.country if facts.owner is not None else ""
             lines.append(NetworkLine("info", "Провайдер", f"{owner}{f', {country}' if country else ''}"))
             if facts.owner is not None and facts.owner.prefix:
-                lines.append(NetworkLine("info", "Сеть", facts.owner.prefix))
+                lines.append(NetworkLine("info", "Сеть", mask_prefix(facts.owner.prefix)))
         else:
             lines.append(NetworkLine("unknown", "Провайдер", "узнать не удалось"))
     else:
         lines.append(NetworkLine("unknown", "Внешний адрес", "узнать не удалось: сервер Cloudflare не ответил"))
 
     kind = address_kind(facts.local_ip) if facts.local_ip else AddressKind.INVALID
+    local = mask_public_ip(facts.local_ip)
     if kind == AddressKind.CARRIER:
         lines.append(
             NetworkLine(
                 "info",
                 "Адрес компьютера",
-                f"{facts.local_ip} — провайдер держит вас за общим адресом: входящие соединения снаружи невозможны",
+                f"{local} — провайдер держит вас за общим адресом: входящие соединения снаружи невозможны",
             )
         )
     elif facts.local_ip and facts.external_ip and facts.local_ip == facts.external_ip:
-        lines.append(NetworkLine("info", "Адрес компьютера", f"{facts.local_ip} — совпадает с внешним, прямое подключение"))
+        lines.append(NetworkLine("info", "Адрес компьютера", f"{local} — совпадает с внешним, прямое подключение"))
     elif facts.local_ip and kind == AddressKind.PUBLIC and facts.external_ip:
         # У компьютера свой адрес в интернете, а снаружи виден другой: между ними кто-то есть.
         lines.append(
             NetworkLine(
                 "info",
                 "Адрес компьютера",
-                f"{facts.local_ip} — а снаружи виден другой адрес: между ними прокси, VPN или общий адрес провайдера",
+                f"{local} — а снаружи виден другой адрес: между ними прокси, VPN или общий адрес провайдера",
             )
         )
     elif facts.local_ip:
-        lines.append(NetworkLine("info", "Адрес компьютера", f"{facts.local_ip} — за роутером"))
+        lines.append(NetworkLine("info", "Адрес компьютера", f"{local} — за роутером"))
 
     lines.extend(_link_lines(facts))
     tools = [str(item) for item in bypass_tools if item]

@@ -249,7 +249,7 @@ class NameChoiceTests(unittest.TestCase):
             patch.object(sections.net_access, "known_address", return_value="192.0.2.1"),
             patch.object(sections.name_speed, "collect", side_effect=collect),
         ):
-            self.assertIsNone(sections._name_speed(run, collected, services, lambda _line: None))
+            self.assertIsNone(sections._name_speed(run, collected, services))
 
         # Закрытый адрес и контрольный сайт не меряются; видеосервер YouTube — после главных адресов.
         self.assertEqual(asked, ["www.youtube.com", "discord.com", "rr1.googlevideo.com"])

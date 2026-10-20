@@ -5,6 +5,7 @@ from __future__ import annotations
 import unittest
 
 from blockcheck.ui.result_cards_model import build_cards
+from diagnostics import block_view
 from diagnostics import browser_hello
 from diagnostics import filter_habits as fh
 
@@ -311,7 +312,7 @@ class SiteChoiceTests(unittest.TestCase):
                 submit=pool.submit, wait=lambda future: future.result(), dns_cancelled=lambda: False, probe_cancel=None, pause=lambda _seconds: True
             )
             with patch.object(fh, "check_split", fake_split):
-                sections.check_filter_habits(run, collected, lambda _line: None)
+                sections.check_filter_habits(run, collected)
 
         self.assertEqual(sorted(asked), ["discord.com", "rutracker.org", "x.com"])
 
@@ -325,9 +326,9 @@ class ReportTests(unittest.TestCase):
 
         self.assertIn("записи шифрования — нет", report["headline"])
         self.assertIn("tlsrec", report["advice"])
-        text = "\n".join(fh.lines(report))
-        self.assertIn("❌ Разрез пакета посреди имени — режется: с именем сайта: сброс · с безобидным именем: прошло", text)
-        self.assertIn("✅ Две записи TLS, граница посреди имени — проходит", text)
+        text = "\n".join(block_view.text_lines("habits", report))
+        self.assertIn("   ❌ Разрез пакета посреди имени: с именем сайта: сброс · с безобидным именем: прошло", text)
+        self.assertIn("   ✅ Две записи TLS, граница посреди имени: ", text)
         self.assertIn("не испытываются", text)
 
     def test_different_habits_are_not_merged_into_one_advice(self) -> None:

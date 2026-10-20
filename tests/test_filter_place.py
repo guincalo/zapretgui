@@ -6,6 +6,7 @@ import unittest
 from concurrent.futures import ThreadPoolExecutor
 
 from blockcheck.ui.result_cards_model import FILTER_MARK, build_cards
+from diagnostics import block_view
 from diagnostics import filter_place as fp
 from diagnostics import path_trace as pt
 from utils.windows_icmp import HOP_ROUTER, HOP_SILENT, HOP_TARGET
@@ -268,9 +269,9 @@ class MechanismsTests(unittest.TestCase):
         self.assertEqual(rows["QUIC по имени сайта"].state, "warn")
         self.assertEqual(rows["TLS по имени сайта (сброс соединения)"].state, "unknown")
         self.assertIn("Один фильтр или несколько", rows)
-        text = "\n".join(fp.lines(place))
-        self.assertIn("📍 QUIC по имени сайта: между узлами 1 и 2", text)
-        self.assertIn("➖ Бан по адресу: место не измеряется", text)
+        text = "\n".join(block_view.text_lines("filter", place))
+        self.assertIn("   ⚠️ QUIC по имени сайта: Между узлами 1 и 2", text)
+        self.assertIn("   ℹ️ Бан по адресу: ", text)
 
 
 class CollectAndReportTests(unittest.TestCase):
@@ -303,11 +304,11 @@ class CollectAndReportTests(unittest.TestCase):
 
         self.assertEqual((place["found"], place["hop"], place["confidence"], place["host"]), (True, 4, "high", "a.example"))
         self.assertEqual([site["hop"] for site in place["sites"]], [4, 4])
-        text = "\n".join(fp.lines(place))
-        self.assertIn("📍 Фильтр стоит между узлами 3 и 4 от вас", text)
-        self.assertIn("👉 Поддельным пакетам стратегии подходит срок жизни (TTL) от 4 до 6", text)
-        self.assertLess(text.index("── здесь стоит фильтр ──"), text.index(" 4. 195.34.50.1"))
-        self.assertIn(" 3. 212.188.1.1 · 6 мс · ваш провайдер (MTS)", text)
+        text = "\n".join(block_view.text_lines("filter", place))
+        self.assertIn("Фильтр стоит между узлами 3 и 4 от вас", text)
+        self.assertIn("Для стратегий: Поддельным пакетам стратегии подходит срок жизни (TTL) от 4 до 6", text)
+        self.assertLess(text.index("── здесь стоит фильтр ──"), text.index("Узел 4: 195.34.50.1"))
+        self.assertIn("Узел 3: 212.188.1.1 · 6 мс · ваш провайдер (MTS)", text)
 
         [card] = build_cards({"filter": place})
         self.assertEqual((card.level, card.status), ("warn", "Между узлами 3 и 4"))

@@ -10,7 +10,7 @@ import unittest
 from unittest.mock import patch
 
 from diagnostics import block_kind as bk
-from diagnostics import engine, net_access, reach, report_text
+from diagnostics import engine, net_access, reach, report_text, video_nodes
 from diagnostics.tls_probe import KIND_CONNECT, KIND_OK, KIND_TIMEOUT, ProbeResult
 from diagnostics.verdict import ReachState, judge_reach
 from utils.windows_dns_query import DnsAnswer
@@ -272,6 +272,59 @@ class VideoServerFallbackTests(unittest.TestCase):
         self.assertEqual(asked, ["rr1.example", "rr2.example"])
         self.assertEqual(probe.host, "rr1.example")
 
+    def test_slow_first_node_is_compared_with_a_spare_one(self) -> None:
+        from types import SimpleNamespace
+
+        target = engine.Target("redirector.googlevideo.com", "видео", discover_googlevideo=True)
+        levels = {"rr1.example": ("warn", "pause"), "rr2.example": ("ok", "ok")}
+        asked: list[str] = []
+
+        def _probe_host(_run, target_, service, host, note, **_kwargs):
+            asked.append(host)
+            probe = engine._Probe(target=target_, service=service, host=host, discovery_note=note)
+            probe.reach_state = ReachState.OK
+            probe.reach = _ok("203.0.113.9")
+            probe.transfer = SimpleNamespace(level=levels[host][0], code=levels[host][1])
+            return probe
+
+        run = engine._Run(None, workers=2, deadline=60)
+        self.addCleanup(run.close)
+        with (
+            patch.object(engine, "_discover_googlevideo", return_value=(("rr1.example", "rr2.example"), "адрес видеосервера получен от YouTube")),
+            patch.object(engine, "_probe_host", side_effect=_probe_host),
+            patch.object(video_nodes, "owner_note", return_value="узел в сети провайдера, AS20485 (TTK)"),
+        ):
+            probe = engine._probe_target(run, target, "youtube", full=True, volume=True)
+
+        self.assertEqual((probe.host, asked), ("rr1.example", ["rr1.example", "rr2.example"]))
+        self.assertIn("узел в сети провайдера, AS20485", probe.discovery_note)
+        self.assertIn("запасной видеосервер rr2.example отвечает быстро — дело в первом узле", probe.discovery_note)
+
+    def test_fast_first_node_needs_no_spare_probe(self) -> None:
+        from types import SimpleNamespace
+
+        target = engine.Target("redirector.googlevideo.com", "видео", discover_googlevideo=True)
+        asked: list[str] = []
+
+        def _probe_host(_run, target_, service, host, note, **_kwargs):
+            asked.append(host)
+            probe = engine._Probe(target=target_, service=service, host=host, discovery_note=note)
+            probe.reach_state = ReachState.OK
+            probe.reach = _ok("203.0.113.9")
+            probe.transfer = SimpleNamespace(level="ok", code="ok")
+            return probe
+
+        run = engine._Run(None, workers=2, deadline=60)
+        self.addCleanup(run.close)
+        with (
+            patch.object(engine, "_discover_googlevideo", return_value=(("rr1.example", "rr2.example"), "")),
+            patch.object(engine, "_probe_host", side_effect=_probe_host),
+            patch.object(video_nodes, "owner_note", return_value=""),
+        ):
+            engine._probe_target(run, target, "youtube", full=True, volume=True)
+
+        self.assertEqual(asked, ["rr1.example"])
+
     def test_working_first_server_needs_no_spare(self) -> None:
         _probe, asked = self._probe(("rr1.example", "rr2.example"), {"rr1.example": ReachState.OK})
 
@@ -355,7 +408,8 @@ class GooglevideoDiscoveryTests(unittest.TestCase):
         with (
             patch.object(net_access, "browser_ipv4", return_value=("142.250.1.1",)),
             patch.object(net_access, "fetch", side_effect=fetch),
-            patch.object(engine, "DISCOVERY_READ_BUDGET_S", budget),
+            patch.object(video_nodes, "DISCOVERY_READ_BUDGET_S", budget),
+            patch.object(video_nodes, "_mapped_host", return_value=""),
         ):
             return engine._discover_googlevideo(run)
 
