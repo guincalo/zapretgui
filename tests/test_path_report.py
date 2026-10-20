@@ -169,10 +169,13 @@ class ReportAndCardTests(unittest.TestCase):
         self.assertEqual([step["key"] for step in full["path"]], ["dns", "tcp", "tls", "quic", "data"])
         self.assertIsNone(bare["path"])
 
-    def test_text_report_has_the_chain(self) -> None:
+    def test_text_report_has_the_path_section(self) -> None:
         lines = report_text.probe_lines(_probe(), full=True)
 
-        self.assertTrue(any(line.startswith("   🧭 Путь запроса: DNS ✅ → TCP ✅") for line in lines))
+        self.assertIn("Путь запроса", lines)
+        after = lines[lines.index("Путь запроса") + 1 :]
+        self.assertTrue(after[0].startswith("   ✅ DNS:"))
+        self.assertTrue(any(line.startswith("   ✅ Соединение (TCP):") for line in after))
 
     def test_card_gets_a_path_section_for_the_main_address(self) -> None:
         report = json.loads(FIXTURE.read_text(encoding="utf-8"))

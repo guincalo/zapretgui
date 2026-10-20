@@ -12,9 +12,10 @@
 
 from __future__ import annotations
 
-from diagnostics import block_kind, outside_check, path_report, protocol_probe, quic_probe, telegram_check, transfer_probe, volume_probe
+from diagnostics import block_kind, path_report, protocol_probe, quic_probe, service_view, telegram_check, transfer_probe, volume_probe
 from diagnostics.limits import DNS_ATTEMPTS, HTTPS_TIMEOUT, SOURCE_HOSTS, SOURCE_REFERENCE
 from diagnostics.run_context import RECHECK_OPENED, RECHECK_SAME, Probe
+from diagnostics.service_view import STAGE_TITLES, stages_text  # noqa: F401  (слова отчёта живут в service_view)
 from diagnostics.services import (
     STEP_DNS_SERVERS,
     STEP_FILTER,
@@ -25,28 +26,6 @@ from diagnostics.services import (
     STEP_VOICE,
 )
 from diagnostics.verdict import DnsState, Level, ReachState, describe_reach
-
-# Молчание по QUIC — не поломка: сервер может его не поддерживать.
-# Значок строки «Скорость ответа» по уровню вывода о передаче.
-_TRANSFER_ICON = {"ok": "✅", "warn": "⚠️", "unknown": "ℹ️"}
-
-QUIC_ICON = {
-    quic_probe.QUIC_OK: "✅",
-    quic_probe.QUIC_BLOCKED_BY_NAME: "❌",
-    quic_probe.QUIC_SILENT: "ℹ️",
-}
-
-
-# Короткие названия шагов для строки «сколько шёл каждый шаг».
-# Части проверки одного сайта — на что ушло его время.
-STAGE_TITLES = {"dns": "адрес", "reach": "соединение", "cause": "причина", "volume": "объём", "roads": "дороги"}
-
-
-def stages_text(stages: dict | None) -> str:
-    """«соединение 6 с, причина 3 с» — только части длиннее секунды, от долгих к коротким."""
-    parts = sorted(((float(value), name) for name, value in (stages or {}).items() if float(value) >= 1.0), reverse=True)
-    return ", ".join(f"{STAGE_TITLES.get(name, name)} {value:.0f} с" for value, name in parts)
-
 
 STEP_TITLES = {
     STEP_SITES: "сайты",
@@ -151,12 +130,6 @@ def sentence(text: str) -> str:
     return text[:1].upper() + text[1:]
 
 
-_OUTSIDE_TEXT = {
-    outside_check.OUTSIDE_UP: "открывается — значит, закрыт он именно на вашей линии",
-    outside_check.OUTSIDE_DOWN: "тоже не открывается — сайт не работает сам",
-}
-
-
 def probe_lines(probe: Probe, *, full: bool) -> list[str]:
     title = f"{probe.host} — {probe.target.purpose}"
     if not full:
@@ -166,31 +139,8 @@ def probe_lines(probe: Probe, *, full: bool) -> list[str]:
         lines.extend(dns_lines(probe, "  "))
         return lines
 
-    icon = "✅" if probe.reach_state == ReachState.OK else "❌"
-    if probe.reach_state == ReachState.UNKNOWN:
-        icon = "❔"
-    if (probe.hosts_stale or probe.unstable) and probe.reach_state == ReachState.OK:
-        # Проверка сайт открыла, а браузер по записи в hosts — не откроет.
-        icon = "⚠️"
-    lines = [f"{icon} {title}: {reach_text(probe)}"]
-    lines.append(f"   🧭 Путь запроса: {path_report.chain_text(path_report.build(probe))}")
-    if probe.kind:
-        lines.append(f"   🏷 Вид блокировки: {block_kind.kind_info(probe.kind).title}")
-    if probe.cause is not None:
-        lines.append(f"   🔎 {sentence(probe.cause.text)}")
-    if probe.volume is not None and probe.volume.code != volume_probe.VOLUME_CUT:
-        icon = "✅" if probe.volume.code == volume_probe.VOLUME_OK else "ℹ️"
-        lines.append(f"   {icon} Обрыв после 16 КБ: {probe.volume.text}")
-    if probe.transfer is not None and probe.transfer.code != transfer_probe.TRANSFER_UNKNOWN:
-        lines.append(f"   {_TRANSFER_ICON.get(probe.transfer.level, 'ℹ️')} Скорость ответа: {probe.transfer.text}")
-    if probe.quic is not None:
-        lines.append(f"   {QUIC_ICON[probe.quic.code]} QUIC (UDP 443): {probe.quic.text}")
-    if probe.discovery_note:
-        lines.append(f"   ℹ️ {probe.discovery_note}")
-    if probe.outside:
-        lines.append(f"   🌍 С сервера Zapret DNS в Нидерландах: {_OUTSIDE_TEXT[probe.outside]}")
-    lines.extend(dns_lines(probe, "   "))
-    return lines
+    # Строки идут из общего модуля слов — те же, что на карточке сайта и в «Проверке домена».
+    return service_view.render_text(service_view.target_sections(target_report(probe)))
 
 
 def short_text(probe: Probe) -> str:
@@ -256,9 +206,11 @@ def target_report(probe: Probe) -> dict:
             "names": list(probe.cert.names),
         },
         "seconds": round(probe.seconds, 1),
-        # На что ушло время: части проверки по порядку (названия — в ``STAGE_TITLES``).
+        # На что ушло время: части проверки по порядку (названия — в ``service_view.STAGE_TITLES``).
         "stages": dict(probe.stages),
         "note": probe.discovery_note,
+        # Какие адреса вернули hosts, DNS системы и эталон: на чём держится вывод про DNS.
+        "dns_detail": dns_detail(probe),
     }
 
 

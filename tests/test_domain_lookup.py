@@ -689,12 +689,12 @@ class PlansTests(unittest.TestCase):
 
         text = plans.build_text_report(self._youtube_report(site))
 
-        self.assertIn("    Скорость ответа: пауза 2,9 с перед первым байтом", text)
-        self.assertIn("        ✅ DNS: ответ DNS совпал с эталоном (уверенность высокая)", text)
-        self.assertIn("        ⚠️ Передача: ответ пришёл после паузы (уверенность средняя)", text)
-        self.assertIn("        ❔ QUIC: не проверялся\n", text)
+        self.assertIn("   ⚠️ Скорость ответа: пауза 2,9 с перед первым байтом", text)
+        self.assertIn("   ✅ DNS: ответ DNS совпал с эталоном (уверенность высокая)", text)
+        self.assertIn("   ⚠️ Передача: ответ пришёл после паузы (уверенность средняя)", text)
+        self.assertIn("   ❔ QUIC: не проверялся\n", text)
         # Путь печатается один раз — для главного адреса, а не для каждого.
-        self.assertEqual(text.count("    Путь запроса:"), 1)
+        self.assertEqual(text.count("Путь запроса"), 1)
 
     def test_text_report_of_an_old_site_record_has_no_new_lines(self) -> None:
         site = {"headline": "открывается", "targets": [{"host": "youtube.com", "main": True, "text": "открывается"}]}

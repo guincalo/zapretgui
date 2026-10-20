@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import socket
 import threading
 import time
@@ -515,7 +516,7 @@ class BlockCauseInReportTests(unittest.TestCase):
         net = _Net(https=self._reset_on_hello, cause_facts=facts)
         result = net.run(engine.run_blockcheck, "main", emit=lines.append)
 
-        self.assertIn("   🔎 Блокировка по имени сайта: с именем discord.com соединение обрывается", "\n".join(lines))
+        self.assertIn("   ❌ Как блокируют: Блокировка по имени сайта: с именем discord.com соединение обрывается", "\n".join(lines))
         discord = next(item for item in result["services"] if item["key"] == "discord")
         main = next(item for item in discord["targets"] if item["main"])
         self.assertEqual(main["cause"], "by_name")
@@ -590,7 +591,7 @@ class QuicInReportTests(unittest.TestCase):
         result = net.run(engine.run_blockcheck, "main", emit=lines.append)
         text = "\n".join(lines)
 
-        self.assertIn("❌ QUIC (UDP 443): блокируется по имени сайта: пакет с именем discord.com пропадает", text)
+        self.assertIn("   ⚠️ QUIC (UDP 443): блокируется по имени сайта: пакет с именем discord.com пропадает", text)
         problems = [item for item in result["problems"] if "QUIC" in item["text"]]
         self.assertEqual(len(problems), 1)
         self.assertEqual(problems[0]["level"], "warn")
@@ -1433,7 +1434,8 @@ class EngineScenarioTests(unittest.TestCase):
         self.assertFalse(result["spoofed_hosts"])
         self.assertEqual(result["services"][0]["level"], "fail")
         self.assertIn("Подбор стратегии", text)
-        hosts_order = [line.split(" ")[1] for line in lines if line.startswith("❌ ") and "." in line.split(" ")[1]]
+        # Заголовок раздела адреса: «имя — для чего»; порядок разделов — порядок проверки.
+        hosts_order = [line.split(" ")[0] for line in lines if re.match(r"[a-z0-9.-]+\.[a-z]+ — ", line)]
         self.assertEqual(hosts_order[:3], ["discord.com", "gateway.discord.gg", "cdn.discordapp.com"])
 
     def test_site_that_opens_on_the_calm_second_check_is_not_reported_as_blocked(self) -> None:
@@ -2145,7 +2147,7 @@ class BlockKindInReportTests(unittest.TestCase):
         problem = next(item for item in result["problems"] if item["target"] == "discord.com")
         self.assertEqual((problem["kind"], problem["title"], problem["action"]), ("cut16", "Discord", "strategy"))
         self.assertNotIn("Discord", result["working"])
-        self.assertIn("   🏷 Вид блокировки: Обрыв после 16 КБ", lines)
+        self.assertIn("   ℹ️ Вид блокировки: Обрыв после 16 КБ", lines)
 
     def test_single_stall_does_not_turn_a_working_site_red(self) -> None:
         vp = engine.volume_probe

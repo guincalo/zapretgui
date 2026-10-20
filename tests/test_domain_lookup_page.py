@@ -88,8 +88,8 @@ class LookupCardsTests(unittest.TestCase):
         # Текстовый отчёт и запись истории тоже говорят про сайт.
         text = plans.build_text_report(report)
         self.assertIn("=== Как открывается сайт ===", text)
-        self.assertIn("    TLS 1.2: соединение сброшено", text)
-        self.assertIn("    Как блокируют: Блокировка по имени сайта.", text)
+        self.assertIn("   ❌ TLS 1.2: соединение сброшено", text)
+        self.assertIn("   ❌ Как блокируют: Блокировка по имени сайта.", text)
         entry = plans.build_history_entry(report)
         self.assertEqual((entry["level"], entry["problems"][0]), ("fail", self.SITE["headline"]))
 

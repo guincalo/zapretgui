@@ -17,10 +17,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 
-from diagnostics.block_kind import kind_info, KIND_OTHER, KINDS
 from diagnostics.levels import level_rank
+from diagnostics.service_view import name_speed_sections, service_sections
+from diagnostics.service_view import site_kind as view_site_kind
+from diagnostics.service_view import site_level as view_site_level
 
 __all__ = [
+    "FILTER_MARK",
+    "PREVIEW_LINES",
     "Card",
     "Counter",
     "DotGroup",
@@ -30,8 +34,6 @@ __all__ = [
     "build_cards",
     "build_counters",
     "read_finding_parts",
-    "FILTER_MARK",
-    "PREVIEW_LINES",
 ]
 
 # Состояние строки: от него зависят значок и цвет.
@@ -201,17 +203,6 @@ _SITE_ICONS = {
     "speedtest": "fa5s.tachometer-alt",
     "gosuslugi": "fa5s.landmark",
 }
-# Исход попытки основного запроса — словом для подробностей.
-_TRIED_WORDS = {
-    "ok": "открылся",
-    "connect": "нет соединения",
-    "timeout": "нет ответа",
-    "reset": "сброс",
-    "tls": "обрыв на шифровании",
-    "cert": "чужой сертификат",
-    "error": "ошибка",
-}
-_PROTOCOL_STATES = {"ok": OK, "fail": FAIL, "info": INFO, "unknown": UNKNOWN}
 
 
 def _state(value: object, default: str = UNKNOWN) -> str:
@@ -230,35 +221,23 @@ def _capital(text: str) -> str:
 
 def site_level(service: dict) -> str:
     """Уровень карточки сайта — как в отчёте: экран его не пересчитывает."""
-    return _state(service.get("level"))
+    return view_site_level(service)
 
 
 def site_kind(service: dict, level: str) -> str:
     """Вид блокировки сайта — как в отчёте. Пусто — сайт открывается или вид неизвестен."""
-    kind = str(service.get("kind") or "")
-    return kind if level in (FAIL, WARN) and kind in KINDS and kind != KIND_OTHER else ""
+    return view_site_kind(service, level)
+
+
+def _sections_from_view(sections) -> list[Section]:
+    """Разделы общего модуля — разделами карточки: уровень и слова уже решены там."""
+    return [Section(item.title, tuple(Line(row.level, row.title, row.text) for row in item.rows)) for item in sections]
 
 
 def _target_state(item: dict) -> str:
     if item.get("ok"):
         return OK
     return UNKNOWN if str(item.get("state") or "") == UNKNOWN else FAIL
-
-
-def _registry_text(item: dict) -> str:
-    mark = item.get("registry") or {}
-    parts = []
-    name = str(mark.get("name") or "")
-    if name:
-        parts.append("сайт значится в реестре" if name == item.get("host") else f"в реестре значится {name}")
-    if mark.get("network"):
-        parts.append(f"адрес сервера входит в список заблокированных ({mark['network']})")
-    if parts:
-        return "; ".join(parts)
-    # Для открывающегося сайта оговорка лишняя, для закрытого — главное.
-    if item.get("ok"):
-        return "не значится"
-    return "не значится — блокировать могут и без записи в реестре"
 
 
 def site_card(service: dict) -> Card:
@@ -286,19 +265,6 @@ def _shown_state(value) -> str:
     """Состояние дороги или метки из отчёта; незнакомое показывается как «неизвестно»."""
     state = str(value or "")
     return state if state in (OK, WARN, FAIL, INFO, UNKNOWN) else UNKNOWN
-
-
-# Уверенность вывода о шаге пути словами: сколько проверок его подтверждает.
-_CONFIDENCE_WORDS = {"low": "низкая", "medium": "средняя", "high": "высокая"}
-
-
-def _path_line(step: dict) -> Line:
-    """Строка шага пути запроса: слова и уровень приходят из отчёта, экран их не выводит."""
-    text = str(step.get("text") or "")
-    confidence = _CONFIDENCE_WORDS.get(str(step.get("confidence") or ""))
-    if confidence:
-        text = f"{text} (уверенность {confidence})"
-    return Line(_shown_state(step.get("level")), str(step.get("title") or step.get("key") or ""), text)
 
 
 def _site_card(service: dict) -> Card:
@@ -333,86 +299,8 @@ def _site_card(service: dict) -> Card:
     chips: list[tuple[str, str]] = [(f"{mark.label}: {mark.word}", mark.state) for mark in marks if mark.word != "—"]
     chips.extend((text, state) for _tag_key, text, state in all_tags)
 
-    detail: list[Section] = []
-    for item in targets:
-        rows = [Line(_target_state(item), "Соединение", str(item.get("text") or ""))]
-        if item.get("address"):
-            rows.append(Line(INFO, "Адрес сервера", str(item["address"])))
-        tried = list(item.get("tried") or ())
-        if len(tried) > 1 or (tried and not item.get("ok")):
-            rows.append(
-                Line(
-                    INFO,
-                    "Какие адреса пробовали",
-                    ", ".join(f"{step.get('address', '')} — {_TRIED_WORDS.get(str(step.get('result')), 'сбой')}" for step in tried),
-                )
-            )
-        if item.get("unstable"):
-            rows.append(Line(WARN, "Открывается через раз", str(item["unstable"])))
-        elif item.get("rechecked") == "opened":
-            rows.append(Line(INFO, "Повторная проверка", "открылся со второго раза, поодиночке — первый сбой дала нагрузка самой проверки"))
-        elif item.get("rechecked") == "same":
-            rows.append(Line(INFO, "Повторная проверка", "поодиночке, когда остальные проверки закончились, — результат тот же"))
-        if item.get("hosts_stale"):
-            rows.append(
-                Line(
-                    WARN,
-                    "Файл hosts",
-                    "записанный в нём адрес не работает. Проверка открыла сайт по настоящему адресу, "
-                    "а браузер пойдёт по записи и сайт не откроет — обновите её в «Редакторе hosts»",
-                )
-            )
-        cert = item.get("cert") or {}
-        if cert:
-            rows.append(Line(FAIL, "Чужой сертификат", str(cert.get("text") or "")))
-            if cert.get("issuer"):
-                rows.append(Line(INFO, "Кем выдан", str(cert["issuer"])))
-            if cert.get("names"):
-                rows.append(Line(INFO, "Каким сайтам выдан", ", ".join(map(str, cert["names"][:6]))))
-            if cert.get("advice"):
-                rows.append(Line(INFO, "Что делать", str(cert["advice"])))
-        for proto in item.get("protocols") or ():
-            rows.append(
-                Line(_PROTOCOL_STATES.get(str(proto.get("state")), UNKNOWN), str(proto.get("title") or ""), str(proto.get("text") or ""))
-            )
-        if item.get("cause_text"):
-            rows.append(Line(FAIL, "Как блокируют", str(item["cause_text"])))
-        if "registry" in item:
-            rows.append(Line(INFO, "Реестр РКН", _registry_text(item)))
-        if item.get("seconds"):
-            from diagnostics.report_text import stages_text
-
-            parts = stages_text(item.get("stages"))
-            rows.append(Line(INFO, "Проверка заняла", f"{float(item['seconds']):.0f} с" + (f" ({parts})" if parts else "")))
-        if item.get("quic_text"):
-            rows.append(
-                Line(WARN if item.get("quic") == "blocked_by_name" else INFO, "QUIC (UDP 443)", str(item["quic_text"]))
-            )
-        if item.get("volume_text"):
-            rows.append(Line(WARN if item.get("volume") == "cut" else INFO, "Объём загрузки", str(item["volume_text"])))
-        transfer = item.get("transfer") or {}
-        if transfer.get("text") and transfer.get("code") != "unknown":
-            rows.append(Line(_shown_state(transfer.get("level")), "Скорость ответа", str(transfer["text"])))
-        path = [step for step in item.get("path") or () if isinstance(step, dict)]
-        if path and item.get("main"):
-            detail.append(Section("Путь запроса", tuple(_path_line(step) for step in path)))
-        if item.get("dns_reason"):
-            rows.append(Line(WARN if item.get("dns_state") == "spoofed" else INFO, "DNS", str(item["dns_reason"])))
-        if item.get("note"):
-            rows.append(Line(INFO, "Заметка", str(item["note"])))
-        purpose = str(item.get("purpose") or "")
-        host = str(item.get("host") or "")
-        detail.append(Section(f"{host} — {purpose}" if purpose else host, tuple(rows)))
-    advice = [str(item) for item in service.get("advice") or ()]
-    if advice:
-        detail.append(Section("Что делать", tuple(Line(INFO, item) for item in advice)))
-    if service.get("dns_note"):
-        detail.append(Section("DNS", (Line(WARN, str(service["dns_note"])),)))
-    if service.get("names"):
-        # Замер потока по имени сайта и видеосервера: есть только у проверки одного сайта («Проверка домена»).
-        detail.extend(_name_speed_sections(service["names"]))
-    if kind and kind_info(kind).about:
-        detail.append(Section(kind_info(kind).title, (Line(INFO, kind_info(kind).about),)))
+    # Подробности — из общего модуля слов (``diagnostics.service_view``): тот же набор строк и в тексте отчёта.
+    detail = _sections_from_view(service_sections(service))
 
     return Card(
         key=f"site:{key}",
@@ -605,29 +493,8 @@ _SPEED_STATUS = {OK: "Разницы нет", WARN: "Зарубежные мед
 
 
 def _name_speed_sections(names: dict) -> tuple[Section, ...]:
-    """Замедление по имени сайта: скорость одного сервера с его именем и с именами проверенных сайтов."""
-    rows = tuple(
-        Line(_state(item.get("state")), f"{item.get('name', '')} ({item.get('host', '')})", str(item.get("text") or ""))
-        for item in names.get("items") or ()
-    )
-    if not rows:
-        return ()
-    control = Line(INFO, f"Контроль: {names.get('server', '')} под своим именем", str(names.get("control") or ""))
-    return (
-        Section(str(names.get("headline") or "Замедление по имени сайта"), (control, *rows)),
-        Section(
-            "Как проверяется замедление по имени",
-            (
-                Line(
-                    INFO,
-                    "С одного и того же постороннего сервера качается один файл: сначала под его собственным именем, "
-                    "затем под именем каждого открывшегося сайта. Сервер и дорога те же, отличается только имя, которое "
-                    "видит фильтр. Если с именем сайта скорость в разы ниже — замедляют по имени. Медленный замер "
-                    "перепроверяется, контроль в конце повторяется.",
-                ),
-            ),
-        ),
-    )
+    """Замедление по имени сайта — разделы общего модуля слов."""
+    return tuple(_sections_from_view(name_speed_sections(names)))
 
 
 def _speed_card(speed: dict) -> Card:
