@@ -66,6 +66,11 @@ class ProbeOutcome:
     body_size: int = 0
     # Проверка объёма по соединению: "" — не делалась, VOLUME_* — её итог.
     volume: str = ""
+    # Как идут ответы по соединению (``diagnostics.transfer_probe``): код вывода и его текст.
+    # Пусто — объём не набирали или замеров мало. Пауза или медленный ответ — свойство
+    # сервера или канала: открывшуюся стратегию они не опровергают, но подбор тут не поможет.
+    transfer: str = ""
+    transfer_text: str = ""
 
     @property
     def ok(self) -> bool:
@@ -174,13 +179,17 @@ def needs_volume(outcome: ProbeOutcome) -> bool:
     return outcome.ok and not outcome.volume and outcome.body_size < FREEZE_MAX_BYTES
 
 
-def judge_volume(answered: ProbeOutcome, verdict) -> ProbeOutcome:
+def judge_volume(answered: ProbeOutcome, verdict, transfer=None) -> ProbeOutcome:
     """Итог ``diagnostics.volume_probe.judge`` поверх ответа того же адреса.
 
     Замирание в окне обрыва — явный след фильтра: такая стратегия не работает,
-    сколько бы раз ни открывалась короткая страница.
+    сколько бы раз ни открывалась короткая страница. ``transfer`` — вывод о
+    скорости ответов по тем же замерам (``diagnostics.transfer_probe.TransferVerdict``).
     """
     from diagnostics import volume_probe
+
+    transfer_code = str(getattr(transfer, "code", "") or "")
+    transfer_text = str(getattr(transfer, "text", "") or "")
 
     if verdict.code == volume_probe.VOLUME_CUT:
         return ProbeOutcome(
@@ -190,9 +199,33 @@ def judge_volume(answered: ProbeOutcome, verdict) -> ProbeOutcome:
             FAILURE_RESET,
             answered.body_size,
             VOLUME_CUT,
+            transfer_code,
+            transfer_text,
         )
     code = VOLUME_OK if verdict.code == volume_probe.VOLUME_OK else VOLUME_UNKNOWN
-    return ProbeOutcome(answered.state, answered.reason, answered.time_ms, answered.failure, answered.body_size, code)
+    return ProbeOutcome(
+        answered.state, answered.reason, answered.time_ms, answered.failure, answered.body_size, code,
+        transfer_code, transfer_text,
+    )
+
+
+# Выводы о передаче, при которых подбирать стратегию бесполезно: сервер или канал отвечают
+# с паузами или медленно, и от обхода это не зависит.
+SLOW_TRANSFER_CODES = ("pause", "slow_reply", "slow_body")
+
+
+def transfer_problem(outcomes: Iterable[ProbeOutcome]) -> str:
+    """Текст о паузах или медленной передаче по пробам объёма; пусто — жалоб нет."""
+    for outcome in outcomes:
+        if outcome.transfer in SLOW_TRANSFER_CODES and outcome.transfer_text:
+            return outcome.transfer_text
+    return ""
+
+
+def worst_transfer(outcomes: Iterable[ProbeOutcome]) -> str:
+    """Самый тяжёлый вывод о передаче среди проб: пауза, затем медленный ответ, затем медленное тело."""
+    codes = {outcome.transfer for outcome in outcomes if outcome.transfer in SLOW_TRANSFER_CODES}
+    return next((code for code in SLOW_TRANSFER_CODES if code in codes), "")
 
 
 # --- Проверка «до подбора» ----------------------------------------------------

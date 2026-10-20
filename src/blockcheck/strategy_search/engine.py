@@ -222,6 +222,8 @@ class _Attempt:
     silent: bool = False
     # Итог проверки объёма в этой попытке (``verdict.VOLUME_*``) или "".
     volume: str = ""
+    # Пауза или медленная передача, замеченные в этой попытке (``verdict.SLOW_TRANSFER_CODES``) или "".
+    transfer: str = ""
 
     @property
     def mark(self) -> rules.AttemptMark:
@@ -237,6 +239,12 @@ class _StrategyRun:
     network_lost: bool = False
     # winws2 дважды подряд упал одинаково: дело в стратегии, а не в драйвере.
     repeatable_crash: bool = False
+
+    @property
+    def transfer(self) -> str:
+        """Пауза или медленная передача у открывших цель попыток: самый тяжёлый вывод или ""."""
+        codes = {attempt.transfer for attempt in self.attempts if attempt.passed and attempt.transfer}
+        return next((code for code in rules.SLOW_TRANSFER_CODES if code in codes), "")
 
     @property
     def volume(self) -> str:
@@ -257,6 +265,8 @@ class StrategySearch:
         self._target = _Target()
         self._running_step = ""
         self._strategies_started = 0.0
+        # Что сказала проба объёма о скорости ответов цели, открытой без обхода ("" — жалоб нет).
+        self._baseline_slow = ""
 
     # --- Управление -----------------------------------------------------------
 
@@ -562,9 +572,14 @@ class StrategySearch:
         if decision.state == rules.BASELINE_OPEN:
             report.baseline_accessible = True
             self._stage(STEP_BASELINE, "skipped", "Открывается и без обхода")
-            if not self._ask_continue(
-                f"{host} открывается и без обхода — подбирать нечего: любая стратегия покажется рабочей."
-            ):
+            question = f"{host} открывается и без обхода — подбирать нечего: любая стратегия покажется рабочей."
+            if self._baseline_slow:
+                self._events.log(f"  без обхода открывается, но {self._baseline_slow}")
+                question += (
+                    f" Но он открывается медленно: {self._baseline_slow}. Это свойство сервера или канала, "
+                    "стратегия обхода тут не поможет."
+                )
+            if not self._ask_continue(question):
                 return False
             self._target = _Target(host=host, addresses=decision.probe_addresses, forced=True)
             return True
@@ -595,6 +610,7 @@ class StrategySearch:
             if outcome.ok
         ]
         cut = [(address, outcome) for address, outcome in checked if outcome.volume == rules.VOLUME_CUT]
+        self._baseline_slow = rules.transfer_problem(outcome for _address, outcome in checked)
         if cut:
             for address, outcome in cut:
                 self._events.log(f"  без обхода {address}: {outcome.reason}")
@@ -879,6 +895,7 @@ class StrategySearch:
                     else rules.VOLUME_UNKNOWN if rules.VOLUME_UNKNOWN in volumes
                     else rules.VOLUME_OK if volumes else ""
                 ),
+                transfer=rules.worst_transfer(outcomes),
             )
         results = self._env.probe_udp(self._target.udp_specs)
         outcomes = [outcome for _spec, outcome in results]
@@ -1007,6 +1024,8 @@ class StrategySearch:
             raw_data={
                 "forced": self._target.forced,
                 "volume": run.volume,
+                # Пауза или медленная передача при открывшейся цели: от стратегии не зависит ("" — не замечено).
+                "transfer": run.transfer,
                 # Какой хост открывали: у googlevideo.com это видеосервер rr…, а не сама цель.
                 "probe_host": self._target.host,
             },
@@ -1019,6 +1038,8 @@ class StrategySearch:
             head += f" {passed}/{len(run.attempts)}"
         if run.verdict == rules.VERDICT_WORKING and run.volume == rules.VOLUME_UNKNOWN:
             head += " (объём не проверен: сайт отвечает коротко)"
+        if run.verdict == rules.VERDICT_WORKING and run.transfer:
+            head += " (сервер отвечает медленно или с паузами — от стратегии это не зависит)"
         if run.reason:
             head += f" — {run.reason}"
         self._events.log(head)

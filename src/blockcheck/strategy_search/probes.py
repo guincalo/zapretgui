@@ -153,10 +153,10 @@ def probe_volume(host: str, address: str, answered: ProbeOutcome, *, cancel) -> 
     не наберётся больше окна обрыва (``diagnostics.volume_probe``). Замерло
     в окне дважды — стратегия не работает, хотя главная страница открылась.
     """
-    from diagnostics import volume_probe
+    from diagnostics import transfer_probe, volume_probe
 
     facts = volume_probe.collect(host, address, "/", cancel=cancel)
-    return verdict.judge_volume(answered, volume_probe.judge(facts))
+    return verdict.judge_volume(answered, volume_probe.judge(facts), transfer_probe.judge(facts.first.samples))
 
 
 # Читаем столько же, сколько у HTTPS: дальше окна обрыва по объёму, иначе

@@ -359,6 +359,8 @@ def build_result_presentation(result, *, row_number: int) -> StrategyScanResultP
             status_tooltip = f"Открылось {attempts_ok} раза подряд на свежих соединениях"
         if (getattr(result, "raw_data", None) or {}).get("volume") == "unknown":
             status_tooltip += ". Объём не проверен: сайт отвечает коротко"
+        if (getattr(result, "raw_data", None) or {}).get("transfer"):
+            status_tooltip += ". Сервер отвечает медленно или с паузами — от стратегии это не зависит"
     elif verdict == "unstable":
         status_tooltip = f"Открылось не каждый раз ({attempts_ok} из {attempts_total}): {error_text}"
     else:
