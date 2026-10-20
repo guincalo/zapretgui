@@ -283,12 +283,13 @@ class StartupAutostartTests(unittest.TestCase):
             runtime_feature = SimpleNamespace(
                 objects=SimpleNamespace(runtime_service=runtime_service, launch_runtime=launch_runtime)
             )
-            with patch(
-                "winws_runtime.runtime.process_probe.get_canonical_winws_process_pids", return_value=engines
-            ):
-                start_dpi_autostart(
-                    SimpleNamespace(dpi_autostart_initiated=False), runtime_feature=runtime_feature, ui_state=object()
-                )
+            start_dpi_autostart(
+                SimpleNamespace(dpi_autostart_initiated=False),
+                runtime_feature=runtime_feature,
+                ui_state=object(),
+                # Проверка процессов идёт не в потоке окна; здесь она подставлена и отвечает сразу.
+                probe=lambda decide: decide(bool(engines)),
+            )
             return runtime_service, launch_runtime
 
         service, launch = _run({"winws2.exe": [1360]})
@@ -300,6 +301,86 @@ class StartupAutostartTests(unittest.TestCase):
         service, launch = _run({})
         launch.start_dpi_async.assert_not_called()
         service.mark_stopped.assert_called_once()
+
+    def test_process_list_is_read_in_a_background_thread_and_the_decision_returns_to_the_ui_thread(self) -> None:
+        import os
+        import threading
+        import time
+
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PyQt6.QtWidgets import QApplication
+
+        from winws_runtime.runtime import autostart
+
+        app = QApplication.instance() or QApplication([])
+        runtime_service = SimpleNamespace(
+            snapshot=Mock(return_value=SimpleNamespace(phase="stopped", running=False, launch_method="zapret2_mode")),
+            mark_stopped=Mock(),
+        )
+        threads: dict[str, threading.Thread] = {}
+        started: list[threading.Thread] = []
+        launch_runtime = SimpleNamespace(start_dpi_async=Mock(side_effect=lambda **_k: started.append(threading.current_thread())))
+        runtime_feature = SimpleNamespace(objects=SimpleNamespace(runtime_service=runtime_service, launch_runtime=launch_runtime))
+
+        def probe() -> bool:
+            threads["probe"] = threading.current_thread()
+            return True
+
+        with patch.object(autostart, "_own_engine_left_running", probe):
+            autostart.start_dpi_autostart(SimpleNamespace(dpi_autostart_initiated=False), runtime_feature=runtime_feature, ui_state=object())
+            # Сразу после вызова решения ещё нет: перечень процессов читает другой поток.
+            self.assertEqual(started, [])
+            deadline = time.monotonic() + 3
+            while not started and time.monotonic() < deadline:
+                app.processEvents()
+                time.sleep(0.01)
+
+        self.assertIsNot(threads["probe"], threading.main_thread())
+        self.assertEqual(started, [threading.main_thread()])
+        self.assertEqual(autostart._PENDING_PROBES, set())
+
+    def test_autostart_off_without_a_leftover_engine_marks_the_runtime_stopped_after_the_probe(self) -> None:
+        from winws_runtime.runtime import autostart
+
+        runtime_service = SimpleNamespace(
+            snapshot=Mock(return_value=SimpleNamespace(phase="stopped", running=False, launch_method="zapret2_mode")),
+            mark_stopped=Mock(),
+        )
+        launch_runtime = SimpleNamespace(start_dpi_async=Mock())
+        runtime_feature = SimpleNamespace(objects=SimpleNamespace(runtime_service=runtime_service, launch_runtime=launch_runtime))
+        calls: list = []
+
+        autostart.start_dpi_autostart(
+            SimpleNamespace(dpi_autostart_initiated=False),
+            runtime_feature=runtime_feature,
+            ui_state=object(),
+            probe=lambda decide: calls.append(decide),
+        )
+
+        # Пока проверка не ответила, ничего не решено.
+        runtime_service.mark_stopped.assert_not_called()
+        calls[0](False)
+        runtime_service.mark_stopped.assert_called_once()
+        launch_runtime.start_dpi_async.assert_not_called()
+
+    def test_enabled_autostart_does_not_read_the_process_list_at_all(self) -> None:
+        from winws_runtime.runtime import autostart
+
+        runtime_service = SimpleNamespace(
+            snapshot=Mock(return_value=SimpleNamespace(phase="autostart_pending", running=False, launch_method="zapret2_mode")),
+            mark_stopped=Mock(),
+        )
+        launch_runtime = SimpleNamespace(start_dpi_async=Mock())
+        runtime_feature = SimpleNamespace(objects=SimpleNamespace(runtime_service=runtime_service, launch_runtime=launch_runtime))
+
+        autostart.start_dpi_autostart(
+            SimpleNamespace(dpi_autostart_initiated=False),
+            runtime_feature=runtime_feature,
+            ui_state=object(),
+            probe=lambda _decide: self.fail("перечень процессов при включённом автозапуске не нужен"),
+        )
+
+        launch_runtime.start_dpi_async.assert_called_once()
 
     def test_startup_autostart_skips_expensive_preset_prevalidation_in_gui_thread(self) -> None:
         from winws_runtime.flow import start_preparation

@@ -27,14 +27,12 @@ import re
 import time
 from textwrap import fill
 
-from urllib.parse import urlsplit
-
 from PyQt6.QtCore import QPoint, Qt
 from PyQt6.QtWidgets import QApplication, QHBoxLayout, QWidget
 from qfluentwidgets import CaptionLabel, InfoBar, InfoBarPosition, PushButton, RoundMenu, SegmentedWidget
 
 from app.ui_texts import tr as tr_catalog
-from config.urls import ZAPRET_DNS_SITE_URL
+from config.urls import ZAPRET_DNS_SITE_HOST, ZAPRET_DNS_SITE_URL
 from diagnostics.history import format_time
 from dns import page_plans as dns_page_plans
 from dns import custom_servers
@@ -816,7 +814,7 @@ class NetworkPage(BasePage):
             title=name,
             badge=self._t("page.network.promo.badge", "сервер проекта"),
             note=self._t("page.network.promo.note", "Открывает ChatGPT, Claude, Gemini и Spotify без VPN"),
-            address=urlsplit(ZAPRET_DNS_SITE_URL).netloc,
+            address=ZAPRET_DNS_SITE_HOST,
             icon_name=str(data.get("icon", "")),
             color=str(data.get("color", "")),
             icons=PROMO_SERVICE_ICONS,

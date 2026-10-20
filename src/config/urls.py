@@ -12,6 +12,7 @@ ANDROID_URL = "https://wiki.zapret.moe/Zapret/android"  # URL инструкци
 PREMIUM_GUIDE_URL = "https://wiki.zapret.moe/Zapret/premium"  # Гайд по Zapret Premium: как привязать компьютер к подписке бота
 GIT_SITE_URL = "https://git.zapret.moe/"  # Git-сайт проекта: исходный код и выпуски программ
 ZAPRET_DNS_SITE_URL = "https://dns.zapret.moe/"  # Сайт своего DNS-сервера проекта: состояние и список сервисов
+ZAPRET_DNS_SITE_HOST = "dns.zapret.moe"  # Его имя: адрес сервера на плитке «Настройки DNS»
 # Статьи вики к шагам обучающего тура (ключ — шаг из ui.onboarding.steps).
 # Шаги без подходящей статьи здесь не указаны — у них нет кнопки «Подробнее в вики».
 ONBOARDING_WIKI_URLS = {

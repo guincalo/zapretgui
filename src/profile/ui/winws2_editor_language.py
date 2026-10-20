@@ -207,7 +207,11 @@ class Winws2EditorLanguageController(QObject):
             self._fake_values_loaded = True
         self._editor.refresh_diagnostics()
 
-    def _on_scan_finished(self, *_args) -> None:
+    def _on_scan_finished(self, *args) -> None:
+        # Уже идёт другая проверка (current_worker): отложенную запустит её конец.
+        current_worker = self._runtime.worker
+        if current_worker is not None and args and current_worker is not args[0]:
+            return
         if self._scan_pending:
             self._scan_pending = False
             self.schedule_scan(0)

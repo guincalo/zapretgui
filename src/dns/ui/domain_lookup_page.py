@@ -214,7 +214,7 @@ class DomainLookupPage(BasePage):
         self._lane = LatestWorkerLane(
             name="domain_lookup",
             create_worker=self._create_worker,
-            on_result=lambda _payload, report: self._on_finished(report),
+            on_result=lambda _payload, report: self._show_final_report(report),
             on_error=lambda _payload, error: self._on_failed(error),
             log_fn=log,
         )
@@ -454,7 +454,8 @@ class DomainLookupPage(BasePage):
         if entry is not None:
             self.set_history([*getattr(self, "_history_runs", []), entry][-HISTORY_SHOWN:])
 
-    def _on_finished(self, report) -> None:
+    def _show_final_report(self, report) -> None:
+        # Устаревшие итоги сюда не доходят: свежесть решает очередь последнего запроса (``LatestWorkerLane``).
         self._remember(report)
         if self._closed:
             return

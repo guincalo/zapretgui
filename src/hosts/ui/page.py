@@ -403,6 +403,10 @@ class HostsPage(BasePage):
         self._show_error(self._tr("page.hosts.error.read.title", "Не удалось прочитать hosts"), error)
 
     def _on_snapshot_worker_finished(self, _worker) -> None:
+        # Уже идёт другое чтение (current_worker): отложенное перечитывание запросит его конец.
+        current_worker = self._snapshot_runtime.worker
+        if current_worker is not None and current_worker is not _worker:
+            return
         # Во время записи не перечитываем: после неё снимок запросится сам.
         if self._snapshot_pending and not self._cleanup_in_progress and not self._applying:
             self._request_snapshot()

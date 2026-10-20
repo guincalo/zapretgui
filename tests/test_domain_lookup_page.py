@@ -229,7 +229,7 @@ class DomainLookupPageTests(unittest.TestCase):
         self.assertEqual([item.target for item in shown], ["c.example"])
 
         # Итог: карточки видны, таблица заполнена, заглушка помечена.
-        page._on_finished(_report())
+        page._show_final_report(_report())
         self.assertFalse(page._running)
         self.assertTrue(page.start_button.isEnabled())
         self.assertTrue(page.report_button.isEnabled())
@@ -298,7 +298,7 @@ class DomainLookupPageTests(unittest.TestCase):
         from utils.windows_icmp import HOP_ROUTER, HOP_TARGET
 
         hops = tuple(Hop(ttl, HOP_ROUTER, f"10.0.0.{ttl}", 1.0) for ttl in range(1, 4)) + (Hop(4, HOP_TARGET, "93.184.216.34", 40.0),)
-        page._on_finished(
+        page._show_final_report(
             _report(
                 route=RouteTrace("93.184.216.34", hops, reached=True),
                 quic=QuicVerdict(QUIC_BLOCKED_BY_NAME, "блокируется по имени сайта"),
@@ -313,11 +313,11 @@ class DomainLookupPageTests(unittest.TestCase):
         self.assertEqual([row.name for row in road.lines], ["Узел 1", "Узел 2", lookup_plans.FILTER_MARK, "Узел 3", "Узел 4"])
         self.assertEqual((road.lines[2].state, road.lines[-1].state), ("fail", "info"))
         self.assertIn("сам сервер", road.lines[-1].text)
-        page._on_finished(_report())
+        page._show_final_report(_report())
         self.assertNotIn(lookup_cards.KEY_PATH, [card.key for card in page.result_cards()])
 
         # Проверка адреса (не домена): таблицы DNS нет.
-        page._on_finished(_report(kind=engine.KIND_IP, target="93.184.216.34", answers=()))
+        page._show_final_report(_report(kind=engine.KIND_IP, target="93.184.216.34", answers=()))
         self.assertNotIn(lookup_cards.KEY_DNS, [card.key for card in page.result_cards()])
 
         # Повторная проверка того же домена: поле соседей очищается и заполняется заново,
@@ -325,7 +325,7 @@ class DomainLookupPageTests(unittest.TestCase):
         page.start_lookup()
         self.assertEqual((page.result_cards(), page.cards.cards()), ([], []))
         self.assertTrue(page.cards.isHidden())
-        page._on_finished(_report())
+        page._show_final_report(_report())
         self.assertEqual(len(page.cards.cards()), 3)
 
         # Смена языка переводит подписи и не теряет результат.
@@ -337,7 +337,7 @@ class DomainLookupPageTests(unittest.TestCase):
         # Закрытие страницы закрывает дорожку: поздние результаты игнорируются.
         host.cleanup()
         self.assertTrue(page._closed)
-        page._on_finished(_report(target="late.example"))
+        page._show_final_report(_report(target="late.example"))
         self.assertNotEqual(page._report.target, "late.example")
 
 
@@ -408,7 +408,7 @@ class PastCheckTextTests(unittest.TestCase):
         saved = {"kind": "domain", "time": "2026-10-08T16:06:00", "title": "example.com", "level": "ok",
                  "headline": "Готово", "problems": [], "states": {}, "log_file": "run.json"}
 
-        page._on_finished(_report(finished=True, history_entry=saved))
+        page._show_final_report(_report(finished=True, history_entry=saved))
         page._open_past(0)
 
         self.assertEqual(opened[-1].text, "полный текст проверки")
