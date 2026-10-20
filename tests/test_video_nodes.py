@@ -67,6 +67,50 @@ class DiscoverTests(unittest.TestCase):
         self.assertEqual(nodes.hosts, (MAPPED,))
 
 
+class MappedHostTests(unittest.TestCase):
+    """Узел вашей сети от редиректора: адрес берётся как у браузера, а не только системным DNS."""
+
+    def _run(self):
+        return SimpleNamespace(dns_cancelled=lambda: False)
+
+    def test_https_redirector_is_asked_first_by_the_browsers_address(self) -> None:
+        from unittest.mock import patch
+
+        answer = SimpleNamespace(ok=True, body=b"177.1.187.38 => tzfraa-cd (177.1.187.0/24)")
+        with (
+            patch.object(vn.net_access, "browser_ipv4", return_value=("192.178.170.113",)),
+            patch.object(vn.net_access, "fetch", return_value=answer) as fetch,
+        ):
+            host = vn._mapped_host(self._run())
+
+        self.assertTrue(host.endswith(".googlevideo.com"))
+        self.assertEqual(fetch.call_args.args[1:4], ("redirector.gvt1.com", "192.178.170.113", "/report_mapping?di=no"))
+        # Ответ приходит сжатым: тело нужно распаковать.
+        self.assertTrue(fetch.call_args.kwargs["decode_body"])
+
+    def test_plain_http_redirector_is_the_second_try(self) -> None:
+        from unittest.mock import patch
+
+        with (
+            patch.object(vn.net_access, "browser_ipv4", return_value=("203.0.113.9",)),
+            patch.object(vn.net_access, "fetch", return_value=SimpleNamespace(ok=False, body=b"")),
+            patch("blockcheck.googlevideo_discovery.fetch_mapped_host_at", return_value="rr1---sn-x.googlevideo.com") as plain,
+        ):
+            host = vn._mapped_host(self._run())
+
+        self.assertEqual(host, "rr1---sn-x.googlevideo.com")
+        self.assertEqual(plain.call_args.args[:2], ("203.0.113.9", "redirector.googlevideo.com"))
+
+    def test_nothing_answers_gives_no_node(self) -> None:
+        from unittest.mock import patch
+
+        with (
+            patch.object(vn.net_access, "browser_ipv4", return_value=()),
+            patch.object(vn.net_access, "fetch"),
+        ):
+            self.assertEqual(vn._mapped_host(self._run()), "")
+
+
 class GoodputTests(unittest.TestCase):
     """Объём и скорость по настоящему адресу замера, который плеер YouTube получил для вас."""
 

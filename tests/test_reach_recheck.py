@@ -250,7 +250,11 @@ class NoRealNodeTests(unittest.TestCase):
 
         self.assertEqual(asked, [])
         self.assertEqual(probe.reach_state, ReachState.UNKNOWN)
-        self.assertIn("видеосервер не проверялся", report_text.target_report(probe)["note"])
+        report = report_text.target_report(probe)
+        self.assertIn("видеосервер не проверялся", report["note"])
+        # Ни «не удалось узнать адрес», ни пустых строк про DNS: адрес не проверялся вовсе.
+        self.assertEqual(report["text"], "не проверялся")
+        self.assertEqual((report["dns_reason"], report["dns_detail"]), ("", ""))
 
 
 class VideoServerFallbackTests(unittest.TestCase):

@@ -83,16 +83,43 @@ def _fetch_report_mapping(url: str, timeout: float) -> str:
         return response.raw.read(2048, decode_content=True).decode("utf-8", errors="ignore")
 
 
+def fetch_mapped_host_at(address: str, host: str, *, timeout: float = 3.0) -> str:
+    """Узел вашей сети по ответу редиректора, спрошенного по готовому адресу (обычный HTTP, порт 80).
+
+    Имя редиректора у закрытых сетей может не разрешаться системным DNS, поэтому адрес приходит снаружи:
+    из файла hosts, DNS системы или шифрованного эталона.
+    """
+    import socket
+
+    request = f"GET /report_mapping?di=no HTTP/1.1\r\nHost: {host}\r\nUser-Agent: Mozilla/5.0\r\nConnection: close\r\n\r\n"
+    try:
+        with socket.create_connection((address, 80), timeout=timeout) as sock:
+            sock.settimeout(timeout)
+            sock.sendall(request.encode("ascii"))
+            data = b""
+            while len(data) < 4096:
+                chunk = sock.recv(2048)
+                if not chunk:
+                    break
+                data += chunk
+    except OSError:
+        return ""
+    head, _, body = data.partition(b"\r\n\r\n")
+    if not head.startswith(b"HTTP/1.1 200") and not head.startswith(b"HTTP/1.0 200"):
+        return ""
+    return parse_report_mapping(body.decode("utf-8", errors="ignore"))
+
+
 def fetch_mapped_host(*, timeout: float = 3.0, cancelled: Callable[[], bool] | None = None) -> str:
     """Узел вашей сети по ответу редиректора (обычный HTTP). Пусто — не ответил или ответ не похож на настоящий."""
     is_cancelled = cancelled or (lambda: False)
-    deadline = time.monotonic() + max(0.1, float(timeout))
+    # У каждого адреса свой срок: один молчащий адрес не должен съедать время второго.
+    each = max(0.1, float(timeout))
     for url in _REPORT_MAPPING_URLS:
-        remaining = deadline - time.monotonic()
-        if is_cancelled() or remaining <= 0:
+        if is_cancelled():
             break
         try:
-            host = parse_report_mapping(_fetch_report_mapping(url, remaining))
+            host = parse_report_mapping(_fetch_report_mapping(url, each))
         except Exception:  # заглушка провайдера, обрыв или нет requests: остаётся страница ролика
             continue
         if host:

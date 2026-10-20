@@ -42,6 +42,7 @@ _WATCH_PAGE = "/watch?v=dQw4w9WgXcQ&hl=en"
 _WATCH_PAGE_MAX_BYTES = 2_000_000
 # Сколько ещё читать страницу после имён узлов, пока не встретится адрес замера скорости.
 _PROBE_URL_WAIT_BYTES = 60_000
+_MAPPING_PATH = "/report_mapping?di=no"
 # Сколько ждать ответ редиректора: это одна короткая строка, живой ответ приходит за доли секунды.
 MAPPING_TIMEOUT_S = 3.0
 
@@ -105,9 +106,24 @@ def combine(
 
 def _mapped_host(run) -> str:
     """Узел вашей сети по ответу редиректора. Пусто — не ответил или ответ не похож на настоящий."""
-    from blockcheck.googlevideo_discovery import fetch_mapped_host
+    from blockcheck.googlevideo_discovery import fetch_mapped_host_at, parse_report_mapping
 
-    return fetch_mapped_host(timeout=MAPPING_TIMEOUT_S, cancelled=run.dns_cancelled)
+    # Сначала шифрованный redirector.gvt1.com: он отвечает и там, где обычный HTTP к googlevideo.com молчит.
+    # Адрес берётся так, как его взял бы браузер: hosts, DNS системы, а если не дал — шифрованный эталон.
+    for address in net_access.browser_ipv4(run, "redirector.gvt1.com")[:2]:
+        if run.dns_cancelled():
+            return ""
+        result = net_access.fetch(run, "redirector.gvt1.com", address, _MAPPING_PATH, timeout=MAPPING_TIMEOUT_S, read_limit=2048, decode_body=True)
+        found = parse_report_mapping(bytes(result.body).decode("utf-8", errors="ignore")) if result.ok and result.body else ""
+        if found:
+            return found
+    for address in net_access.browser_ipv4(run, "redirector.googlevideo.com")[:2]:
+        if run.dns_cancelled():
+            return ""
+        found = fetch_mapped_host_at(address, "redirector.googlevideo.com", timeout=MAPPING_TIMEOUT_S)
+        if found:
+            return found
+    return ""
 
 
 def _player_hosts(run) -> tuple[tuple[str, ...], str, tuple[str, str]]:
