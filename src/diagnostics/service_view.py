@@ -308,6 +308,54 @@ def selectivity_section(service: dict) -> ViewSection | None:
     return ViewSection("Избирательность: чем адреса сервиса отличаются", tuple(rows))
 
 
+_CELL_WORDS = {"answered": "ответ", "cut": "обрыв", "unknown": "?"}
+_FINDING_LEVELS = {"ok": OK, "warn": WARN, "info": INFO, "fail": FAIL}
+
+
+def _matrix_text(matrix: dict) -> str:
+    """Таблица «имя × адрес»: у каждой ячейки исход TLS и QUIC словами, чтобы сравнение было видно глазами."""
+    addresses = [(str(item.get("host") or ""), str(item.get("ip") or "")) for item in matrix.get("addresses") or ()]
+    heads = [f"{host} {ip}".strip() for host, ip in addresses]
+    lines = []
+    for row in matrix.get("table") or ():
+        cells = []
+        for cell in row.get("cells") or ():
+            tls = _CELL_WORDS.get(str(cell.get("tls")), "?")
+            quic = _CELL_WORDS.get(str(cell.get("quic")), "?")
+            cells.append(f"TLS {tls}, QUIC {quic}")
+        lines.append(f"{row.get('name', '')}: " + " | ".join(f"{head} → {cell}" for head, cell in zip(heads, cells, strict=False)))
+    return "\n".join(lines)
+
+
+def matrix_sections(service: dict) -> tuple[ViewSection, ...]:
+    """Таблица избирательности (имя × адрес × протокол с контролями) и выводы по ней, подробно."""
+    matrix = service.get("selectivity")
+    if not isinstance(matrix, dict) or not matrix.get("findings"):
+        return ()
+    findings = tuple(
+        ViewRow(_FINDING_LEVELS.get(str(item.get("level")), INFO), str(item.get("title") or ""), str(item.get("text") or ""))
+        for item in matrix["findings"]
+    )
+    return (
+        ViewSection("Избирательность: выводы по таблице имён и адресов", findings),
+        ViewSection("Таблица: имя × адрес (исход TLS и QUIC)", text=_matrix_text(matrix)),
+        ViewSection(
+            "Как читать таблицу",
+            (
+                ViewRow(
+                    INFO,
+                    "Каждое имя сайта проверено на каждом адресе сервиса двумя протоколами: приветствием TLS и первым пакетом QUIC. "
+                    "Два контроля — постороннее имя и приветствие без имени — показывают, жив ли адрес сам по себе. "
+                    "Если контроль отвечает, а имя сайта нет, режут имя. Если не отвечает ничего, закрыт адрес или протокол. "
+                    "Если имя проходит на одном адресе и обрывается на другом, результат зависит от узла. "
+                    "Проба отправляется только при сигнале беды: обычная проверка таких пакетов не шлёт.",
+                ),
+            ),
+            screen_only=True,
+        ),
+    )
+
+
 def path_section(item: dict) -> ViewSection | None:
     """Путь запроса по шагам — только у главного адреса: у остальных он повторял бы тот же вывод."""
     steps = [step for step in item.get("path") or () if isinstance(step, dict)]
@@ -368,6 +416,7 @@ def service_sections(service: dict) -> tuple[ViewSection, ...]:
     selectivity = selectivity_section(service)
     if selectivity is not None:
         sections.append(selectivity)
+    sections.extend(matrix_sections(service))
     advice = [str(item) for item in service.get("advice") or ()]
     if advice:
         sections.append(ViewSection("Что делать", tuple(ViewRow(INFO, item) for item in advice)))

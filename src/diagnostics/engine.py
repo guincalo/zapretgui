@@ -833,6 +833,7 @@ def run_blockcheck(
         if run.stopped():
             raise _Stopped()
         services_report = registry.annotate(services_report, registry_index)
+        sections.annotate_selectivity(run, services_report, collected, services)
         registry_summary = registry.summary(registry_index)
         for line in block_view.text_lines("registry", registry_summary):
             emit(line)
@@ -880,6 +881,7 @@ def check_site(host: str, *, should_stop: ShouldStop | None = None, emit: Emit |
         # Сайт может открываться, а поток к нему — придерживаться или обрываться по имени (так «крутит
         # загрузку» видео). Соединение этого не покажет: нужен замер потока с именем сайта и видеосервера.
         names = sections.check_name_speed(run, collected, services)
+        sections.annotate_selectivity(run, report, collected, services)
         registry_index = registry_wait(REGISTRY_WAIT_S, run.probe_cancel)
         if run.stopped():
             raise _Stopped()

@@ -17,6 +17,7 @@ from concurrent.futures import Future
 from dataclasses import replace
 
 from diagnostics import (
+    block_cause,
     block_kind,
     filter_habits,
     filter_place,
@@ -28,6 +29,7 @@ from diagnostics import (
     quic_probe,
     registry,
     report_text,
+    selectivity,
     self_check,
     speed_check,
     subnet_whitelist,
@@ -598,6 +600,45 @@ def _name_speed(run: Run, collected: dict[str, list[Probe]], services) -> dict |
             for item in verdicts
         ],
     }
+
+
+def _matrix_cell(run: Run) -> Callable[[str, str], selectivity.Cell]:
+    """Одна ячейка таблицы: приветствие TLS 1.3 и первый пакет QUIC с этим именем на этом адресе."""
+
+    def cell(name: str, ip: str) -> selectivity.Cell:
+        hello = block_cause.tls_hello(ip, name or None, cancel=run.probe_cancel, version=block_cause.TLS_1_3)
+        quic_ms = quic_probe.quic_hello(ip, name or None, cancel=run.probe_cancel)
+        if hello.answered:
+            tls = selectivity.ANSWERED
+        elif hello.kind in (block_cause.HELLO_RESET, block_cause.HELLO_TIMEOUT):
+            tls = selectivity.CUT
+        else:
+            tls = selectivity.UNKNOWN
+        quic = selectivity.ANSWERED if quic_ms is not None else selectivity.CUT
+        return selectivity.Cell(tls, quic, hello.ms, quic_ms)
+
+    return cell
+
+
+def annotate_selectivity(run: Run, report: list[dict], collected: dict[str, list[Probe]], services) -> None:
+    """Таблица «имя × адрес × протокол» у сервисов с сигналом беды: блокировка избирательна, судить по одному адресу нельзя."""
+    for item in report:
+        key = str(item.get("key") or "")
+        probes = collected.get(key) or []
+        if not probes or services[key].control or run.dns_cancelled():
+            continue
+        quic_codes = [probe.quic.code if probe.quic else "" for probe in probes]
+        causes = [probe.cause.code if probe.cause else "" for probe in probes]
+        if not selectivity.needs_matrix(quic_codes, causes, [probe.unstable for probe in probes]):
+            continue
+        ordered = sorted(probes, key=lambda probe: not probe.target.main)
+        addresses = [(probe.host, probe.reach.ip) for probe in ordered if probe.reach is not None and probe.reach.ip]
+        facts = selectivity.collect(
+            [probe.host for probe in ordered], addresses, _matrix_cell(run), submit=run.submit, should_stop=run.dns_cancelled
+        )
+        verdict = selectivity.judge(facts)
+        if verdict is not None:
+            item["selectivity"] = verdict.as_dict()
 
 
 def check_name_speed(run: Run, collected: dict[str, list[Probe]], services) -> dict | None:
