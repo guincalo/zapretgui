@@ -78,6 +78,83 @@ class TargetRowsTests(unittest.TestCase):
         self.assertEqual(rows["Адреса DNS"].level, "info")
 
 
+class BlockerRowsTests(unittest.TestCase):
+    """Кто мешает и на каком уровне — по строке на уровень, подробно."""
+
+    def test_quic_blocked_by_name_names_the_layer_and_who_does_it(self) -> None:
+        rows = view.blocker_rows(_target(quic="blocked_by_name", quic_text="пакет с именем теряется"))
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0].level, "warn")
+        self.assertIn("QUIC поверх UDP 443", rows[0].title)
+        self.assertIn("фильтр на маршруте", rows[0].text)
+        self.assertIn("пакет с именем теряется", rows[0].text)
+
+    def test_every_layer_found_gets_its_own_row(self) -> None:
+        item = _target(
+            ok=False,
+            kind="sni",
+            cause_text="Блокировка по имени сайта",
+            quic="blocked_by_name",
+            quic_text="потеря",
+            dns_state="spoofed",
+            dns_reason="адрес подменён",
+        )
+
+        titles = [row.title for row in view.blocker_rows(item)]
+
+        self.assertEqual(len(titles), 3)
+        self.assertTrue(titles[0].startswith("Кто мешает: TLS"))
+        self.assertTrue(titles[2].startswith("Кто мешает: DNS"))
+
+    def test_nothing_found_adds_nothing_and_an_open_site_is_not_named_blocked(self) -> None:
+        self.assertEqual(view.blocker_rows(_target()), ())
+        self.assertEqual(view.blocker_rows(_target(ok=True, kind="sni")), ())
+
+    def test_rows_reach_both_the_card_and_the_text(self) -> None:
+        service = _service(targets=[_target(quic="blocked_by_name", quic_text="потеря")])
+        text = "\n".join(view.render_text(view.service_sections(service)))
+
+        self.assertIn("Кто мешает: QUIC поверх UDP 443", text)
+        card = cards.site_card(service)
+        self.assertTrue(any(line.name.startswith("Кто мешает") for section in card.sections for line in section.lines))
+
+
+class SelectivityTests(unittest.TestCase):
+    """Блокировка избирательна: рядом лежат адреса, где слой мешает, и адреса, где проходит."""
+
+    def _service(self):
+        return _service(
+            targets=[
+                _target(host="www.youtube.com", quic="blocked_by_name", quic_text="потеря"),
+                _target(host="i.ytimg.com", main=False, quic="ok", quic_text="отвечает"),
+                _target(host="rr1.googlevideo.com", main=False, quic="ok", quic_text="отвечает"),
+            ]
+        )
+
+    def test_mixed_layer_lists_who_is_blocked_and_who_passes(self) -> None:
+        section = view.selectivity_section(self._service())
+
+        self.assertIsNotNone(section)
+        quic = next(row for row in section.rows if row.title.startswith("QUIC"))
+        self.assertIn("мешает: www.youtube.com", quic.text)
+        self.assertIn("i.ytimg.com (отвечает)", quic.text)
+        self.assertIn("rr1.googlevideo.com (отвечает)", quic.text)
+        self.assertEqual(section.rows[-1].title, "Что это значит")
+        self.assertIn("избирательной", section.rows[-1].text)
+
+    def test_uniform_results_add_no_section(self) -> None:
+        same = _service(targets=[_target(quic="ok"), _target(host="b.com", main=False, quic="ok")])
+
+        self.assertIsNone(view.selectivity_section(same))
+        self.assertIsNone(view.selectivity_section(_service(targets=[_target(quic="blocked_by_name")])))
+
+    def test_section_is_part_of_the_service_sections_for_card_and_text(self) -> None:
+        titles = [section.title for section in view.service_sections(self._service())]
+
+        self.assertIn("Избирательность: чем адреса сервиса отличаются", titles)
+
+
 class SectionsTests(unittest.TestCase):
     STEPS = [
         {"key": "dns", "title": "DNS", "level": "ok", "text": "совпал", "confidence": "high"},

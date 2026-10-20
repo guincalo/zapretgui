@@ -644,19 +644,20 @@ def _lookup_network(ip: str, servers: tuple[str, ...]) -> NetworkInfo | None:
     return NetworkInfo(asn=found.asn, prefix=found.prefix, country=found.country, owner=found.owner)
 
 
-def _lookup_cert(ip: str, key: str, server_name: str | None) -> NeighborSource:
+def _lookup_cert(ip: str, key: str, server_name: str | None, site_opens: bool = False) -> NeighborSource:
     result = fetch_cert_names(ip, server_name=server_name)
     if not result.ok:
         if result.kind == "tls" and server_name is None:
             # Сети доставки (Cloudflare и подобные) без имени сайта сертификат не отдают.
             return NeighborSource(key=key, status=SOURCE_SKIPPED, detail="сервер не отдаёт сертификат без имени сайта")
         if server_name is not None and result.kind in ("timeout", "tls", "error"):
-            # Порт открыт, а защищённое соединение с именем сайта не складывается.
-            return NeighborSource(
-                key=key,
-                status=SOURCE_ERROR,
-                detail=f"соединение с именем {server_name} не установилось — так бывает, когда сайт блокируют по имени",
-            )
+            # Порт открыт, а защищённое соединение с именем сайта не складывается. Про блокировку по
+            # имени можно говорить, только если сам сайт не открылся: иначе это сбой этого запроса.
+            if site_opens:
+                detail = f"сертификат с именем {server_name} прочитать не удалось ({result.detail}); сам сайт при этом открывается"
+            else:
+                detail = f"соединение с именем {server_name} не установилось — так бывает, когда сайт блокируют по имени"
+            return NeighborSource(key=key, status=SOURCE_ERROR, detail=detail)
         return NeighborSource(key=key, status=SOURCE_ERROR, detail=result.detail)
     names = list(result.names)
     if result.common_name and result.common_name.lower() not in names:
@@ -1287,7 +1288,8 @@ def _address_stage(run: _Run, report: DomainLookupReport, servers, use_external:
         futures[run.pool.submit(trace_route, ip, should_stop=run.halted)] = "route"
     if domain:
         order.append(SOURCE_CERT_NAMED)
-        futures[run.pool.submit(_lookup_cert, ip, SOURCE_CERT_NAMED, domain)] = SOURCE_CERT_NAMED
+        site_opens = str((report.site or {}).get("level") or "") in ("ok", "warn")
+        futures[run.pool.submit(_lookup_cert, ip, SOURCE_CERT_NAMED, domain, site_opens)] = SOURCE_CERT_NAMED
     order.append(SOURCE_CERT_DEFAULT)
     futures[run.pool.submit(_lookup_cert, ip, SOURCE_CERT_DEFAULT, None)] = SOURCE_CERT_DEFAULT
     order.extend(EXTERNAL_SOURCES)

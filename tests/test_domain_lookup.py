@@ -354,6 +354,17 @@ class AskTests(unittest.TestCase):
         self.assertEqual((source.status, source.names), (engine.SOURCE_SKIPPED, ()))
         self.assertIn("сертификат-пустышку (invalid2.invalid)", source.detail)
 
+    def test_named_certificate_failure_blames_the_name_only_when_the_site_does_not_open(self) -> None:
+        failed = CertNames("timeout", (), "", "сервер не ответил вовремя")
+        with patch.object(engine, "fetch_cert_names", lambda ip, server_name=None: failed):
+            blocked = engine._lookup_cert("142.251.151.4", engine.SOURCE_CERT_NAMED, "www.youtube.com", False)
+            opens = engine._lookup_cert("142.251.151.4", engine.SOURCE_CERT_NAMED, "www.youtube.com", True)
+
+        self.assertIn("блокируют по имени", blocked.detail)
+        self.assertNotIn("блокируют", opens.detail)
+        self.assertIn("сам сайт при этом открывается", opens.detail)
+        self.assertIn("сервер не ответил вовремя", opens.detail)
+
     def test_unreachable_service_is_explained_in_words(self) -> None:
         import requests
 

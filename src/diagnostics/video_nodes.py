@@ -32,13 +32,18 @@ __all__ = [
     "discover",
     "goodput_volume",
     "owner_note",
+    "page_failure_reason",
     "spare_note",
 ]
 
 SOURCE_PLAYER = "player"
 SOURCE_REDIRECTOR = "redirector"
 
-_WATCH_PAGE = "/watch?v=dQw4w9WgXcQ&hl=en"
+# Два настоящих ролика: если одна страница не открылась или не назвала узел, пробуется другая.
+_WATCH_PAGES = ("/watch?v=dQw4w9WgXcQ&hl=en", "/watch?v=58HsQ3Nlknw&hl=en")
+# Сколько адресов YouTube пробуется, пока страница не откроется, и общий срок поиска узла.
+_PAGE_ADDRESSES = 3
+_DISCOVERY_TOTAL_S = 14.0
 _WATCH_PAGE_MAX_BYTES = 2_000_000
 # Сколько ещё читать страницу после имён узлов, пока не встретится адрес замера скорости.
 _PROBE_URL_WAIT_BYTES = 60_000
@@ -161,19 +166,53 @@ def _player_hosts(run) -> tuple[tuple[str, ...], str, tuple[str, str]]:
             return True
         return False
 
-    # Адрес YouTube — тот, которым воспользовался бы браузер.
-    candidates = list(net_access.browser_ipv4(run, YOUTUBE_HOST))
-    for ip in candidates[:1]:
-        # Имя видеосервера ищется в самой странице: её нужно распаковать.
-        page = dict(timeout=DISCOVERY_TIMEOUT, read_limit=_WATCH_PAGE_MAX_BYTES, body_done=_done, decode_body=True)
-        result = net_access.fetch(run, YOUTUBE_HOST, ip, _WATCH_PAGE, **page)
-        if found:
-            return tuple(found), "", (probe[0] if probe else ("", ""))
-        if late:
-            return (), "страница YouTube грузилась слишком медленно", ("", "")
-        if result.ok:
-            return (), "YouTube не назвал видеосервер", ("", "")
-    return (), "страница YouTube не открылась", ("", "")
+    # Адрес YouTube — тот, которым воспользовался бы браузер; если на нём страница не открылась, пробуются
+    # следующие адреса и второй ролик: один сбой одного адреса не доказывает, что YouTube не открывается.
+    failure = "страница YouTube не открылась: адрес YouTube не определился"
+    named_nothing = False
+    started = time.monotonic()
+    for ip in net_access.browser_ipv4(run, YOUTUBE_HOST)[:_PAGE_ADDRESSES]:
+        for path in _WATCH_PAGES:
+            if run.dns_cancelled():
+                return (), "проверка остановлена до того, как страница YouTube открылась", ("", "")
+            if time.monotonic() - started >= _DISCOVERY_TOTAL_S:
+                return (), failure, ("", "")
+            reading.clear()
+            late.clear()
+            seen_at.clear()
+            # Имя видеосервера ищется в самой странице: её нужно распаковать.
+            page = dict(timeout=DISCOVERY_TIMEOUT, read_limit=_WATCH_PAGE_MAX_BYTES, body_done=_done, decode_body=True)
+            result = net_access.fetch(run, YOUTUBE_HOST, ip, path, **page)
+            if found:
+                return tuple(found), "", (probe[0] if probe else ("", ""))
+            if late:
+                failure = "страница YouTube грузилась слишком медленно"
+            elif result.ok:
+                named_nothing = True
+            else:
+                failure = f"страница YouTube не открылась ({page_failure_reason(result)}, адрес {ip})"
+    if named_nothing:
+        return (), "YouTube не назвал видеосервер", ("", "")
+    return (), failure, ("", "")
+
+
+def page_failure_reason(result) -> str:
+    """Почему страница не открылась — словами, по виду сбоя запроса."""
+    kind = str(getattr(result, "kind", "") or "")
+    status = getattr(result, "status", None)
+    if kind == "cancelled":
+        return "проверка остановлена"
+    if kind == "timeout":
+        return "нет ответа за отведённое время"
+    if kind == "reset":
+        return "соединение сброшено"
+    if kind == "connect":
+        return "соединение не установилось"
+    if kind in ("tls", "cert"):
+        return "защищённое соединение не сложилось"
+    if status and int(status) >= 400:
+        return f"сайт ответил кодом {int(status)}"
+    return "запрос не удался"
 
 
 def discover(run, *, player: Callable | None = None, mapped: Callable | None = None) -> VideoNodes:

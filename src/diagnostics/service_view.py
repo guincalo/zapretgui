@@ -66,6 +66,50 @@ _OUTSIDE_WORDS = {
     "up": (INFO, "открывается — значит, закрыт он именно на вашей линии"),
     "down": (INFO, "тоже не открывается — сайт не работает сам"),
 }
+# Кто и на каком уровне сети мешает: слои по виду блокировки. Слова подробные — это объяснение, а не метка.
+_BLOCK_LAYERS = {
+    "ip": (
+        "IP-адрес (сетевой уровень)",
+        "закрыт сам адрес сервера: до него не доходит ничего или он молчит, каким именем сайта ни называйся. "
+        "Так бывает, когда оператор связи внёс адрес в чёрный список на своём оборудовании или на маршруте оборван путь. "
+        "Стратегия Zapret адрес не открывает: нужен другой маршрут (VPN, прокси).",
+    ),
+    "sni": (
+        "TLS поверх TCP 443 (имя сайта в начале соединения)",
+        "сервер жив, но соединение рвётся, как только в его начале открытым текстом названо имя сайта (поле SNI). "
+        "Так работает фильтр на пути: оборудование оператора связи читает имя и обрывает соединение; сам сайт его не рвёт, "
+        "потому что на посторонние имена тот же адрес отвечает. Блокировку по имени стратегия Zapret обходит.",
+    ),
+    "cut16": (
+        "TCP 443, передача данных после рукопожатия",
+        "соединение устанавливается и начало страницы приходит, а затем поток замирает или обрывается около 16 КБ. "
+        "Так ведёт себя фильтр на пути, который пропускает рукопожатие и режет передачу. Обрыв стратегия Zapret обходит.",
+    ),
+    "stub": (
+        "HTTP или TLS (вместо сайта отдана подмена)",
+        "вместо настоящего ответа приходит страница-заглушка или код 451: подмену вставляет оборудование оператора связи на пути.",
+    ),
+    "cert": (
+        "TLS (подмена сертификата)",
+        "сервер или тот, кто стоит на пути, отдаёт сертификат, выданный не сайту: перехват делает оборудование на маршруте.",
+    ),
+    "fingerprint": (
+        "TLS (отпечаток приветствия клиента)",
+        "обычная программа соединяется, а приветствие, составленное как у браузера, — нет: фильтр на пути сравнивает состав приветствия.",
+    ),
+}
+_QUIC_LAYER = (
+    "QUIC поверх UDP 443 (имя сайта в первом пакете)",
+    "в первом пакете QUIC имя сайта читается так же, как в TLS. Пакет с именем этого сайта теряется даже при повторе, "
+    "а тот же сервер на постороннее имя отвечает: значит, его теряет фильтр на маршруте (оборудование оператора связи), "
+    "а не сам сервер и не DNS. Браузер при этом откатывается на TCP, поэтому сайт открывается, но медленнее "
+    "и без преимуществ QUIC.",
+)
+_DNS_LAYER = (
+    "DNS (какой адрес у сайта)",
+    "ответ DNS отличается от эталона: адрес подменён на пути запроса. Это делает оборудование на маршруте до DNS-сервера "
+    "или сам DNS-сервер; на сайт это влияет, только если программа берёт адрес из такого ответа.",
+)
 # Строки адреса, которые относятся к ответу DNS: короткая проверка показывает только их.
 DNS_ROWS = ("DNS", "Адреса DNS", "Заметка")
 _CONFIDENCE_WORDS = {"low": "низкая", "medium": "средняя", "high": "высокая"}
@@ -200,9 +244,68 @@ def target_rows(item: dict) -> tuple[ViewRow, ...]:
         rows.append(ViewRow(_DNS_LEVELS.get(str(item.get("dns_state")), INFO), "DNS", str(item["dns_reason"])))
     if item.get("dns_detail"):
         rows.append(ViewRow(INFO, "Адреса DNS", str(item["dns_detail"])))
+    rows.extend(blocker_rows(item))
     if item.get("note"):
         rows.append(ViewRow(INFO, "Заметка", str(item["note"])))
     return tuple(rows)
+
+
+def blocker_rows(item: dict) -> tuple[ViewRow, ...]:
+    """Кто мешает и на каком уровне сети: по строке на каждый найденный уровень, с доказательством и следствием."""
+    found: list[tuple[str, tuple[str, str], str]] = []
+    kind = str(item.get("kind") or "")
+    if kind in _BLOCK_LAYERS and not item.get("ok"):
+        found.append((FAIL, _BLOCK_LAYERS[kind], str(item.get("cause_text") or "")))
+    if item.get("quic") == "blocked_by_name":
+        found.append((WARN, _QUIC_LAYER, str(item.get("quic_text") or "")))
+    if item.get("dns_state") == "spoofed":
+        found.append((WARN, _DNS_LAYER, str(item.get("dns_reason") or "")))
+    rows = []
+    for level, (layer, meaning), evidence in found:
+        text = f"{meaning} Что показала проверка: {evidence}." if evidence else meaning
+        rows.append(ViewRow(level, f"Кто мешает: {layer}", text))
+    return tuple(rows)
+
+
+# Слои, по которым сравниваются адреса одного сервиса: (название, ключ, значения «плохо» и «хорошо», слова).
+_COMPARED_LAYERS = (
+    ("QUIC (UDP 443)", "quic", {"blocked_by_name": "пакеты теряются", "silent": "молчит"}, {"ok": "отвечает"}),
+    ("Объём загрузки", "volume", {"cut": "замирает"}, {"ok": "без обрыва"}),
+    ("DNS", "dns_state", {"spoofed": "адрес подменён"}, {"ok": "совпал с эталоном"}),
+)
+
+
+def selectivity_section(service: dict) -> ViewSection | None:
+    """Сравнение адресов сервиса по слоям: блокировка бывает избирательной, и угадывать по одному адресу нельзя.
+
+    Строка появляется, только если на слое есть и плохие, и хорошие адреса: тогда видно, что результат зависит
+    от имени или узла, а не от всей сети разом.
+    """
+    targets = [item for item in service.get("targets") or () if isinstance(item, dict)]
+    if len(targets) < 2:
+        return None
+    rows: list[ViewRow] = []
+    opens = [str(item.get("host") or "") for item in targets if item.get("ok")]
+    closed = [str(item.get("host") or "") for item in targets if not item.get("ok")]
+    if opens and closed:
+        rows.append(ViewRow(FAIL, "Соединение: по адресам", f"не открываются: {', '.join(closed)}; открываются: {', '.join(opens)}"))
+    for title, key, bad_words, good_words in _COMPARED_LAYERS:
+        bad = [f"{item.get('host')} ({bad_words[str(item.get(key))]})" for item in targets if str(item.get(key)) in bad_words]
+        good = [f"{item.get('host')} ({good_words[str(item.get(key))]})" for item in targets if str(item.get(key)) in good_words]
+        if bad and good:
+            rows.append(ViewRow(WARN, f"{title}: по адресам", f"мешает: {'; '.join(bad)}. Проходит: {'; '.join(good)}"))
+    if not rows:
+        return None
+    rows.append(
+        ViewRow(
+            INFO,
+            "Что это значит",
+            "результат разный у разных имён и узлов сервиса, хотя сеть и линия у вас одни. Значит, мешает не обрыв всей связи, "
+            "а фильтр, который смотрит на имя сайта, узел или протокол. Вывод по одному адресу сервиса был бы догадкой: "
+            "блокировка бывает избирательной и задевает только часть имён, узлов или протоколов.",
+        )
+    )
+    return ViewSection("Избирательность: чем адреса сервиса отличаются", tuple(rows))
 
 
 def path_section(item: dict) -> ViewSection | None:
@@ -262,6 +365,9 @@ def service_sections(service: dict) -> tuple[ViewSection, ...]:
     sections: list[ViewSection] = []
     for item in service.get("targets") or ():
         sections.extend(target_sections(item))
+    selectivity = selectivity_section(service)
+    if selectivity is not None:
+        sections.append(selectivity)
     advice = [str(item) for item in service.get("advice") or ()]
     if advice:
         sections.append(ViewSection("Что делать", tuple(ViewRow(INFO, item) for item in advice)))

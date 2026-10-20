@@ -67,6 +67,54 @@ class DiscoverTests(unittest.TestCase):
         self.assertEqual(nodes.hosts, (MAPPED,))
 
 
+class PlayerHostsTests(unittest.TestCase):
+    """Страница ролика: один сбой одного адреса не значит, что YouTube не открывается."""
+
+    def _run(self):
+        return SimpleNamespace(dns_cancelled=lambda: False, probe_cancel=None)
+
+    def test_second_address_and_second_video_are_tried(self) -> None:
+        calls: list[tuple[str, str]] = []
+
+        def fetch(_run, _host, ip, path, **kwargs):
+            calls.append((ip, path))
+            if (ip, path) == ("2.2.2.2", vn._WATCH_PAGES[1]):
+                kwargs["body_done"](b'..."serverAbrStreamingUrl":"https://rr1---sn-aaa.googlevideo.com/videoplayback?x=1"...')
+            return SimpleNamespace(ok=(ip == "2.2.2.2"), kind="timeout", status=None)
+
+        with (
+            patch.object(vn.net_access, "browser_ipv4", return_value=("1.1.1.1", "2.2.2.2")),
+            patch.object(vn.net_access, "fetch", side_effect=fetch),
+            patch("blockcheck.googlevideo_discovery.extract_googlevideo_hosts", return_value=("rr1---sn-aaa.googlevideo.com",)),
+            patch("blockcheck.googlevideo_discovery.extract_probe_url", return_value=("", "")),
+        ):
+            hosts, failure, _probe = vn._player_hosts(self._run())
+
+        self.assertEqual(hosts, ("rr1---sn-aaa.googlevideo.com",))
+        self.assertEqual(failure, "")
+        self.assertEqual(calls[0][0], "1.1.1.1")
+        self.assertEqual(calls[-1], ("2.2.2.2", vn._WATCH_PAGES[1]))
+
+    def test_failure_names_the_real_reason_and_the_address(self) -> None:
+        reset = SimpleNamespace(ok=False, kind="reset", status=None)
+        with (
+            patch.object(vn.net_access, "browser_ipv4", return_value=("1.1.1.1",)),
+            patch.object(vn.net_access, "fetch", return_value=reset),
+        ):
+            hosts, failure, _probe = vn._player_hosts(self._run())
+
+        self.assertEqual(hosts, ())
+        self.assertIn("соединение сброшено", failure)
+        self.assertIn("1.1.1.1", failure)
+
+    def test_cancelled_run_is_not_reported_as_a_closed_page(self) -> None:
+        run = SimpleNamespace(dns_cancelled=lambda: True, probe_cancel=None)
+        with patch.object(vn.net_access, "browser_ipv4", return_value=("1.1.1.1",)):
+            _hosts, failure, _probe = vn._player_hosts(run)
+
+        self.assertIn("проверка остановлена", failure)
+
+
 class MappedHostTests(unittest.TestCase):
     """Узел вашей сети от редиректора: адрес берётся как у браузера, а не только системным DNS."""
 
