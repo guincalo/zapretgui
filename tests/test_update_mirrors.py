@@ -157,5 +157,51 @@ class MirrorListTests(unittest.TestCase):
         self.assertEqual(mirror_list.hosts()[0], "git2.zapret.moe")
 
 
+class MirrorReportTests(unittest.TestCase):
+    """Почему зеркала закрыты на этом компьютере, видно в журнале программы."""
+
+    def test_report_names_the_source_of_the_list_and_every_failed_name(self) -> None:
+        said: list[str] = []
+        good = json.dumps(_document(("git4.zapret.moe", False))).encode()
+
+        def fetch(url: str):
+            if "git2." in url:
+                raise OSError("timed out")
+            if "git3." in url:
+                return None
+            return good if "git4." in url else None
+
+        mirror_list = mirrors.MirrorList(fetch, report=said.append)
+        mirror_list.hosts()
+
+        self.assertEqual(len(said), 1)
+        self.assertIn("получен с git4.zapret.moe", said[0])
+
+    def test_report_lists_all_causes_when_nothing_answers(self) -> None:
+        said: list[str] = []
+
+        def fetch(url: str):
+            raise ConnectionResetError("reset by peer")
+
+        mirrors.MirrorList(fetch, report=said.append).hosts()
+
+        self.assertEqual(len(said), 1)
+        self.assertIn("запасной", said[0])
+        for host in mirrors.BOOTSTRAP_HOSTS:
+            self.assertIn(host, said[0])
+        self.assertIn("ConnectionResetError", said[0])
+
+    def test_failures_of_a_name_are_reported_and_a_broken_report_does_not_break_the_list(self) -> None:
+        said: list[str] = []
+        mirror_list = mirrors.MirrorList(lambda _url: None, report=said.append)
+        mirror_list.note_failure("git2.zapret.moe", TimeoutError("долго"))
+        self.assertIn("git2.zapret.moe: TimeoutError", said[0])
+
+        def broken(_message: str) -> None:
+            raise RuntimeError("журнал сломан")
+
+        self.assertEqual(mirrors.MirrorList(lambda _url: None, report=broken).hosts(), list(mirrors.BOOTSTRAP_HOSTS))
+
+
 if __name__ == "__main__":
     unittest.main()

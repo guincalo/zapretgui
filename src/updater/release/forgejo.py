@@ -111,7 +111,11 @@ def _fetch_mirror_list(url: str) -> bytes | None:
         session.close()
 
 
-_MIRRORS = git_mirrors.MirrorList(_fetch_mirror_list)
+def _report_mirror(message: str) -> None:
+    log(f"[UPDATE] Forgejo, имена сервера: {message}", "INFO")
+
+
+_MIRRORS = git_mirrors.MirrorList(_fetch_mirror_list, report=_report_mirror)
 
 
 def _should_try_next_name(exc: BaseException) -> bool:
@@ -148,6 +152,7 @@ def _get(session: requests.Session, url: str, *, accept: str) -> requests.Respon
             if not _should_try_next_name(exc):
                 raise
             last_error = exc
+            _MIRRORS.note_failure(host, exc)
             if time.monotonic() - started >= _MIRROR_ROUND_BUDGET_S:
                 break
             continue
