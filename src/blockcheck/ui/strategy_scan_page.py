@@ -207,6 +207,7 @@ class StrategyScanPage(BasePage):
             on_protocol_changed=self._on_protocol_changed,
             on_udp_games_scope_changed=self._on_udp_games_scope_changed,
             on_show_quick_domains_menu=self._show_quick_domains_menu,
+            on_pick_quick_service=self._on_pick_quick_domain,
             on_start=self._on_start,
             on_stop=self._on_stop,
         )
@@ -221,12 +222,16 @@ class StrategyScanPage(BasePage):
         self._target_label = control_widgets.target_label
         self._target_input = control_widgets.target_input
         self._quick_domain_btn = control_widgets.quick_domain_btn
+        self._quick_cards = control_widgets.quick_cards
         self._geo_notice = control_widgets.geo_notice
         self._geo_notice.hosts_button.setVisible(self._open_hosts_editor is not None)
         self._geo_notice.dns_button.setVisible(self._open_dns_settings is not None)
         self._geo_notice.open_hosts_clicked.connect(self._open_hosts_editor_for_geo_site)
         self._geo_notice.open_dns_clicked.connect(self._open_dns_settings_for_geo_site)
         self._target_input.textChanged.connect(self._refresh_geo_notice)
+        # Карточка сервиса подсвечивается, когда его адрес стоит в поле, в том числе после ручного ввода.
+        self._target_input.textChanged.connect(self._quick_cards.set_target)
+        self._quick_cards.set_target(self._target_input.text())
         self._udp_scope_hint_label = control_widgets.udp_scope_hint_label
         self._start_btn = control_widgets.start_btn
         self._stop_btn = control_widgets.stop_btn
@@ -423,6 +428,7 @@ class StrategyScanPage(BasePage):
         self._target_input.setVisible(plan.show_target_controls)
         if self._quick_domain_btn is not None:
             self._quick_domain_btn.setVisible(plan.show_target_controls)
+        self._quick_cards.setVisible(plan.show_target_controls)
 
         self._target_input.setText(plan.normalized_target)
         self._target_input.setPlaceholderText(plan.placeholder_text)
@@ -1381,6 +1387,7 @@ class StrategyScanPage(BasePage):
         self._target_input.setEnabled(plan.target_enabled)
         if self._quick_domain_btn is not None:
             self._quick_domain_btn.setEnabled(plan.quick_domain_enabled)
+        self._quick_cards.setEnabled(plan.quick_domain_enabled)
 
     def _reset_ui(self):
         selection = self._blockcheck.build_selection_state(

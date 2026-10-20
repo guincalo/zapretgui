@@ -6,7 +6,6 @@
 
 from __future__ import annotations
 
-from settings.schema import TAB_HISTORY_LIMIT
 from dataclasses import replace
 
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
@@ -24,21 +23,23 @@ from qfluentwidgets import (
 
 import dns.domain_lookup_plans as plans
 from app.ui_texts import tr as tr_catalog
-from blockcheck.ui.check_results import _HeightKeeper
 from blockcheck.ui.brand_icons import BrandIcon
+from blockcheck.ui.check_results import _HeightKeeper
+from blockcheck.ui.quick_service_cards import QuickServiceCards
 from blockcheck.ui.result_cards import CardsGrid, TilesGrid, plain_tile
 from blockcheck.ui.result_cards_model import Line
 from dns.ui import domain_lookup_cards as lookup_cards
 from log.log import log
+from settings.schema import TAB_HISTORY_LIMIT
 from ui.accessibility import set_control_accessibility, set_state_text
-from ui.widgets.check_hero import CheckHero
-from ui.widgets.flat_section import FlatSection
-from ui.fluent_widgets import SettingsCard, set_tooltip
+from ui.fluent_widgets import set_tooltip
 from ui.latest_worker_lane import LatestWorkerLane
 from ui.pages.base_page import BasePage
 from ui.theme import get_theme_tokens
 from ui.theme_refresh import ThemeRefreshBinding
 from ui.theme_semantic import get_semantic_palette
+from ui.widgets.check_hero import CheckHero
+from ui.widgets.flat_section import FlatSection
 from ui.widgets.fun import FunTicker
 from ui.widgets.log_report_view import LogReport
 
@@ -251,6 +252,12 @@ class DomainLookupPage(BasePage):
         row.addWidget(self.report_button)
         self.control_card.add_layout(row)
 
+        # Известные сервисы одним нажатием: адрес подставляется и проверка запускается сразу.
+        self.quick_cards = QuickServiceCards(self.control_card, for_site_check=True)
+        self.quick_cards.picked.connect(self._on_quick_service)
+        self.target_input.textChanged.connect(self.quick_cards.set_target)
+        self.control_card.add_widget(self.quick_cards)
+
         self.external_check = CheckBox("", self.control_card)
         self.external_check.setChecked(True)
         self.control_card.add_widget(self.external_check)
@@ -362,6 +369,7 @@ class DomainLookupPage(BasePage):
         self.start_button.setEnabled(not running)
         self.stop_button.setVisible(running)
         self.target_input.setEnabled(not running)
+        self.quick_cards.setEnabled(not running)
         self.external_check.setEnabled(not running)
         self.report_button.setEnabled(self._report is not None and not running)
         self.progress_bar.setVisible(running)
@@ -376,6 +384,13 @@ class DomainLookupPage(BasePage):
             self.progress_bar.stop()
             self.ticker.stop()
         set_state_text(self.progress_bar, "Проверка домена: выполняется" if running else "Проверка домена: не выполняется")
+
+    def _on_quick_service(self, address: str) -> None:
+        """Карточка сервиса: подставить адрес и сразу проверить."""
+        if self._closed or self._running:
+            return
+        self.set_target(address)
+        self.start_lookup()
 
     def set_target(self, target: str) -> None:
         self.target_input.setText(str(target or ""))

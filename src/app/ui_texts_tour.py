@@ -613,16 +613,16 @@ TEXTS_TOUR: dict[str, dict[str, str]] = {
     "onboarding.step.strategy_scan.body": {
         "ru": (
             "Здесь программа сама ищет стратегию, которая откроет нужный сайт. Выберите, что должно "
-            "заработать: сайты и приложения, голосовые звонки или онлайн-игры. Впишите сайт или возьмите "
-            "готовый кнопкой «Выбрать из списка», задайте тщательность — «Быстро» перебирает 30 стратегий "
+            "заработать: сайты и приложения, голосовые звонки или онлайн-игры. Нажмите на карточку "
+            "известного сервиса — YouTube, Discord, Telegram и другие — или впишите свой сайт; есть и кнопка «Выбрать из списка». Задайте тщательность — «Быстро» перебирает 30 стратегий "
             "за пару минут — и нажмите «Найти рабочую стратегию».\n\n"
             "Пока идёт подбор, программа сама перезапускает движок с каждой стратегией. «Сайты и приложения» "
             "сами поймут, если сайту нужен обычный HTTP без шифрования или быстрый протокол QUIC."
         ),
         "en": (
             "Here the app itself looks for a strategy that opens the site you need. Choose what should "
-            "work: sites and apps, voice calls or online games. Type a site or take a ready one with "
-            "Choose from list, set the thoroughness — Quick tries 30 strategies in a couple of minutes — "
+            "work: sites and apps, voice calls or online games. Click a card of a well-known service — YouTube, Discord, Telegram and others — or type your own site; "
+            "there is also a Choose from list button. Set the thoroughness — Quick tries 30 strategies in a couple of minutes — "
             "and press Find a working strategy.\n\n"
             "While the search runs, the app restarts the engine with each strategy by itself. Sites and apps "
             "work out by themselves when a site needs plain HTTP without encryption or the fast QUIC protocol."

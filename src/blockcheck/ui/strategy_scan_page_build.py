@@ -17,6 +17,7 @@ from PyQt6.QtWidgets import QHBoxLayout
 from qfluentwidgets import CaptionLabel, FluentIcon
 
 from blockcheck.strategy_scan_page_plans import MODE_ITEMS, PROTOCOL_ITEMS, PROTOCOL_TILE_DETAILS
+from blockcheck.ui.quick_service_cards import QuickServiceCards
 from blockcheck.ui.strategy_scan_widgets import (
     ChoiceRadios,
     ChoiceTiles,
@@ -41,6 +42,7 @@ class StrategyScanControlWidgets:
     target_label: object
     target_input: object
     quick_domain_btn: object
+    quick_cards: object
     geo_notice: object
     udp_scope_hint_label: object
     start_btn: object
@@ -80,6 +82,7 @@ def build_strategy_scan_control_section(
     on_protocol_changed,
     on_udp_games_scope_changed,
     on_show_quick_domains_menu,
+    on_pick_quick_service,
     on_start,
     on_stop,
 ) -> StrategyScanControlWidgets:
@@ -146,6 +149,11 @@ def build_strategy_scan_control_section(
     target_row.addStretch(0)
     control_card.add_layout(target_row)
 
+    # Известные сервисы одним нажатием, без поиска в меню; нажатие подставляет адрес в поле.
+    quick_cards = QuickServiceCards()
+    quick_cards.picked.connect(on_pick_quick_service)
+    control_card.add_widget(quick_cards)
+
     # Выбран гео-сайт: стратегия его не чинит, нужен hosts или DNS.
     geo_notice = GeoSiteNotice()
     geo_notice.set_button_texts(
@@ -209,6 +217,7 @@ def build_strategy_scan_control_section(
         target_label=target_label,
         target_input=target_input,
         quick_domain_btn=quick_domain_btn,
+        quick_cards=quick_cards,
         geo_notice=geo_notice,
         udp_scope_hint_label=udp_scope_hint_label,
         start_btn=start_btn,
