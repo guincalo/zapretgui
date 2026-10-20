@@ -144,7 +144,7 @@ DNS_TYPE_A = TYPE_A
 
 
 # Разделы отчёта, которые заполняются по ходу проверки.
-_REPORT_SECTIONS = ("services", "voice", "freeze", "telegram", "network", "speed", "ipv6", "dns_servers", "filter", "habits", "crowd")
+_REPORT_SECTIONS = ("services", "voice", "freeze", "telegram", "network", "speed", "ipv6", "dns_servers", "filter", "habits", "crowd", "quic_fallback")
 # Сколько потоков нужно одной цели в худшем случае: сама цель, три запроса к
 # DNS системы, два эталона (A и AAAA) по запросу на каждый эталонный сервер и
 # несколько HTTPS-запросов, четыре пробы уточнения причины, три пакета QUIC и пять
@@ -795,6 +795,8 @@ def run_blockcheck(
         # Последней — проба, которая сама может остановить сайт на пару минут.
         crowd_call = functools.partial(sections.check_crowd, run, collected, services, tools=local)
         crowd = show("crowd", _attempt(emit, "Несколько соединений сразу", crowd_call) if full and not run.dns_cancelled() else None)
+        quic_call = functools.partial(sections.check_quic_fallback, run, collected, services)
+        show("quic_fallback", _attempt(emit, "Откат QUIC", quic_call) if full and not run.dns_cancelled() else None)
 
         reference = run.reference_report()
         # Признак «белых списков» по контрольным сайтам проверяется по десяткам сетей:

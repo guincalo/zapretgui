@@ -34,6 +34,8 @@ CARD_FIELDS: tuple[str, ...] = (
     "habits",
     # Карточка «Несколько соединений сразу».
     "crowd",
+    # Карточка «Откат QUIC»: сколько браузер теряет, уходя с QUIC на TCP.
+    "quic_fallback",
     "system",
     "registry",
     "reference",

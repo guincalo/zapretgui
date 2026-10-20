@@ -718,6 +718,40 @@ def check_crowd(run: Run, collected: dict[str, list[Probe]], services, *, tools=
     }
 
 
+def check_quic_fallback(run: Run, collected: dict[str, list[Probe]], services, *, visit=None) -> dict | None:
+    """Цена отката с QUIC на TCP у сайта, который открывается по TCP, а QUIC режут (см. ``diagnostics.quic_fallback``).
+
+    Только когда на компьютере есть Edge или Chrome и хотя бы у одного сайта QUIC закрыт или молчит; браузер
+    открывает один такой сайт по два раза с QUIC и без него.
+    """
+    from blockcheck import browser_check
+    from diagnostics import quic_fallback
+
+    visit = visit or browser_check.open_in_browser
+    if visit is browser_check.open_in_browser and not browser_check.find_browser():
+        return None
+    site = next(
+        (
+            probe
+            for key, probes in collected.items()
+            if not services[key].control
+            for probe in probes
+            if probe.target.main
+            and probe.reach_state == ReachState.OK
+            and probe.quic is not None
+            and probe.quic.code in (quic_probe.QUIC_BLOCKED_BY_NAME, quic_probe.QUIC_SILENT)
+        ),
+        None,
+    )
+    if site is None or run.dns_cancelled():
+        return None
+    facts = quic_fallback.collect(site.host, visit=visit, cancelled=run.dns_cancelled)
+    if run.dns_cancelled():
+        return None
+    verdict = quic_fallback.judge(facts)
+    return {**verdict.as_dict(), "label": next(services[key].label for key, probes in collected.items() if site in probes)}
+
+
 def crowd_problems(crowd: dict | None, *, zapret_running: bool | None) -> list[dict]:
     """Проблема «сайт замирает от нескольких соединений сразу». Пусто — такого нет."""
     if not crowd or crowd.get("level") != "warn":

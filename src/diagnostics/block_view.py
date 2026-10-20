@@ -413,6 +413,58 @@ def crowd_block(crowd: dict) -> BlockView:
 
 
 # ---------------------------------------------------------------------------
+# Откат QUIC
+# ---------------------------------------------------------------------------
+
+_FALLBACK_LEVELS = {"none": OK, "cost": WARN, "broken": FAIL, "unknown": UNKNOWN}
+_FALLBACK_STATUS = {"none": "Почти бесплатный", "cost": "Стоит времени", "broken": "С QUIC не открывается", "unknown": "Не измерено"}
+
+
+def quic_fallback_block(data: dict) -> BlockView:
+    """«Откат QUIC»: сколько браузер теряет, уходя с QUIC на TCP, когда UDP 443 режут."""
+    code = str(data.get("code") or "unknown")
+    level = _FALLBACK_LEVELS.get(code, UNKNOWN)
+    text = _capital(str(data.get("text") or ""))
+    host = " · ".join(part for part in (str(data.get("label") or ""), str(data.get("host") or "")) if part)
+    facts = [ViewRow(INFO, "Сайт", host)] if host else []
+    if data.get("quic_ms"):
+        facts.append(ViewRow(INFO, "Браузер с QUIC", f"{int(data['quic_ms']) / 1000:.1f} с"))
+    if data.get("tcp_ms"):
+        facts.append(ViewRow(INFO, "Браузер без QUIC", f"{int(data['tcp_ms']) / 1000:.1f} с"))
+    advice = (
+        ViewSection(
+            "Что делать",
+            (
+                ViewRow(
+                    INFO,
+                    "Закрыть QUIC к этому сайту: в Zapret 2 правилом drop для UDP 443, в winws — правилом брандмауэра. "
+                    "Тогда браузер сразу пойдёт по TCP и не будет ждать ответа по UDP.",
+                ),
+            ),
+        )
+        if code in ("cost", "broken")
+        else None
+    )
+    return BlockView(
+        "quic_fallback",
+        "Откат QUIC",
+        level,
+        _FALLBACK_STATUS.get(code, "Не измерено"),
+        (ViewRow(level, text),),
+        _sections(
+            ViewSection("Вывод", (ViewRow(level, text),)),
+            ViewSection("Что измеряли", tuple(facts)) if facts else None,
+            advice,
+            _explain(
+                "Один и тот же сайт открывается настоящим браузером без окна с QUIC и без него, по два раза каждым способом, "
+                "и сравнивается время. Когда провайдер молча режет UDP 443, браузер сначала ждёт ответа по QUIC и только потом "
+                "уходит на TCP: сайт «открывается», но каждый раз с задержкой."
+            ),
+        ),
+    )
+
+
+# ---------------------------------------------------------------------------
 # Место фильтра и как он работает
 # ---------------------------------------------------------------------------
 
@@ -666,6 +718,7 @@ _BUILDERS = (
     ("habits", habits_block),
     ("system", system_block),
     ("crowd", crowd_block),
+    ("quic_fallback", quic_fallback_block),
     ("compare", compare_block),
 )
 # Блоки, которые на экране не отдельные карточки (реестр живёт в карточке «Ход проверки»), а в тексте — свой раздел.

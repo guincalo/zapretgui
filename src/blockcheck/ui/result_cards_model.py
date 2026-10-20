@@ -334,6 +334,7 @@ _BLOCK_ICONS = {
     "habits": "fa5s.cut",
     "system": "fa5s.desktop",
     "crowd": "fa5s.layer-group",
+    "quic_fallback": "fa5s.undo",
     "compare": "fa5s.balance-scale",
 }
 

@@ -27,7 +27,7 @@ import subprocess
 import tempfile
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 __all__ = ["BROWSER_FAILED", "BROWSER_MISSING", "BROWSER_OK", "BROWSER_TIMEOUT", "BrowserVisit", "find_browser", "open_in_browser"]
 
@@ -75,6 +75,8 @@ class BrowserVisit:
     error: str = ""
     text: str = ""
     browser: str = ""
+    # Сколько прошло от запуска браузера до итога: по разнице с QUIC и без него видна цена отката (``diagnostics.quic_fallback``).
+    elapsed_ms: float = 0.0
 
     @property
     def ok(self) -> bool:
@@ -167,6 +169,7 @@ def open_in_browser(
     output_path = os.path.join(profile_dir, "output.txt")
     job = None
     process = None
+    started = clock()
     try:
         with open(output_path, "wb") as output:
             process = popen(browser_command(browser, f"https://{host}{path or '/'}", profile_dir, quic=quic), output)
@@ -179,7 +182,8 @@ def open_in_browser(
                     return BrowserVisit(BROWSER_TIMEOUT, "", "браузер не ответил вовремя", name)
                 time.sleep(0.2)
         with open(output_path, "rb") as output:
-            return judge_output(output.read().decode("utf-8", errors="replace"), browser)
+            visit = judge_output(output.read().decode("utf-8", errors="replace"), browser)
+        return replace(visit, elapsed_ms=(clock() - started) * 1000)
     except OSError as error:
         return BrowserVisit(BROWSER_MISSING, text=f"браузер не запустился: {error}")
     finally:

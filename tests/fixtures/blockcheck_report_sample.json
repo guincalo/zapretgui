@@ -692,5 +692,14 @@
     "state": "info"
    }
   ]
+ },
+ "quic_fallback": {
+  "code": "cost",
+  "text": "откат с QUIC на TCP стоит около 3.6 с при каждом первом открытии: с QUIC 5.2 с, без него 1.6 с",
+  "host": "www.youtube.com",
+  "label": "YouTube",
+  "quic_ms": 5200,
+  "tcp_ms": 1600,
+  "penalty_ms": 3600
  }
 }
