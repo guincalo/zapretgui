@@ -52,6 +52,7 @@ from diagnostics import (
     sections,
     system_state,
     telegram_check,
+    transfer_probe,
     udp_burst,
     volume_probe,
 )
@@ -365,6 +366,8 @@ def _check_volume(run: _Run, probe: _Probe) -> None:
     if run.dns_cancelled():
         return
     probe.volume = volume_probe.judge(facts)
+    probe.transfer = transfer_probe.judge(facts.first.samples)
+    probe.unstable = probe.unstable or transfer_probe.shaky_reason(probe.transfer)
     if probe.volume.code == volume_probe.VOLUME_CUT:
         probe.reach_state = ReachState.FREEZE
         return

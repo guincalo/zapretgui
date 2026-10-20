@@ -50,6 +50,7 @@ __all__ = [
     "RequestSample",
     "TransferVerdict",
     "judge",
+    "shaky_reason",
 ]
 
 TRANSFER_OK = "ok"
@@ -191,3 +192,15 @@ def judge(samples: list[RequestSample] | tuple[RequestSample, ...]) -> TransferV
         speed_kbps=kbps,
         confidence=confidence,
     )
+
+
+def shaky_reason(verdict: TransferVerdict) -> str:
+    """Что сказать про сайт, который «открывается через раз» из-за пауз; пусто — паузы нет или она не подтверждена.
+
+    Пауза, которая повторилась или подтверждена достаточным числом замеров, делает сайт
+    нестабильным: страница откроется, а видео и крупные файлы пойдут рывками. Единичная
+    пауза при малом числе замеров остаётся строкой отчёта и сайт нестабильным не делает.
+    """
+    if verdict.code != TRANSFER_PAUSE or verdict.confidence == CONFIDENCE_LOW:
+        return ""
+    return f"{verdict.text}; видео и крупные файлы с такого сервера идут рывками"

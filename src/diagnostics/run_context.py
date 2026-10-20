@@ -19,7 +19,7 @@ from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 
-from diagnostics import block_cause, block_kind, protocol_probe, quic_probe, volume_probe
+from diagnostics import block_cause, block_kind, protocol_probe, quic_probe, transfer_probe, volume_probe
 from diagnostics.outside_check import OUTSIDE_DOWN
 from diagnostics.limits import NET_AT_ONCE, NET_AT_ONCE_WEAK, REFERENCE_AT_ONCE, RUN_DEADLINE, SITE_START_GAP_S
 from diagnostics.services import Target
@@ -84,6 +84,9 @@ class Probe:
     # Проходит ли по одному соединению больше 16 КБ. None — не проверяли:
     # сайт не открылся или главная страница и так больше.
     volume: volume_probe.VolumeVerdict | None = None
+    # Как идут ответы по этому соединению: нет ли пауз и медленной передачи (по замерам пробы объёма).
+    # None — объём не набирали или замеров слишком мало.
+    transfer: transfer_probe.TransferVerdict | None = None
     # Тот же адрес по TLS 1.2, TLS 1.3 и HTTP отдельно. Пусто — не проверяли.
     protocols: tuple[protocol_probe.ProtocolLine, ...] = ()
     # Все попытки основного запроса по порядку: (адрес, исход).

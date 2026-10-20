@@ -12,7 +12,7 @@
 
 from __future__ import annotations
 
-from diagnostics import block_kind, outside_check, protocol_probe, quic_probe, telegram_check, volume_probe
+from diagnostics import block_kind, outside_check, protocol_probe, quic_probe, telegram_check, transfer_probe, volume_probe
 from diagnostics.limits import DNS_ATTEMPTS, HTTPS_TIMEOUT, SOURCE_HOSTS, SOURCE_REFERENCE
 from diagnostics.run_context import RECHECK_OPENED, RECHECK_SAME, Probe
 from diagnostics.services import (
@@ -27,6 +27,9 @@ from diagnostics.services import (
 from diagnostics.verdict import DnsState, Level, ReachState, describe_reach
 
 # Молчание по QUIC — не поломка: сервер может его не поддерживать.
+# Значок строки «Скорость ответа» по уровню вывода о передаче.
+_TRANSFER_ICON = {"ok": "✅", "warn": "⚠️", "unknown": "ℹ️"}
+
 QUIC_ICON = {
     quic_probe.QUIC_OK: "✅",
     quic_probe.QUIC_BLOCKED_BY_NAME: "❌",
@@ -177,6 +180,8 @@ def probe_lines(probe: Probe, *, full: bool) -> list[str]:
     if probe.volume is not None and probe.volume.code != volume_probe.VOLUME_CUT:
         icon = "✅" if probe.volume.code == volume_probe.VOLUME_OK else "ℹ️"
         lines.append(f"   {icon} Обрыв после 16 КБ: {probe.volume.text}")
+    if probe.transfer is not None and probe.transfer.code != transfer_probe.TRANSFER_UNKNOWN:
+        lines.append(f"   {_TRANSFER_ICON.get(probe.transfer.level, 'ℹ️')} Скорость ответа: {probe.transfer.text}")
     if probe.quic is not None:
         lines.append(f"   {QUIC_ICON[probe.quic.code]} QUIC (UDP 443): {probe.quic.text}")
     if probe.discovery_note:
@@ -211,6 +216,8 @@ def target_report(probe: Probe) -> dict:
         "kind_title": block_kind.kind_info(probe.kind).title if probe.kind else "",
         "volume": probe.volume.code if probe.volume else "",
         "volume_text": probe.volume.text if probe.volume else "",
+        # Скорость ответов по замерам пробы объёма: пауза, медленный ответ, число замеров и уверенность.
+        "transfer": probe.transfer.as_dict() if probe.transfer else None,
         "cause": probe.cause.code if probe.cause else "",
         "cause_text": sentence(probe.cause.text) if probe.cause else "",
         "quic": probe.quic.code if probe.quic else "",
@@ -357,8 +364,26 @@ def _road(key: str, label: str, state: str, word: str, text: str, hint: str) -> 
     return {"key": key, "label": label, "state": state, "word": word, "text": text, "hint": hint}
 
 
+HINT_TRANSFER = (
+    "Передача — как быстро сайт начинает отвечать и не отвечает ли он паузами. Соединение может установиться "
+    "и пройти все проверки, а видео и крупные файлы всё равно идти рывками."
+)
+_TRANSFER_WORDS = {
+    transfer_probe.TRANSFER_OK: "быстро",
+    transfer_probe.TRANSFER_PAUSE: "с паузами",
+    transfer_probe.TRANSFER_SLOW_REPLY: "медленно",
+    transfer_probe.TRANSFER_SLOW_BODY: "медленно",
+}
+
+
+def _transfer_road(verdict) -> dict:
+    return _road(
+        "transfer", "Передача", verdict.level, _TRANSFER_WORDS.get(verdict.code, "—"), verdict.text, HINT_TRANSFER
+    )
+
+
 def service_roads(probes, dns_note: str = "") -> list[dict]:
-    """Дороги к сайту — всегда в одном порядке: TLS 1.2, TLS 1.3, Chrome, HTTP, QUIC, DNS.
+    """Дороги к сайту — всегда в одном порядке: TLS 1.2, TLS 1.3, Chrome, HTTP, QUIC, передача, DNS.
 
     Каждая дорога приходит готовой: состояние, слово для метки, полная фраза и
     пояснение, что это за дорога. Экран их только показывает. Пусто — дороги не
@@ -378,6 +403,9 @@ def service_roads(probes, dns_note: str = "") -> list[dict]:
         roads.append(_road("quic", "QUIC", "ok", "работает", "QUIC к этому сайту проходит", HINT_QUIC))
     else:
         roads.append(_road("quic", "QUIC", "unknown", "—", "у этого сайта QUIC не проверялся или сервер его не поддерживает", HINT_QUIC))
+    transfer = main.transfer if main is not None else None
+    if transfer is not None and transfer.code != transfer_probe.TRANSFER_UNKNOWN:
+        roads.append(_transfer_road(transfer))
     dns = {probe.judgement.state for probe in probes if probe.judgement is not None}
     if dns_note or DnsState.SPOOFED in dns:
         roads.append(_road("dns", "DNS", "warn", "подменён", "ответ DNS подменён: лечится DNS с шифрованием в разделе «Настройка DNS»", HINT_DNS))
@@ -405,6 +433,8 @@ def service_tags(service, probes) -> list[dict]:
     tags = [{"key": "cause", "text": word, "state": "fail"} for word in causes]
     if any(probe.volume is not None and probe.volume.code == volume_probe.VOLUME_CUT for probe in probes):
         tags.append({"key": "cut16", "text": "обрыв на 16 КБ", "state": "warn"})
+    if any(probe.transfer is not None and probe.transfer.code == transfer_probe.TRANSFER_PAUSE for probe in probes):
+        tags.append({"key": "pause", "text": "паузы в ответах", "state": "warn"})
     if any(probe.hosts_stale for probe in probes):
         tags.append({"key": "hosts", "text": "запись в hosts устарела", "state": "warn"})
     if service.control:

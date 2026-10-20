@@ -507,7 +507,8 @@ TEXTS_TOUR: dict[str, dict[str, str]] = {
         "ru": (
             "Числа сверху — сколько всего проверено. Под ними карточка на каждый сайт: кружок и подпись — "
             "открывается ли он; строки — отдельные адреса сайта: сам сайт, картинки, видео; метки внизу — "
-            "что прошло и что нет: TLS 1.2, TLS 1.3, HTTP, QUIC.\n\n"
+            "что прошло и что нет: TLS 1.2, TLS 1.3, HTTP, QUIC и передача — быстро ли сайт отвечает и нет ли "
+            "пауз: соединение может установиться, а видео всё равно идти рывками.\n\n"
             "Google и Яндекс — контрольные: если не открываются даже они, дело не в блокировке, а в самом "
             "интернете."
         ),
@@ -515,7 +516,8 @@ TEXTS_TOUR: dict[str, dict[str, str]] = {
             "The numbers at the top show how much was checked. Under them is a card per site: the dot "
             "and the caption say whether it opens; the lines are separate addresses of the site: the "
             "site itself, images, video; the chips at the bottom say what passed and what did not: "
-            "TLS 1.2, TLS 1.3, HTTP, QUIC.\n\n"
+            "TLS 1.2, TLS 1.3, HTTP, QUIC and Transfer — how fast the site answers and whether it pauses: a "
+            "connection can open and video can still stutter.\n\n"
             "Google and Yandex are control sites: if even they do not open, the problem is the "
             "connection itself, not a block."
         ),
@@ -540,13 +542,13 @@ TEXTS_TOUR: dict[str, dict[str, str]] = {
         "ru": (
             "Нажатие на любую карточку открывает все измерения по ней — экскурсия открыла Discord. "
             "По каждому адресу видно, чем кончилось соединение, какие адреса пробовали, что с TLS 1.2, "
-            "TLS 1.3 и HTTP и как именно блокируют. Внизу — «Что делать».\n\n"
+            "TLS 1.3 и HTTP, как быстро идут ответы и как именно блокируют. Внизу — «Что делать».\n\n"
             "Назад ведёт строка пути сверху или клавиша Esc. «Скопировать» кладёт отчёт в буфер обмена."
         ),
         "en": (
             "Clicking any card opens all measurements for it — the tour opened Discord. For each address "
             "you see how the connection ended, which addresses were tried, what happened with TLS 1.2, "
-            "TLS 1.3 and HTTP and how exactly it is blocked. At the bottom is What to do.\n\n"
+            "TLS 1.3 and HTTP, how fast answers come and how exactly it is blocked. At the bottom is What to do.\n\n"
             "The path row at the top or the Esc key leads back. Copy puts the report on the clipboard."
         ),
     },

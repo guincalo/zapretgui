@@ -277,6 +277,7 @@ _ROAD_ICONS = {
     "browser": "fa5b.chrome",
     "http": "fa5s.unlock-alt",
     "quic": "fa5s.bolt",
+    "transfer": "fa5s.tachometer-alt",
     "dns": "fa5s.exchange-alt",
 }
 
@@ -376,6 +377,9 @@ def _site_card(service: dict) -> Card:
             )
         if item.get("volume_text"):
             rows.append(Line(WARN if item.get("volume") == "cut" else INFO, "Объём загрузки", str(item["volume_text"])))
+        transfer = item.get("transfer") or {}
+        if transfer.get("text") and transfer.get("code") != "unknown":
+            rows.append(Line(_shown_state(transfer.get("level")), "Скорость ответа", str(transfer["text"])))
         if item.get("dns_reason"):
             rows.append(Line(WARN if item.get("dns_state") == "spoofed" else INFO, "DNS", str(item["dns_reason"])))
         if item.get("note"):

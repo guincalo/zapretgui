@@ -64,6 +64,10 @@ def _blocked_by_name(host: str, purpose: str, address: str, *, main: bool = Fals
 
 
 _QUIC_HINT = "QUIC — быстрый способ соединения поверх UDP: им браузер открывает YouTube и многие крупные сайты."
+_TRANSFER_HINT = (
+    "Передача — как быстро сайт начинает отвечать и не отвечает ли он паузами. Соединение может установиться "
+    "и пройти все проверки, а видео и крупные файлы всё равно идти рывками."
+)
 _DNS_HINT = "DNS — справочная, которая по имени сайта выдаёт его адрес. Провайдер может подменять её ответы."
 
 
@@ -79,6 +83,7 @@ def _roads(targets: list[dict]) -> list[dict]:
     quic = str(main.get("quic") or "")
     quic_word, quic_state = {"blocked_by_name": ("закрыт", "warn"), "ok": ("работает", "ok")}.get(quic, ("—", "unknown"))
     roads.append({"key": "quic", "label": "QUIC", "state": quic_state, "word": quic_word, "text": str(main.get("quic_text") or ""), "hint": _QUIC_HINT})
+    roads.append({"key": "transfer", "label": "Передача", "state": "ok", "word": "быстро", "text": "ответы идут быстро: обычно около 40 мс до первого байта", "hint": _TRANSFER_HINT})
     roads.append({"key": "dns", "label": "DNS", "state": "ok", "word": "честный", "text": "адрес сайта DNS выдаёт верно", "hint": _DNS_HINT})
     return roads
 
