@@ -198,7 +198,9 @@ class BlockcheckPageAccessibilityTests(unittest.TestCase):
         # под главной фразой, — так же, как кнопки на вкладке «DNS-серверы».
         self.assertIs(page._control_card, page._summary_panel)
         actions = page._summary_panel.actions
-        self.assertEqual([actions.itemAt(index).widget() for index in range(2)], [page._start_btn, page._stop_btn])
+        self.assertEqual(
+            [actions.itemAt(index).widget() for index in range(3)], [page._start_btn, page._paired_btn, page._stop_btn]
+        )
         self.assertIs(page._scope_combo.parentWidget(), page._summary_panel.hero)
         # «Свои домены» — тоже управление проверкой: стоят в шапке, под кнопками, а не под результатами.
         self.assertIs(page._domains_card.parentWidget(), page._summary_panel.hero)

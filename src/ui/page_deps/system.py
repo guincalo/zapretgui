@@ -358,6 +358,8 @@ def build_blockcheck_page_kwargs(
         "zapret_is_running": runtime_feature.is_running,
         # Кнопка «Запустить Zapret» у проблем итога запускает выбранный способ запуска.
         "start_zapret": runtime_feature.start,
+        # «С обходом и без»: Zapret выключается на вторую проверку и возвращается, как был.
+        "stop_zapret": runtime_feature.stop,
         # «Поймали провайдера на подмене DNS» → кнопка ведёт на «Настройка DNS».
         "open_dns_settings": (lambda: show_page(PageName.NETWORK)) if show_page is not None else None,
     }

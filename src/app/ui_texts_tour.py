@@ -460,7 +460,9 @@ TEXTS_TOUR: dict[str, dict[str, str]] = {
             "из-за рубежа: так видно, блокировка это или сайт не работает сам. По умолчанию она выключена — "
             "соединение с сервером проекта провайдер видит.\n\n"
             "Проверять полезно дважды: с выключенным Zapret — чтобы увидеть, что блокируется, и "
-            "с включённым — чтобы убедиться, что обход помог."
+            "с включённым — чтобы убедиться, что обход помог. Кнопка «С обходом и без» делает это сама: "
+            "проверяет как сейчас, переключает Zapret, проверяет ещё раз, возвращает его как был и показывает "
+            "сравнение."
         ),
         "en": (
             "BlockCheck opens sites by itself — the way the Chrome browser would — and watches what happens "
@@ -471,7 +473,8 @@ TEXTS_TOUR: dict[str, dict[str, str]] = {
             "from abroad: this shows whether it is a block or the site itself is down. It is off by default — "
             "your provider sees the connection to the project server.\n\n"
             "It is useful to check twice: with Zapret off — to see what is blocked, and with it on — to "
-            "make sure the bypass helped."
+            "make sure the bypass helped. The With and without bypass button does it by itself: it checks as "
+            "things are, switches Zapret, checks again, puts it back as it was and shows the comparison."
         ),
     },
     "onboarding.step.blockcheck_domains.title": {"ru": "Свои домены", "en": "Your own domains"},

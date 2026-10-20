@@ -102,6 +102,7 @@ class BlockcheckScanShutdownWiringTests(unittest.TestCase):
             shutdown_sync_from_worker=Mock(name="shutdown_sync_from_worker"),
             is_running=Mock(return_value=True),
             start=Mock(name="start"),
+            stop=Mock(name="stop"),
         )
 
         kwargs = build_blockcheck_page_kwargs(
@@ -120,6 +121,11 @@ class BlockcheckScanShutdownWiringTests(unittest.TestCase):
         )
         # Подбор выключает Zapret: окно вернёт его, если он работал до подбора.
         worker.set_runtime_restore.assert_called_once_with(was_running=True, restore=runtime_feature.start)
+        # «С обходом и без» получает те же команды обхода: узнать, запустить и остановить.
+        self.assertEqual(
+            (kwargs["zapret_is_running"], kwargs["start_zapret"], kwargs["stop_zapret"]),
+            (runtime_feature.is_running, runtime_feature.start, runtime_feature.stop),
+        )
 
     def test_updater_runtime_actions_use_worker_variant_of_shutdown_sync(self) -> None:
         from ui.page_deps.system import build_servers_page_kwargs

@@ -22,6 +22,7 @@ from PyQt6.QtGui import QKeySequence, QShortcut
 from PyQt6.QtWidgets import QHBoxLayout, QWidget
 
 import blockcheck.page_runtime as blockcheck_page_runtime
+from blockcheck import paired_run
 from blockcheck.ui.check_results import BlockcheckHistoryList, BlockcheckSummaryPanel
 from blockcheck.ui.result_cards import ProgressSteps, ResultCardsView, ResultDetailView
 from blockcheck.ui.domain_chip import DomainChip
@@ -147,6 +148,7 @@ class BlockcheckPage(BasePage):
         ensure_zapret_for_strategy=None,
         start_zapret=None,
         zapret_is_running=None,
+        stop_zapret=None,
     ):
         super().__init__(
             title=tr_catalog("page.blockcheck.title", default="BlockCheck"),
@@ -168,6 +170,17 @@ class BlockcheckPage(BasePage):
         self._ensure_zapret_for_strategy = ensure_zapret_for_strategy
         self._zapret_is_running = zapret_is_running
         self._start_zapret = start_zapret
+        self._stop_zapret = stop_zapret
+        # «С обходом и без»: две проверки подряд с переключением Zapret между ними. Без управления Zapret кнопки нет.
+        self._paired = (
+            paired_run.PairedRun(is_running=zapret_is_running, start=start_zapret, stop=stop_zapret)
+            if zapret_is_running is not None and start_zapret is not None and stop_zapret is not None
+            else None
+        )
+        self._paired_timer = QTimer(self)
+        self._paired_timer.setInterval(500)
+        self._paired_timer.timeout.connect(self._paired_tick)
+        self._paired_waited = 0.0
         self._last_report: dict | None = None
         self._report_lines: list[str] = []
         # Настоящие прошлые проверки: экскурсия на время подменяет их примером.
@@ -465,6 +478,23 @@ class BlockcheckPage(BasePage):
         self._start_btn.clicked.connect(self._on_start)
         row.insertWidget(0, self._start_btn)
 
+        self._paired_btn = PushButton(tr_catalog("page.blockcheck.paired", default="С обходом и без"))
+        self._paired_btn.setIcon(FluentIcon.SYNC)
+        paired_description = tr_catalog(
+            "page.blockcheck.action.paired.description",
+            default=(
+                "Проверить дважды подряд: как сейчас и после переключения Zapret (выключится, если работает, "
+                "или включится), затем сравнить. Zapret вернётся в прежнее состояние."
+            ),
+        )
+        set_tooltip(self._paired_btn, paired_description)
+        set_control_accessibility(self._paired_btn, name="Проверить с обходом и без", description=paired_description)
+        set_state_text(self._paired_btn, "Проверить с обходом и без")
+        self._paired_btn.clicked.connect(self._on_start_paired)
+        # Без управления Zapret (в окне без запуска обхода) кнопка остаётся на месте, но недоступна.
+        self._paired_btn.setEnabled(self._paired is not None)
+        row.insertWidget(1, self._paired_btn)
+
         self._stop_btn = PushButton(tr_catalog("page.blockcheck.stop", default="Остановить"))
         self._stop_btn.setIcon(FluentIcon.CANCEL)
         stop_description = tr_catalog(
@@ -477,7 +507,7 @@ class BlockcheckPage(BasePage):
         self._stop_btn.clicked.connect(self._on_stop)
         self._stop_btn.setEnabled(False)
         self._stop_btn.setVisible(False)
-        row.insertWidget(1, self._stop_btn)
+        row.insertWidget(2, self._stop_btn)
         self._log_ui_timing("blockcheck_ui.control_card.build", section_started_at)
 
         # ── Свои домены ──
@@ -895,6 +925,77 @@ class BlockcheckPage(BasePage):
         self._report_lines.append(str(message or ""))
 
     def _on_finished(self, report):
+        self._on_finished_core(report)
+        self._paired_after(report)
+
+    # --- «С обходом и без» ------------------------------------------------------------
+
+    def _set_paired_buttons(self, *, busy: bool) -> None:
+        """Пока идёт парный запуск (и между проверками), ни одна кнопка запуска не нужна."""
+        self._paired_btn.setEnabled(self._paired is not None and not busy)
+        if busy:
+            self._start_btn.setEnabled(False)
+
+    def _on_start_paired(self) -> None:
+        paired = self._paired
+        if paired is None or paired.active or self._run_runtime.is_running() or self._cleanup_in_progress:
+            return
+        paired.begin()
+        self._set_paired_buttons(busy=True)
+        self._on_start()
+        self._set_status_text(f"Парная проверка: сначала {paired.first_label}")
+
+    def _paired_after(self, report) -> None:
+        """Конец одной проверки парного запуска: переключить Zapret для второй или вернуть его и закончить."""
+        paired = self._paired
+        if paired is None or not paired.active or self._cleanup_in_progress:
+            return
+        ok = isinstance(report, dict) and not report.get("failed")
+        if paired.phase == paired_run.PHASE_FIRST and ok:
+            self._set_paired_buttons(busy=True)
+            self._set_status_text(f"Проверка {paired.first_label} готова. Переключаю Zapret, чтобы проверить {paired.second_label}…")
+            reason = paired.switch()
+            if reason:
+                self._paired_end(f"Парная проверка прервана: {reason}")
+                return
+            self._paired_waited = 0.0
+            self._paired_timer.start()
+            return
+        if paired.phase == paired_run.PHASE_SECOND and ok:
+            self._paired_end("Готово: проверки с обходом и без — сравнение ниже")
+            return
+        self._paired_end("Парная проверка остановлена")
+
+    def _paired_tick(self) -> None:
+        paired = self._paired
+        if paired is None or paired.phase != paired_run.PHASE_SWITCHING or self._cleanup_in_progress:
+            self._paired_timer.stop()
+            return
+        self._paired_waited += self._paired_timer.interval() / 1000
+        if paired.settled():
+            self._paired_timer.stop()
+            QTimer.singleShot(int(paired_run.SETTLE_PAUSE_SECONDS * 1000), self._paired_start_second)
+        elif self._paired_waited >= paired_run.SETTLE_WAIT_SECONDS:
+            self._paired_timer.stop()
+            self._paired_end("Парная проверка прервана: Zapret не сменил состояние за 30 секунд")
+
+    def _paired_start_second(self) -> None:
+        paired = self._paired
+        if paired is None or paired.phase != paired_run.PHASE_SWITCHING or self._cleanup_in_progress:
+            return
+        paired.second_started()
+        self._on_start()
+        self._set_status_text(f"Парная проверка: теперь {paired.second_label}")
+
+    def _paired_end(self, text: str) -> None:
+        """Вернуть Zapret, как был, снять блокировку кнопок и сказать, чем кончилось."""
+        self._paired_timer.stop()
+        problem = self._paired.finish() if self._paired is not None else ""
+        self._reset_ui()
+        self._set_paired_buttons(busy=False)
+        self._set_status_text(f"{text}. {problem}".strip() if problem else text)
+
+    def _on_finished_core(self, report):
         # Отложенный неполный отчёт уже не нужен: дальше идёт итог (или остановка).
         self._drop_partial()
         if self._cleanup_in_progress:
@@ -1439,6 +1540,11 @@ class BlockcheckPage(BasePage):
         )
         self._outside_box.setEnabled(True)
         self._domains_card.setVisible(True)
+        # Между проверками парного запуска запускать нечего: Zapret переключается.
+        busy = self._paired is not None and self._paired.active
+        self._paired_btn.setEnabled(self._paired is not None and not busy)
+        if busy:
+            self._start_btn.setEnabled(False)
 
     def _update_scope_combo_accessibility(self, *_args) -> None:
         text = str(self._scope_combo.currentText() or "").strip() or "не выбрано"
@@ -1457,6 +1563,9 @@ class BlockcheckPage(BasePage):
         self._run_log_file = run_log_file
 
     def _on_stop(self):
+        if self._paired is not None and self._paired.phase == paired_run.PHASE_SWITCHING:
+            self._paired_end("Парная проверка остановлена")
+            return
         if self._run_runtime.is_queued():
             # Проверка ещё ждёт очереди фоновых задач: снимаем её из очереди,
             # иначе она запустилась бы уже после «Стопа».
