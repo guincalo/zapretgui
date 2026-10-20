@@ -94,6 +94,20 @@ class CollectTests(unittest.TestCase):
         facts, calls = self._collect(_run(vp.RUN_CLOSED, 3_000))
         self.assertEqual((calls, facts.second), (["GET"], None))
 
+    def test_failed_connection_is_tried_once_more_after_a_pause(self) -> None:
+        with patch.object(vp.time, "sleep") as pause:
+            facts, calls = self._collect(_run(vp.RUN_FAILED), PASSED)
+
+        self.assertEqual(calls, ["GET", "GET"])
+        self.assertEqual(facts.first.kind, vp.RUN_PASSED)
+        pause.assert_called_once_with(vp.RETRY_PAUSE_S)
+
+    def test_connection_that_fails_twice_stays_failed(self) -> None:
+        with patch.object(vp.time, "sleep"):
+            facts, calls = self._collect(_run(vp.RUN_FAILED), _run(vp.RUN_FAILED))
+
+        self.assertEqual((calls, facts.first.kind, facts.second), (["GET", "GET"], vp.RUN_FAILED, None))
+
     def test_stall_is_rechecked_with_another_kind_of_request(self) -> None:
         """Повтор идёт запросами HEAD: до того же объёма нужно другое число запросов."""
         second = _run(vp.RUN_STALLED, 14_000, 40)

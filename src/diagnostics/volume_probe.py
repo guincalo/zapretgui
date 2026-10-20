@@ -61,6 +61,8 @@ MAX_REQUESTS = 60
 TIMEOUT_S = 5.0
 # Столько ждём следующих данных: дольше — соединение замерло.
 STALL_S = 3.0
+# Пауза перед повтором, если подключиться для набора объёма не вышло с первого раза.
+RETRY_PAUSE_S = 1.0
 # Больше этого одна попытка не длится, сколько бы запросов ни осталось.
 BUDGET_S = 6.0
 # После стольких ответов видно, наберётся ли объём: если сервер отвечает
@@ -188,6 +190,10 @@ def _froze_in_window(run: VolumeRun) -> bool:
 def collect(host: str, ip: str, path: str, *, cancel: SocketCancel) -> VolumeFacts:
     """Первая попытка обычными запросами; замерла в окне — вторая, запросами ``HEAD``."""
     first = download(host, ip, path, cancel=cancel)
+    if first.kind == RUN_FAILED and not cancel.cancelled:
+        # Узел мог не принять подключение сразу после предыдущих проб: один повтор после короткой паузы.
+        time.sleep(RETRY_PAUSE_S)
+        first = download(host, ip, path, cancel=cancel)
     if not _froze_in_window(first) or cancel.cancelled:
         return VolumeFacts(first=first)
     return VolumeFacts(first=first, second=download(host, ip, path, method="HEAD", cancel=cancel))
