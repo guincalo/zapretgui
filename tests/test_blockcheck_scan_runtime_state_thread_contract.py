@@ -137,7 +137,7 @@ class BlockcheckScanShutdownWiringTests(unittest.TestCase):
         kwargs = build_servers_page_kwargs(
             page_name=PageName.SERVERS,
             runtime_feature=runtime_feature,
-            updater_feature=object(),
+            updater_feature=SimpleNamespace(note_auto_install_missed=lambda *_args: None),
             external_actions_feature=SimpleNamespace(create_open_url_worker=Mock()),
             show_page=Mock(),
             request_exit=Mock(),

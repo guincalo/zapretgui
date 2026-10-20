@@ -82,6 +82,8 @@ class StrategyScanApplyRuntimeArchitectureTests(unittest.TestCase):
                 "scan_target": "stun.l.google.com:19302",
                 "scan_protocol": "stun_voice",
                 "apply_lines": ("--b",),
+                # Сайт для проверки после «Применить»: пусто, когда результат его не назвал.
+                "probe_host": "",
             },
         )
 

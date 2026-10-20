@@ -135,7 +135,7 @@ class NetworkCallsTests(unittest.TestCase):
 
         system = [(2, 1, 6, "", ("203.0.113.6", 443)), (2, 1, 6, "", ("203.0.113.5", 443))]
         with patch.object(doh_lookup, "query_doh", side_effect=answer), patch.object(
-            doh_lookup.socket, "getaddrinfo", return_value=system
+            doh_lookup, "resolve_addrinfo", return_value=system
         ):
             with_ipv6 = doh_lookup.resolve_candidates("dns.example.com", ipv6=True)
             without_ipv6 = doh_lookup.resolve_candidates("dns.example.com", ipv6=False)
@@ -156,7 +156,7 @@ class NetworkCallsTests(unittest.TestCase):
 
         started = time.monotonic()
         with patch.object(doh_lookup, "query_doh", side_effect=answer), patch.object(
-            doh_lookup.socket, "getaddrinfo", side_effect=OSError("нет сети")
+            doh_lookup, "resolve_addrinfo", side_effect=OSError("нет сети")
         ):
             found = doh_lookup.resolve_candidates("dns.example.com", ipv6=False)
 
@@ -165,7 +165,7 @@ class NetworkCallsTests(unittest.TestCase):
 
     def test_system_dns_failure_is_not_an_error(self) -> None:
         with patch.object(doh_lookup, "query_doh", return_value=SILENT), patch.object(
-            doh_lookup.socket, "getaddrinfo", side_effect=OSError("нет сети")
+            doh_lookup, "resolve_addrinfo", side_effect=OSError("нет сети")
         ):
             self.assertEqual(doh_lookup.resolve_candidates("dns.example.com", ipv6=False), [])
 
