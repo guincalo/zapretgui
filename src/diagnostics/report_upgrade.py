@@ -10,6 +10,9 @@
    какого раздела: экран угадывал это по тексту фразы.
 2. Строка итога несёт ``site`` (ключ сайта из ``services``) и ``section`` (раздел
    отчёта, из которого она выведена); кнопку «Telegram Proxy» ставит движок.
+3. Внешний адрес пользователя скрыт (``109.252.1.xxx``) в разделе «Ваша сеть» и в тексте отчёта:
+   отчётом делятся. У адресов появились ``transfer`` (скорость ответа) и ``path`` (путь запроса);
+   карточки показывают их, когда они есть, поэтому старым отчётам они не дописываются.
 """
 
 from __future__ import annotations
@@ -18,7 +21,7 @@ import re
 
 __all__ = ["REPORT_VERSION", "upgrade"]
 
-REPORT_VERSION = 2
+REPORT_VERSION = 3
 
 # Вид проблемы → раздел отчёта, когда сайта у неё нет.
 _KIND_SECTIONS = {"voice": "voice", "system": "system", "cut16": "freeze", "quic": "quic"}
@@ -37,9 +40,47 @@ def upgrade(report: dict | None) -> dict | None:
         version = 1
     if version >= REPORT_VERSION:
         return report
-    services = [item for item in report.get("services") or () if isinstance(item, dict)]
-    problems = [_problem_v2(item, services, report) for item in report.get("problems") or () if isinstance(item, dict)]
-    return {**report, "problems": problems, "report_version": REPORT_VERSION}
+    upgraded = dict(report)
+    if version < 2:
+        services = [item for item in report.get("services") or () if isinstance(item, dict)]
+        upgraded["problems"] = [_problem_v2(item, services, report) for item in report.get("problems") or () if isinstance(item, dict)]
+    upgraded = _mask_addresses_v3(upgraded)
+    upgraded["report_version"] = REPORT_VERSION
+    return upgraded
+
+
+def _mask_addresses_v3(report: dict) -> dict:
+    """Версия 2 → 3: внешний адрес в сохранённом отчёте скрывается, как в новых (в разделе и в тексте)."""
+    from diagnostics.privacy import mask_ip, mask_prefix, mask_public_ip
+
+    network = report.get("network")
+    if not isinstance(network, dict):
+        return report
+    external = str(network.get("external_ip") or "")
+    local = str(network.get("local_ip") or "")
+    hidden = {ip: masked for ip in (external, local) if ip and (masked := mask_public_ip(ip)) != ip}
+    if not hidden:
+        return report
+
+    def _hide(text):
+        for ip, masked in hidden.items():
+            text = text.replace(ip, masked)
+        return text
+
+    masked_network = {
+        **network,
+        "external_ip": mask_ip(external),
+        "local_ip": mask_public_ip(local),
+        "prefix": mask_prefix(str(network.get("prefix") or "")),
+        "ip_masked": True,
+        "lines": [{**line, "text": _hide(str(line.get("text") or ""))} for line in network.get("lines") or () if isinstance(line, dict)],
+    }
+    result = {**report, "network": masked_network}
+    if isinstance(report.get("text"), list):
+        result["text"] = [_hide(line) if isinstance(line, str) else line for line in report["text"]]
+    elif isinstance(report.get("text"), str):
+        result["text"] = _hide(report["text"])
+    return result
 
 
 def _problem_v2(problem: dict, services: list[dict], report: dict) -> dict:
