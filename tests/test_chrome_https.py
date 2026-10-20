@@ -115,10 +115,42 @@ class ChromeHttpsTests(unittest.TestCase):
         # Списки заголовков и адреса живут до закрытия соединения, а не до конца запроса.
         self.assertEqual(script.cleared, (False, False))
 
-    def test_page_content_can_be_asked_unpacked(self) -> None:
-        script = _Script(HELLO, SECURED, OK_HEADER)
-        _get(script, decode_body=True)
-        self.assertEqual(script.options[_Opt.HTTP_CONTENT_DECODING], 1)
+    def test_page_content_is_unpacked_here_not_by_libcurl_in_pieces(self) -> None:
+        import gzip
+
+        page = b'"url":"https://rr1---sn-abc.googlevideo.com/videoplayback"' + b"x" * 5000
+        packed = gzip.compress(page)
+        cut = len(packed) // 2
+        script = _Script(
+            HELLO, SECURED, ("header", b"HTTP/2 200 \r\n"), ("header", b"content-encoding: gzip\r\n"),
+            ("body", packed[:cut]), ("body", packed[cut:]),
+        )
+        result = _get(script, decode_body=True, read_limit=100_000)
+
+        # libcurl не распаковывает ни в какой сборке; просим только gzip и deflate и распаковываем сами.
+        self.assertEqual(script.options[_Opt.HTTP_CONTENT_DECODING], 0)
+        self.assertIn(b"Accept-Encoding: gzip, deflate", script.options[_Opt.HTTPHEADER])
+        self.assertNotIn(b"Accept-Encoding: gzip, deflate, br, zstd", script.options[_Opt.HTTPHEADER])
+        self.assertEqual(bytes(result.body), page)
+
+    def test_a_page_read_in_pieces_can_stop_as_soon_as_the_wanted_text_is_decoded(self) -> None:
+        import gzip
+
+        packed = gzip.compress(b"head " + b"googlevideo " + b"x" * 100_000)
+        script = _Script(
+            HELLO, SECURED, OK_HEADER, ("header", b"Content-Encoding: gzip\r\n"),
+            ("body", packed[:60]), ("body", packed[60:]),
+        )
+        result = _get(script, decode_body=True, read_limit=100_000, body_done=lambda body: b"googlevideo" in body)
+
+        self.assertIn(b"googlevideo", bytes(result.body))
+
+    def test_without_decoding_the_browser_encodings_and_the_wire_size_stay(self) -> None:
+        script = _Script(HELLO, SECURED, OK_HEADER, ("header", b"content-encoding: gzip\r\n"), ("body", b"\x1f\x8b" + b"z" * 20))
+        result = _get(script, read_limit=100)
+
+        self.assertIn(b"Accept-Encoding: gzip, deflate, br, zstd", script.options[_Opt.HTTPHEADER])
+        self.assertEqual(result.body_size, 22)
 
     def test_reading_stops_at_the_limit_without_calling_it_a_failure(self) -> None:
         result = _get(_Script(HELLO, SECURED, OK_HEADER, ("body", b"x" * 500), ("body", b"y" * 500)), read_limit=400)

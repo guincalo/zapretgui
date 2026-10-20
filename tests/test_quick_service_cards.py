@@ -7,7 +7,7 @@ import unittest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from blockcheck.quick_services import QUICK_SERVICES, service_for_target  # noqa: E402
+from blockcheck.quick_services import QUICK_SERVICES, companions_for, service_for_target  # noqa: E402
 from blockcheck.ui.brand_icons import site_brand  # noqa: E402
 
 
@@ -22,15 +22,22 @@ class ModelTests(unittest.TestCase):
     def test_the_best_known_services_come_first(self) -> None:
         self.assertEqual([item.key for item in QUICK_SERVICES[:3]], ["youtube", "discord", "telegram"])
 
-    def test_youtube_card_checks_the_video_server_of_this_network(self) -> None:
+    def test_youtube_card_checks_the_page_the_previews_and_the_video_server_together(self) -> None:
         youtube = QUICK_SERVICES[0]
 
-        self.assertEqual(youtube.target, "googlevideo.com")
+        self.assertEqual(youtube.target, "www.youtube.com")
+        self.assertEqual(youtube.companions, (("googlevideo.com", "googlevideo.com"), ("ytimg.com", "i.ytimg.com")))
         self.assertIn("именно вашей сети", youtube.hint)
+
+    def test_companions_follow_only_the_main_address_of_the_service(self) -> None:
+        self.assertEqual(companions_for("https://www.YouTube.com/"), (("googlevideo.com", "googlevideo.com"), ("ytimg.com", "i.ytimg.com")))
+        # Кто вписал один googlevideo.com или другой сайт, проверяет именно его.
+        self.assertEqual(companions_for("googlevideo.com"), ())
+        self.assertEqual(companions_for("discord.com"), ())
 
     def test_card_is_found_by_the_address_in_the_field(self) -> None:
         self.assertEqual(service_for_target("https://Discord.com/").key, "discord")
-        self.assertEqual(service_for_target("googlevideo.com").key, "youtube")
+        self.assertEqual(service_for_target("www.youtube.com").key, "youtube")
         self.assertIsNone(service_for_target("example.org"))
         self.assertIsNone(service_for_target(""))
 

@@ -236,6 +236,23 @@ class ReachRecheckTests(unittest.TestCase):
         self.assertEqual(report["kind"], "ip")
 
 
+class NoRealNodeTests(unittest.TestCase):
+    def test_video_target_without_a_real_node_is_unknown_not_an_error(self) -> None:
+        target = engine.Target("redirector.googlevideo.com", "видео", discover_googlevideo=True)
+        run = engine._Run(None, workers=2, deadline=60)
+        self.addCleanup(run.close)
+        asked: list[str] = []
+        with (
+            patch.object(engine, "_discover_googlevideo", return_value=((), "видеосервер не проверялся")),
+            patch.object(engine, "_probe_host", side_effect=lambda *args, **kwargs: asked.append(args[3])),
+        ):
+            probe = engine._probe_target(run, target, "youtube", full=False)
+
+        self.assertEqual(asked, [])
+        self.assertEqual(probe.reach_state, ReachState.UNKNOWN)
+        self.assertIn("видеосервер не проверялся", report_text.target_report(probe)["note"])
+
+
 class VideoServerFallbackTests(unittest.TestCase):
     def _probe(self, hosts, states):
         target = engine.Target("redirector.googlevideo.com", "видео", discover_googlevideo=True)
@@ -416,7 +433,7 @@ class GooglevideoDiscoveryTests(unittest.TestCase):
     def test_slow_page_is_not_read_without_end(self) -> None:
         hosts, note = self._discover([b"<html>" + b"x" * 100] * 50, budget=0.0)
 
-        self.assertEqual(hosts, (engine.GOOGLEVIDEO_FALLBACK_HOST,))
+        self.assertEqual(hosts, ())
         self.assertIn("слишком медленно", note)
 
     def test_video_server_found_in_time_is_used(self) -> None:

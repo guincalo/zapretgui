@@ -28,7 +28,7 @@ from dataclasses import dataclass
 
 from diagnostics import quic_probe, transfer_probe, volume_probe
 from diagnostics.levels import FAIL, OK, UNKNOWN, WARN
-from diagnostics.limits import DNS_ATTEMPTS
+from diagnostics.limits import DNS_ATTEMPTS, FREEZE_MAX_BYTES
 from diagnostics.tls_probe import KIND_CANCELLED, KIND_CONNECT
 from diagnostics.transfer_probe import CONFIDENCE_HIGH, CONFIDENCE_LOW, CONFIDENCE_MEDIUM
 from diagnostics.verdict import DnsState, ReachState, describe_reach
@@ -166,6 +166,10 @@ def _data_step(probe) -> PathStep:
         return PathStep(STEP_DATA, OK, volume.text, CONFIDENCE_LOW)
     if volume is not None:
         return PathStep(STEP_DATA, UNKNOWN, volume.text)
+    result = probe.reach
+    if result is not None and result.body_size >= FREEZE_MAX_BYTES and not result.body_cut:
+        # Отдельная проба объёма не нужна: сама страница больше окна обрыва и пришла целиком.
+        return PathStep(STEP_DATA, OK, f"страница в {result.body_size // 1024} КБ пришла целиком — обрыва после 16 КБ нет", CONFIDENCE_LOW)
     return PathStep(STEP_DATA, UNKNOWN, "объём и скорость ответов не проверялись")
 
 

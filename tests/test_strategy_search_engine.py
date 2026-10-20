@@ -360,6 +360,78 @@ class BaselineTests(unittest.TestCase):
         self.assertEqual(report.total_tested, 0)
 
 
+@dataclass
+class CompanionEnv(FakeEnv):
+    """Сеть сервиса из двух имён: страница отвечает по ``network``, видеосервер — по ``video``."""
+
+    video: object = None  # running_id -> ProbeOutcome
+    unresolved: tuple = ()
+
+    def resolve(self, host, port, *, udp):
+        if host in self.unresolved:
+            return [], "нет адреса"
+        return super().resolve(host, port, udp=udp)
+
+    def probe_https(self, host, addresses):
+        if host == "video.example.com":
+            return [self.video(self.running) for _address in addresses]
+        return super().probe_https(host, addresses)
+
+
+class CompanionTests(unittest.TestCase):
+    """Сервис — несколько имён: стратегия, открывшая одну страницу, без видеосервера не рабочая."""
+
+    REQUEST = {"target": "www.youtube.com", "companions": (("googlevideo.com", "video.example.com"),)}
+
+    def _env(self, page, video, **extra):
+        return CompanionEnv(network=page, video=video, candidates=[cand("page_only"), cand("both", "multisplit")], **extra)
+
+    def test_strategy_that_opens_only_the_page_is_not_working(self) -> None:
+        env = self._env(
+            lambda running, _n: OK if running in ("page_only", "both") else RESET,
+            lambda running: OK if running == "both" else RESET,
+        )
+        _report, events = run(env, **self.REQUEST)
+
+        by_id = {result.strategy_id: result for result in events.results}
+        self.assertFalse(by_id["page_only"].success)
+        self.assertIn("video.example.com", by_id["page_only"].error)
+        self.assertTrue(by_id["both"].success)
+
+    def test_profile_covers_every_name_of_the_service(self) -> None:
+        env = self._env(lambda running, _n: OK if running == "both" else RESET, lambda running: OK if running == "both" else RESET)
+        _report, events = run(env, **self.REQUEST)
+
+        both = next(result for result in events.results if result.strategy_id == "both")
+        self.assertIn("--hostlist-domains=youtube.com,googlevideo.com", both.apply_lines)
+
+    def test_open_page_with_a_closed_video_server_is_still_searched(self) -> None:
+        env = self._env(lambda running, _n: OK, lambda running: OK if running == "both" else RESET)
+        report, events = run(env, FakeEvents(answer=False), **self.REQUEST)
+
+        # Вопроса «открывается и без обхода, подбирать нечего» нет: видеосервер закрыт.
+        self.assertFalse(report.baseline_accessible)
+        self.assertTrue(any("без обхода video.example.com" in line for line in events.logs))
+        self.assertTrue(any(result.strategy_id == "both" and result.success for result in events.results))
+
+    def test_everything_open_without_bypass_still_asks(self) -> None:
+        env = self._env(lambda running, _n: OK, lambda running: OK)
+        report, _events = run(env, FakeEvents(answer=False), **self.REQUEST)
+
+        self.assertTrue(report.baseline_accessible)
+
+    def test_name_that_cannot_be_resolved_is_skipped_not_fatal(self) -> None:
+        env = self._env(
+            lambda running, _n: OK if running == "page_only" else RESET,
+            lambda running: RESET,
+            unresolved=("video.example.com",),
+        )
+        _report, events = run(env, **self.REQUEST)
+
+        self.assertTrue(any("это имя сервиса не проверяется" in line for line in events.logs))
+        self.assertTrue(next(result for result in events.results if result.strategy_id == "page_only").success)
+
+
 class StrategyVerdictTests(unittest.TestCase):
     def test_working_strategy_needs_three_passes_and_carries_apply_lines(self) -> None:
         env = FakeEnv(network=blocked_unless("good"), candidates=[cand("bad"), cand("good", "multisplit")])

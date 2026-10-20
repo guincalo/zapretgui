@@ -216,6 +216,8 @@ class _Net:
     """Фейковая сеть для движка: DNS, эталон и HTTPS по адресу."""
 
     def __init__(self, *, system=DISCORD_REAL, reference=DISCORD_REAL, status=0, https=None, reference_v6=(), voice=(), freeze=(), cause_facts=None):
+        # Видеосерверы, которые YouTube «выдал» этой сети; пусто — настоящий узел найти не удалось.
+        self.video_hosts = ("rr1---sn-test.googlevideo.com",)
         self.voice = voice
         self.freeze = freeze
         self.system = system
@@ -357,7 +359,7 @@ class _Net:
             # Серии пакетов UDP уходят на настоящие серверы.
             patch.object(sections, "check_udp_burst", side_effect=lambda _run: self.burst),
             patch.object(engine, "running_bypass_tools", return_value=self.bypass_tools),
-            patch.object(engine, "_discover_googlevideo", return_value=(("rr1---sn-test.googlevideo.com",), "")),
+            patch.object(engine, "_discover_googlevideo", side_effect=lambda _run: (self.video_hosts, "" if self.video_hosts else "видеосервер не проверялся")),
             patch.object(engine.video_nodes, "owner_note", return_value=""),
             # Звонки и обрыв 16 КБ проверяются в любом режиме — без сети в тестах.
             patch("diagnostics.voice_check.check_voice", return_value=self.voice),
@@ -2116,6 +2118,20 @@ class TlsProbeFailureTests(unittest.TestCase):
 
         self.assertEqual(result.kind, KIND_CONNECT)
         self.assertEqual(judge_reach(result), ReachState.IP_BLOCK)
+
+
+class NoVideoNodeTests(unittest.TestCase):
+    def test_youtube_without_a_real_video_node_stays_open_and_the_video_is_unknown(self) -> None:
+        net = _Net()
+        net.video_hosts = ()
+        lines: list[str] = []
+        result = net.run(engine.run_blockcheck, "main", emit=lines.append)
+
+        youtube = next(item for item in result["services"] if item["key"] == "youtube")
+        video = next(item for item in youtube["targets"] if item["purpose"] == "видео")
+        self.assertEqual((video["ok"], video["state"]), (False, "unknown"))
+        self.assertNotEqual(youtube["level"], "fail")
+        self.assertEqual(video["note"], "видеосервер не проверялся")
 
 
 class BlockKindInReportTests(unittest.TestCase):

@@ -31,6 +31,7 @@ IP идти, а имя сайта уходит в SNI и в заголовок `
 from __future__ import annotations
 
 import time
+import zlib
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -62,6 +63,18 @@ WINDOWS_HEADERS = (
     b"Accept-Language: ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
     b"Priority: u=0, i",
 )
+
+# Сжатия, которые распаковывает libcurl в любой сборке. Браузерный список с br и zstd годится, пока тело не читают:
+# сжатое zstd тело приходило нераспакованным, и в странице нельзя было найти ни одного имени.
+_DECODABLE_ENCODING = b"Accept-Encoding: gzip, deflate"
+
+
+def _headers(decode_body: bool) -> tuple[bytes, ...]:
+    """Заголовки Chrome; когда нужно содержимое страницы, просим только те сжатия, что libcurl точно распакует."""
+    if not decode_body:
+        return WINDOWS_HEADERS
+    return tuple(_DECODABLE_ENCODING if line.startswith(b"Accept-Encoding:") else line for line in WINDOWS_HEADERS)
+
 
 # Коды ошибок libcurl (CURLcode), по которым судим об исходе.
 _E_COULDNT_CONNECT = 7
@@ -239,6 +252,7 @@ class ChromeConnection:
         self.host = host
         self.ip = ip
         self.port = int(port)
+        self._decode_body = bool(decode_body)
         self.cancel = cancel or SocketCancel()
         self._api = _curl_api()
         opt = self._api.CurlOpt
@@ -247,12 +261,12 @@ class ChromeConnection:
         address = f"[{ip}]" if ":" in ip else ip
         curl = self._curl
         curl.impersonate(CHROME_TARGET, default_headers=False)
-        curl.setopt(opt.HTTPHEADER, list(WINDOWS_HEADERS))
+        curl.setopt(opt.HTTPHEADER, list(_headers(decode_body)))
         curl.setopt(opt.RESOLVE, [f"{host}:{self.port}:{address}".encode()])
         curl.setopt(opt.CAINFO, _ca_bundle().encode())
-        # Заголовок Accept-Encoding остаётся браузерным; тело распаковывается, только
-        # если нужно содержимое: иначе размер — это байты на проводе.
-        curl.setopt(opt.HTTP_CONTENT_DECODING, 1 if decode_body else 0)
+        # libcurl тело не распаковывает ни в какой сборке: при нужном содержимом его распаковывает
+        # ``request`` сам (gzip и deflate), иначе размер — это байты на проводе.
+        curl.setopt(opt.HTTP_CONTENT_DECODING, 0)
         curl.setopt(opt.CONNECTTIMEOUT_MS, int(max(0.2, float(timeout)) * 1000))
         # Тело замерло дольше ``read_timeout`` — обрыв (как ``body_cut`` у прежней пробы).
         curl.setopt(opt.LOW_SPEED_LIMIT, 1)
@@ -273,11 +287,19 @@ class ChromeConnection:
         opt, info = api.CurlOpt, api.CurlInfo
         progress = _Progress(body=bytearray())
         token = self.cancel
+        # Распаковщик тела: заводится по заголовку Content-Encoding, куски отдаются по мере прихода.
+        unpack: list = []
 
         def _on_header(line: bytes) -> int:
             if not progress.first_header_at:
                 progress.first_header_at = time.perf_counter()
             progress.header_size += len(line)
+            if self._decode_body and line.lower().startswith(b"content-encoding:"):
+                kind = line.split(b":", 1)[1].strip().lower()
+                if kind in (b"gzip", b"x-gzip"):
+                    unpack[:] = [zlib.decompressobj(16 + zlib.MAX_WBITS)]
+                elif kind == b"deflate":
+                    unpack[:] = [zlib.decompressobj()]
             if line.startswith(b"HTTP/"):
                 parts = line.split()
                 # Перед окончательным ответом бывают промежуточные (100, 103): ждём настоящий.
@@ -290,7 +312,14 @@ class ChromeConnection:
             if not progress.first_body_at:
                 progress.first_body_at = now
             progress.last_body_at = now
-            progress.body.extend(chunk)
+            if unpack:
+                try:
+                    progress.body.extend(unpack[0].decompress(chunk))
+                except zlib.error:
+                    # Битый или оборванный поток: что распаковалось, то и осталось.
+                    unpack.clear()
+            else:
+                progress.body.extend(chunk)
             if token.cancelled:
                 progress.cancelled = True
                 return api.write_error

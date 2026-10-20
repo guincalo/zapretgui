@@ -141,6 +141,9 @@ class SearchRequest:
     # конкретный видеосервер rr*.googlevideo.com). Профиль при этом пишется
     # на цель пользователя, чтобы подошёл любой видеосервер.
     probe_host: str = ""
+    # Остальные имена сервиса (YouTube: видеосервер, превью): у каждого — (имя для профиля, хост для пробы).
+    # Стратегия считается рабочей, только когда открываются и они, а профиль пишется на все имена сразу.
+    companions: tuple[tuple[str, str], ...] = ()
     # Начать заново: не отодвигать в конец стратегии, которые недавно не
     # сработали, а проверять в том же порядке, что и в первый раз. История
     # при этом не стирается — новые итоги допишутся в неё как обычно.
@@ -207,6 +210,8 @@ class _Target:
     games_ports: tuple[int, ...] = ()
     # Цель открывалась без обхода, а пользователь решил проверять всё равно.
     forced: bool = False
+    # Остальные имена сервиса с их адресами: хост и адреса, которые проверяются вместе с целью.
+    companions: tuple[tuple[str, tuple[str, ...]], ...] = ()
     # Без обхода цель отвечает, но соединение замирает на объёме: каждая
     # проверка обязана набрать объём, иначе «откроется» любая стратегия.
     volume_block: bool = False
@@ -559,6 +564,7 @@ class StrategySearch:
         for address, outcome in zip(addresses, outcomes):
             self._events.log(f"  без обхода {address}: {self._describe(outcome)}")
         decision = rules.decide_baseline(list(zip(addresses, outcomes)))
+        companions = self._resolve_companions()
 
         if decision.state == rules.BASELINE_NOT_DPI:
             http = self._baseline_http(report, host, addresses)
@@ -568,6 +574,10 @@ class StrategySearch:
         if decision.state == rules.BASELINE_OPEN:
             decision = self._recheck_open_baseline(host, addresses, outcomes, decision)
         if decision.state == rules.BASELINE_OPEN and self._baseline_quic(host, decision.probe_addresses):
+            return True
+        if decision.state == rules.BASELINE_OPEN and self._companion_closed(companions):
+            # Страница открывается, а другое имя сервиса (видеосервер, превью) нет: подбирать есть что.
+            self._target = _Target(host=host, addresses=decision.probe_addresses, companions=companions)
             return True
         if decision.state == rules.BASELINE_OPEN:
             report.baseline_accessible = True
@@ -581,15 +591,39 @@ class StrategySearch:
                 )
             if not self._ask_continue(question):
                 return False
-            self._target = _Target(host=host, addresses=decision.probe_addresses, forced=True)
+            self._target = _Target(host=host, addresses=decision.probe_addresses, forced=True, companions=companions)
             return True
         self._events.log(f"  Без обхода закрыт ({decision.reason}). Проверяем на {', '.join(decision.probe_addresses)}")
         self._target = _Target(
             host=host,
             addresses=decision.probe_addresses,
             volume_block=decision.volume_block,
+            companions=companions,
         )
         return True
+
+    def _resolve_companions(self) -> tuple[tuple[str, tuple[str, ...]], ...]:
+        """Остальные имена сервиса с адресами. Имя, которое не нашлось, пропускается: цель это не отменяет."""
+        from blockcheck.strategy_search.probes import stub_addresses
+
+        found: list[tuple[str, tuple[str, ...]]] = []
+        for _domain, host in self._request.companions:
+            addresses, error = self._env.resolve(host, 443, udp=False)
+            addresses = [address for address in addresses if address not in stub_addresses(addresses)][:2]
+            if error or not addresses:
+                self._events.log(f"  {host}: адрес не найден, это имя сервиса не проверяется")
+                continue
+            found.append((host, tuple(addresses)))
+        return tuple(found)
+
+    def _companion_closed(self, companions: Sequence[tuple[str, Sequence[str]]]) -> bool:
+        """Не открывается ли без обхода другое имя сервиса. True — хотя бы одно закрыто."""
+        for host, addresses in companions:
+            outcomes = self._env.probe_https(host, addresses)
+            if not rules.attempt_passed(outcomes):
+                self._events.log(f"  без обхода {host}: {rules.attempt_reason(outcomes)}")
+                return True
+        return False
 
     def _recheck_open_baseline(
         self,
@@ -837,17 +871,23 @@ class StrategySearch:
         games_paths: list[str] = []
         if self._protocol == PROTOCOL_UDP_GAMES:
             games_paths = self._env.games_ipset_paths(self._request.udp_games_scope)
-        from blockcheck.strategy_scan_targeting import profile_domain
 
         site = self._protocol in (PROTOCOL_TCP_HTTPS, PROTOCOL_HTTP80, PROTOCOL_QUIC)
         return build_probe_profile(
             self._protocol,
             strategy_args=strategy_args,
-            match_domain=profile_domain(self._request.target) if site else self._request.target,
+            match_domain=self._match_domains() if site else self._request.target,
             games_ipset_paths=games_paths,
             games_addresses=self._target.games_addresses,
             games_ports=self._target.games_ports,
         )
+
+    def _match_domains(self) -> str:
+        """Имена профиля: цель и остальные имена сервиса через запятую (``--hostlist-domains`` покрывает и поддомены)."""
+        from blockcheck.strategy_scan_targeting import profile_domain
+
+        names = [profile_domain(self._request.target), *(profile_domain(domain) for domain, _host in self._request.companions)]
+        return ",".join(dict.fromkeys(name for name in names if name))
 
     def _probe_once(self, *, volume: bool = False) -> _Attempt:
         """Одна попытка. ``volume`` — короткие ответы добрать объёмом по соединению."""
@@ -884,9 +924,16 @@ class StrategySearch:
                 ]
             passed = rules.attempt_passed(outcomes)
             volumes = {outcome.volume for outcome in outcomes if outcome.volume}
+            reason = rules.attempt_reason(outcomes)
+            # Сервис открыт, только когда открыты все его имена: страница без видеосервера — не победа.
+            for companion, addresses in self._target.companions if passed else ():
+                extra = self._env.probe_https(companion, addresses)
+                if not rules.attempt_passed(extra):
+                    passed, reason, outcomes = False, f"{companion}: {rules.attempt_reason(extra)}", extra
+                    break
             return _Attempt(
                 passed,
-                rules.attempt_reason(outcomes),
+                reason,
                 rules.attempt_time_ms(outcomes),
                 rules.attempt_needs_network_check(outcomes),
                 silent=not passed and rules.attempt_silent(outcomes),

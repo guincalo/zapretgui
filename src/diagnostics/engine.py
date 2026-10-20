@@ -144,6 +144,8 @@ _REPORT_SECTIONS = ("services", "voice", "freeze", "telegram", "network", "speed
 # потоков на TLS 1.2 / TLS 1.3 / «как Chrome» / HTTP. Задачи ждут друг
 # друга внутри одного пула, поэтому
 # нехватка потоков — это не «медленнее», а взаимная блокировка.
+# Как называется видеосервер в отчёте, когда настоящий узел найти не удалось.
+GOOGLEVIDEO_NO_NODE_HOST = "видеосервер googlevideo.com"
 _WORKERS_PER_TARGET = 28 + 2 * len(REFERENCE_RESOLVERS)
 
 
@@ -180,6 +182,11 @@ def _probe_target(run: _Run, target: Target, service: str, *, full: bool, volume
     if not target.discover_googlevideo:
         return _probe_host(run, target, service, target.host, "", full=full, volume=volume)
     hosts, note = _discover_googlevideo(run)
+    if not hosts:
+        # Настоящего видеосервера нет: общий адрес googlevideo.com им не служит, проверять нечего.
+        unknown = _Probe(target=target, service=service, host=GOOGLEVIDEO_NO_NODE_HOST, discovery_note=note)
+        unknown.reach_state = ReachState.UNKNOWN
+        return unknown
     nodes = video_nodes.VideoNodes(hosts, ("",) * len(hosts), note)
     first = probe = _probe_host(run, target, service, nodes.hosts[0], nodes.note, full=full, volume=volume)
     # Один видеосервер не ответил — плеер взял бы следующий. Проверяем так же.
@@ -413,8 +420,6 @@ def _run_probes(
     jobs: list[tuple[str, Target, bool]] = []
     for key, service in services.items():
         for target in service.targets:
-            if not full and target.discover_googlevideo:
-                target = Target(target.host, target.purpose, target.path, main=target.main)
             # Объём по одному соединению — это десятки запросов подряд: контрольные
             # сайты ими не нагружаем, их всё равно не блокируют.
             jobs.append((key, target, full and not service.control))

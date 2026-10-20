@@ -108,6 +108,7 @@ class StrategyScanWorker(QObject):
                     mode=self._mode,
                     udp_games_scope=self._udp_games_scope,
                     probe_host=probe_host,
+                    companions=self._resolve_companions(),
                     from_start=self._from_start,
                 )
                 report = run_strategy_search(
@@ -150,6 +151,29 @@ class StrategyScanWorker(QObject):
             search.cancel()
 
     _GOOGLEVIDEO_DISCOVERY_TIMEOUT = 8.0
+
+    def _resolve_companions(self) -> tuple[tuple[str, str], ...]:
+        """Остальные имена сервиса (у YouTube — видеосервер и превью): (имя для профиля, хост для пробы).
+
+        Только для сайтов по TCP 443 и только когда в поле основной адрес сервиса. Голый
+        googlevideo.com заменяется видеосервером этой сети, как и у самой цели.
+        """
+        from blockcheck.googlevideo_discovery import discover_googlevideo_host, is_bare_googlevideo_host
+        from blockcheck.quick_services import companions_for
+
+        if self._scan_protocol != PROTOCOL_TCP_HTTPS:
+            return ()
+        found: list[tuple[str, str]] = []
+        for domain, host in companions_for(self._target):
+            if is_bare_googlevideo_host(host):
+                result = discover_googlevideo_host(cancelled=self.is_cancelled, timeout=self._GOOGLEVIDEO_DISCOVERY_TIMEOUT)
+                if not result.host:
+                    self.log(f"{domain}: видеосервер найти не удалось ({result.detail}), это имя сервиса не проверяется")
+                    continue
+                self.log(f"{domain} заменён на видеосервер {result.host} ({result.detail})")
+                host = result.host
+            found.append((domain, host))
+        return tuple(found)
 
     def _resolve_probe_host(self) -> str | None:
         """Какой хост проверять; None — подбор не начинать (детали в отчёте).

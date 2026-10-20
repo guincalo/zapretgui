@@ -7,7 +7,6 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from diagnostics import video_nodes as vn
-from diagnostics.services import GOOGLEVIDEO_FALLBACK_HOST
 from utils.ip_owner import IpOwner
 
 PLAYER = ("rr1---sn-aaa.googlevideo.com", "rr2---sn-bbb.googlevideo.com")
@@ -36,12 +35,13 @@ class CombineTests(unittest.TestCase):
         self.assertIn("страница YouTube не открылась", nodes.note)
         self.assertIn("узел вашей сети", nodes.note)
 
-    def test_without_both_the_general_address_is_checked(self) -> None:
+    def test_without_a_real_node_nothing_is_probed_and_the_general_address_is_not_used(self) -> None:
         nodes = vn.combine((), "", page_failure="страница YouTube грузилась слишком медленно")
 
-        self.assertEqual((nodes.hosts, nodes.sources), ((GOOGLEVIDEO_FALLBACK_HOST,), (vn.SOURCE_FALLBACK,)))
+        # Общий адрес googlevideo.com — не видеосервер, прямой запрос к нему всегда кончается ошибкой.
+        self.assertEqual((nodes.hosts, nodes.sources), ((), ()))
         self.assertIn("слишком медленно", nodes.note)
-        self.assertIn("общий адрес", nodes.note)
+        self.assertIn("видеосервер не проверялся", nodes.note)
 
     def test_list_is_cut_to_the_limit_but_keeps_the_redirector_node(self) -> None:
         many = tuple(f"rr{n}---sn-x{n}.googlevideo.com" for n in range(1, 6))

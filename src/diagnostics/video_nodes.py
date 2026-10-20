@@ -8,8 +8,8 @@ YouTube выбирает кэш Google для ролика по адресу т�
 - ``redirector.googlevideo.com/report_mapping`` по обычному HTTP — ближайший к вам узел. Этот ответ
   приходит и тогда, когда сам youtube.com закрыт, и тогда, когда страница грузится слишком медленно.
 
-Список — сначала узлы плеера, затем узел редиректора; если нет ни тех, ни другого, остаётся общий
-адрес redirector.googlevideo.com. У каждого узла помнится, откуда он взят, чтобы отчёт мог сказать,
+Список — сначала узлы плеера, затем узел редиректора; если нет ни тех, ни другого, видеосервер не
+проверяется: общий адрес googlevideo.com не видеосервер. У каждого узла помнится, откуда он взят, чтобы отчёт мог сказать,
 на чём держится вывод. Как и остальные «collect», модуль ничего не решает о блокировке: он только находит узлы.
 """
 
@@ -21,10 +21,9 @@ from dataclasses import dataclass
 
 from diagnostics import net_access
 from diagnostics.limits import DISCOVERY_READ_BUDGET_S, DISCOVERY_TIMEOUT, VIDEO_SERVERS
-from diagnostics.services import GOOGLEVIDEO_FALLBACK_HOST, YOUTUBE_HOST
+from diagnostics.services import YOUTUBE_HOST
 
 __all__ = [
-    "SOURCE_FALLBACK",
     "SOURCE_PLAYER",
     "SOURCE_REDIRECTOR",
     "VideoNodes",
@@ -36,7 +35,6 @@ __all__ = [
 
 SOURCE_PLAYER = "player"
 SOURCE_REDIRECTOR = "redirector"
-SOURCE_FALLBACK = "fallback"
 
 _WATCH_PAGE = "/watch?v=jNQXAC9IVRw&hl=en"
 _WATCH_PAGE_MAX_BYTES = 2_000_000
@@ -83,10 +81,13 @@ def combine(
     elif mapped:
         note = f"{page_failure or 'YouTube не назвал видеосервер'}; взят узел вашей сети по ответу redirector.googlevideo.com"
     else:
+        # Голый googlevideo.com и redirector.googlevideo.com — не видеосерверы: прямой запрос к ним всегда
+        # кончается ошибкой. Поэтому без настоящего узла видеосервер не проверяется, и отчёт так и говорит.
         return VideoNodes(
-            (GOOGLEVIDEO_FALLBACK_HOST,),
-            (SOURCE_FALLBACK,),
-            f"{page_failure or 'YouTube не назвал видеосервер'}, поэтому проверяем общий адрес видеосерверов",
+            (),
+            (),
+            f"{page_failure or 'YouTube не назвал видеосервер'}, а узел вашей сети узнать не удалось: "
+            "видеосервер не проверялся (общий адрес googlevideo.com — не видеосервер и отвечает ошибкой)",
         )
     return VideoNodes(tuple(hosts), tuple(sources), note)
 

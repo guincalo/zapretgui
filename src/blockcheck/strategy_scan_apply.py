@@ -48,8 +48,10 @@ def _is_targets_own_profile(profile, target: str, port: int = 443) -> bool:
         for line in getattr(match, "hostlist_domains_lines", ()) or ()
         for value in _option_values(line)
     }
-    wanted = profile_domain(target) or ""
-    return bool(wanted) and names == {wanted} and _accepts_port(getattr(match, "filter_lines", ()), port)
+    from blockcheck.quick_services import companions_for
+
+    wanted = {profile_domain(target) or "", *(profile_domain(name) or "" for name, _host in companions_for(target))} - {""}
+    return bool(wanted) and names == wanted and _accepts_port(getattr(match, "filter_lines", ()), port)
 
 
 _WINDIVERT_PORT_FILTER_OPTIONS = ("--wf-tcp-out", "--wf-tcp-in", "--wf-udp-out", "--wf-udp-in")
@@ -364,7 +366,10 @@ def apply_strategy(
     elif scan_protocol == PROTOCOL_UDP_GAMES:
         applied_profile = f"игры UDP, проверка {target}"
     else:
-        applied_profile = profile_domain(target) or target
+        from blockcheck.quick_services import companions_for
+
+        names = dict.fromkeys(profile_domain(name) or name for name in (target, *(name for name, _host in companions_for(target))))
+        applied_profile = ", ".join(names)
 
     selected_file_name, operation, blob_warnings = apply_profile_to_selected_preset(
         profile_feature=profile_feature,

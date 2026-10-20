@@ -12,7 +12,7 @@ from dataclasses import dataclass
 
 from blockcheck.hosts import host_of
 
-__all__ = ["QUICK_SERVICES", "QuickService", "service_for_target"]
+__all__ = ["QUICK_SERVICES", "QuickService", "companions_for", "service_for_target"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,6 +27,10 @@ class QuickService:
     # Адрес для «Проверки домена»: там нужна страница сайта, остальные адреса сервиса (у YouTube — видеосервер)
     # добавляются к ней сами. Пусто — тот же адрес, что и для подбора.
     site: str = ""
+    # Остальные имена сервиса: подбор стратегии должен открыть и их, а профиль пишется на все имена сразу.
+    # У YouTube страница, видеосервер и превью — это разные имена, и закрыт может быть любой.
+    # Каждое имя — пара (имя для профиля, хост для пробы): профиль на ytimg.com покрывает и поддомены, проба идёт на i.ytimg.com.
+    companions: tuple[tuple[str, str], ...] = ()
 
     @property
     def site_host(self) -> str:
@@ -37,9 +41,9 @@ QUICK_SERVICES: tuple[QuickService, ...] = (
     QuickService(
         "youtube",
         "YouTube",
-        "googlevideo.com",
-        "Видео YouTube: проверяется тот видеосервер, который YouTube выдаёт именно вашей сети",
         "www.youtube.com",
+        "Страница YouTube, превью и видеосервер, который YouTube выдаёт именно вашей сети: открыть должно всё",
+        companions=(("googlevideo.com", "googlevideo.com"), ("ytimg.com", "i.ytimg.com")),
     ),
     QuickService("discord", "Discord", "discord.com", "Сайт и вход в Discord"),
     QuickService("telegram", "Telegram", "telegram.org", "Сайт Telegram"),
@@ -61,3 +65,11 @@ def service_for_target(value: str) -> QuickService | None:
     if not host:
         return None
     return next((item for item in QUICK_SERVICES if host in (item.target, item.site_host)), None)
+
+
+def companions_for(value: str) -> tuple[tuple[str, str], ...]:
+    """Остальные имена сервиса, если в поле стоит его основной адрес. Другой адрес (например, один googlevideo.com) — пусто:
+    кто вписал имя сам, проверяет именно его."""
+    host = host_of(str(value or "")).lower()
+    service = next((item for item in QUICK_SERVICES if item.target == host), None)
+    return service.companions if service else ()
