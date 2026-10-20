@@ -103,6 +103,14 @@ class _Progress:
     tls_started: bool = False
     secured: bool = False
     tls_version: str = ""
+    # Время (``time.perf_counter``): запрос ушёл, пришёл первый заголовок, первый и последний
+    # кусок тела, запрос кончился. Нули — этого не случилось. По ним видно, как долго сервер
+    # молчал после запроса и с какой скоростью шло тело.
+    started_at: float = 0.0
+    first_header_at: float = 0.0
+    first_body_at: float = 0.0
+    last_body_at: float = 0.0
+    ended_at: float = 0.0
 
     def on_debug(self, kind: int, data: bytes) -> None:
         if kind == _DEBUG_SSL_DATA_OUT:
@@ -162,6 +170,34 @@ class Exchange:
     def received(self) -> int:
         """Байты ответа: заголовки и тело."""
         return self.progress.header_size + len(self.progress.body)
+
+    @property
+    def ttfb_ms(self) -> float:
+        """Сколько прошло от отправки запроса до первого байта ответа; 0 — ответ не начался.
+
+        У первого запроса по новому соединению сюда входят подключение и рукопожатие.
+        """
+        progress = self.progress
+        first = progress.first_header_at or progress.first_body_at
+        if not progress.started_at or not first:
+            return 0.0
+        return max(0.0, (first - progress.started_at) * 1000)
+
+    @property
+    def elapsed_ms(self) -> float:
+        """Сколько длился весь запрос, включая сбой; 0 — время не снято."""
+        progress = self.progress
+        if not progress.started_at or not progress.ended_at:
+            return 0.0
+        return max(0.0, (progress.ended_at - progress.started_at) * 1000)
+
+    @property
+    def body_ms(self) -> float:
+        """Сколько шло тело: от первого до последнего куска; 0 — кусков меньше двух."""
+        progress = self.progress
+        if not progress.first_body_at or progress.last_body_at <= progress.first_body_at:
+            return 0.0
+        return (progress.last_body_at - progress.first_body_at) * 1000
 
     @property
     def stalled(self) -> bool:
@@ -239,6 +275,8 @@ class ChromeConnection:
         token = self.cancel
 
         def _on_header(line: bytes) -> int:
+            if not progress.first_header_at:
+                progress.first_header_at = time.perf_counter()
             progress.header_size += len(line)
             if line.startswith(b"HTTP/"):
                 parts = line.split()
@@ -248,6 +286,10 @@ class ChromeConnection:
             return len(line)
 
         def _on_body(chunk: bytes) -> int:
+            now = time.perf_counter()
+            if not progress.first_body_at:
+                progress.first_body_at = now
+            progress.last_body_at = now
             progress.body.extend(chunk)
             if token.cancelled:
                 progress.cancelled = True
@@ -267,6 +309,7 @@ class ChromeConnection:
         if token.cancelled:
             progress.cancelled = True
             return exchange
+        progress.started_at = time.perf_counter()
         try:
             # Списки заголовков и «имя → адрес» нужны и следующим запросам по этому соединению:
             # по умолчанию curl_cffi освобождает их после запроса, а libcurl продолжает на них
@@ -276,6 +319,7 @@ class ChromeConnection:
         except api.CurlError as error:
             exchange.error_code = int(getattr(error, "code", 0) or 0)
             exchange.message = str(error)
+        progress.ended_at = time.perf_counter()
         if exchange.error_code:
             # Код ошибки системы: отказ, тишина или нет дороги — текст libcurl этого не различает.
             exchange.os_failure = classify_code(int(curl.getinfo(info.OS_ERRNO) or 0))

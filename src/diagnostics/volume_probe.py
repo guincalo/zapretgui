@@ -26,6 +26,7 @@ import time
 from dataclasses import dataclass
 
 from diagnostics.limits import FREEZE_MAX_BYTES, FREEZE_MIN_BYTES
+from diagnostics.transfer_probe import RequestSample
 from utils.socket_cancel import SocketCancel
 
 __all__ = [
@@ -86,6 +87,9 @@ class VolumeRun:
     received: int = 0
     # Сколько запросов успели отправить.
     requests: int = 0
+    # Замер каждого запроса (время до первого байта, скорость тела): по ним
+    # ``diagnostics.transfer_probe`` судит о качестве передачи без новых запросов.
+    samples: tuple[RequestSample, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -128,11 +132,12 @@ def download(
     started = time.monotonic()
     received = 0
     requests = 0
+    samples: list[RequestSample] = []
 
     def _run(kind: str) -> VolumeRun:
         if token.cancelled and kind != RUN_PASSED:
             kind = RUN_CANCELLED
-        return VolumeRun(kind, received, requests)
+        return VolumeRun(kind, received, requests, tuple(samples))
 
     if token.cancelled:
         return VolumeRun(RUN_CANCELLED)
@@ -143,12 +148,23 @@ def download(
             exchange = connection.request(path, method=method, enough=lambda body: before + len(body) >= target)
             requests += 1
             received += exchange.received
+            samples.append(
+                RequestSample(
+                    received=exchange.received,
+                    ttfb_ms=exchange.ttfb_ms,
+                    elapsed_ms=exchange.elapsed_ms,
+                    body_ms=exchange.body_ms,
+                    fresh=requests == 1,
+                    failed=bool(exchange.error_code) and not exchange.progress.stopped_by_us,
+                )
+            )
             if exchange.progress.cancelled:
                 return _run(RUN_CANCELLED)
             if exchange.reconnected:
                 # Прежнее соединение закрыли между запросами: счёт по нему кончился, этот запрос — уже не по нему.
                 received -= exchange.received
                 requests -= 1
+                samples.pop()
                 return _run(RUN_CLOSED)
             if exchange.progress.stopped_by_us or received >= target:
                 return _run(RUN_PASSED)

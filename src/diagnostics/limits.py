@@ -39,6 +39,13 @@ __all__ = [
     "SOURCE_HOSTS",
     "SOURCE_REFERENCE",
     "SOURCE_SYSTEM",
+    "TRANSFER_MIN_SAMPLES",
+    "TRANSFER_PAUSE_MS",
+    "TRANSFER_PAUSE_RATIO",
+    "TRANSFER_SLOW_KBPS",
+    "TRANSFER_SLOW_MEDIAN_MS",
+    "TRANSFER_SPEED_MIN_BODY",
+    "TRANSFER_SPEED_MIN_MS",
     "VIDEO_SERVERS",
 ]
 
@@ -124,3 +131,20 @@ FREEZE_READ_TIMEOUT = 4.0
 SOURCE_HOSTS = "hosts"
 SOURCE_SYSTEM = "system"
 SOURCE_REFERENCE = "reference"
+
+# Качество передачи (``diagnostics.transfer_probe``): сайт может открыться и пройти окно обрыва,
+# но отвечать с паузами или медленно — так выглядит кэш или канал, которые «спотыкаются».
+# Один ответ ждали дольше этого срока, пока остальные приходили быстро: пауза.
+TRANSFER_PAUSE_MS = 2_500
+# Во сколько раз пауза должна превосходить обычный ответ. Иначе это просто далёкий сервер.
+TRANSFER_PAUSE_RATIO = 20
+# Обычный (медианный) ответ дольше этого: медленно в целом, а не отдельными запросами.
+TRANSFER_SLOW_MEDIAN_MS = 1_200
+# Скорость считается только по ответам с телом не меньше этого и дольше этого срока:
+# у короткого ответа «скорость» — это задержка линии.
+TRANSFER_SPEED_MIN_BODY = 16 * 1024
+TRANSFER_SPEED_MIN_MS = 100
+# Ниже этой скорости (КБ/с, около 1,2 Мбит/с) тело идёт медленно.
+TRANSFER_SLOW_KBPS = 150
+# Меньше стольких ответов по готовому соединению вывод о качестве не делается.
+TRANSFER_MIN_SAMPLES = 3
