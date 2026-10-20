@@ -32,6 +32,7 @@ from diagnostics import (
     speed_check,
     subnet_whitelist,
     system_state,
+    tcp_stats,
     udp_burst,
     upload_probe,
 )
@@ -742,21 +743,27 @@ def check_speed(run: Run, collected=None, services=None) -> dict | None:
     проверенные сайты: у открывшихся ищется замедление по имени.
     """
 
+    # Доля повторных передач за загрузку с каждого сервера: серверы качаются по очереди, счётчики системы
+    # за это время — по одной загрузке (см. ``diagnostics.tcp_stats``).
+    losses: dict[str, tcp_stats.LossVerdict] = {}
+
     def download(server: speed_check.SpeedServer) -> tuple[int, float] | None:
         ip = net_access.known_address(run, server.host)
         if not ip:
             return None
         started = time.monotonic()
         stop_at = started + speed_check.SAMPLE_SECONDS
-        result = net_access.fetch(
-            run,
-            server.host,
-            ip,
-            server.path,
-            read_limit=speed_check.SAMPLE_BYTES,
-            # Качаем не дольше отведённого: на медленной линии три мегабайта шли бы минуту.
-            body_done=lambda _body: time.monotonic() >= stop_at,
-        )
+        with tcp_stats.measure() as window:
+            result = net_access.fetch(
+                run,
+                server.host,
+                ip,
+                server.path,
+                read_limit=speed_check.SAMPLE_BYTES,
+                # Качаем не дольше отведённого: на медленной линии три мегабайта шли бы минуту.
+                body_done=lambda _body: time.monotonic() >= stop_at,
+            )
+        losses[server.host] = window.verdict()
         if not result.ok:
             return None
         return int(result.body_size), time.monotonic() - started
@@ -779,6 +786,8 @@ def check_speed(run: Run, collected=None, services=None) -> dict | None:
                 "kbps": None if item.kbps is None else round(item.kbps, 1),
                 "state": "unknown" if item.kbps is None else ("warn" if slow and not item.server.domestic else "ok"),
                 "text": speed_check.speed_text(item.kbps),
+                # Потери на линии за эту загрузку; нет — счётчики системы прочитать не удалось.
+                "retransmits": losses[item.server.host].as_dict() if item.server.host in losses else None,
             }
             for item in samples
         ],

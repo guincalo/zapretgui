@@ -330,6 +330,8 @@ def dns_servers_block(dns_servers: dict) -> BlockView:
 # Скорость, несколько соединений
 # ---------------------------------------------------------------------------
 
+# Потери на линии: почти нет — норма, небольшие — справка, заметные — предупреждение.
+_LOSS_LEVELS = {"none": OK, "small": INFO, "heavy": WARN}
 _SPEED_STATUS = {OK: "Разницы нет", WARN: "Зарубежные медленнее", UNKNOWN: "Не удалось сравнить"}
 
 
@@ -347,13 +349,25 @@ def speed_block(speed: dict) -> BlockView:
         )
         for item in speed.get("items") or ()
     )
+    losses = tuple(
+        ViewRow(
+            _LOSS_LEVELS.get(str(item["retransmits"].get("code")), INFO),
+            str(item.get("name") or ""),
+            str(item["retransmits"].get("text") or ""),
+        )
+        for item in speed.get("items") or ()
+        if isinstance(item.get("retransmits"), dict) and item["retransmits"].get("code") != "unknown"
+    )
     sections = _sections(
         ViewSection(str(speed.get("headline") or "Скорость загрузки"), lines),
+        ViewSection("Потери на линии (повторные передачи TCP)", losses) if losses else None,
         *name_speed_sections(names),
         _explain(
             "С каждого сервера качается два-три мегабайта, не дольше нескольких секунд. Сама цифра "
             "зависит от тарифа, поэтому зарубежные серверы сравниваются с российскими. "
-            "«Медленнее» говорится, только когда медленны все зарубежные сразу и разница — в разы."
+            "«Медленнее» говорится, только когда медленны все зарубежные сразу и разница — в разы. "
+            "Потери считаются по повторным передачам TCP за время загрузки: если они есть и у российских серверов, "
+            "виновата ближняя линия (Wi-Fi, роутер), если только у зарубежных — канал за границу."
         ),
     )
     if slow_names:

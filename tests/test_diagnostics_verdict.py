@@ -496,7 +496,8 @@ class ReferenceResolverTests(unittest.TestCase):
             run.close()
 
         self.assertTrue(answered)
-        self.assertEqual(ips, ("1.1.1.10", "8.8.8.80"))
+        # Серверы отвечают в потоках: порядок адресов зависит от того, кто успел первым.
+        self.assertEqual(sorted(ips), ["1.1.1.10", "8.8.8.80"])
 
 
 class BlockCauseInReportTests(unittest.TestCase):
