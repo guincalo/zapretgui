@@ -123,7 +123,6 @@ class DnsProvidersCatalogTests(unittest.TestCase):
     def test_dead_servers_are_gone_and_xbox_addresses_lead_to_dns_ai(self) -> None:
         names = {name for _group, name, _data in iter_providers()}
 
-        self.assertNotIn("dns.malw.link", names)
         for gone in ("Xbox DNS", "Xbox DNS v2", "Xbox DNS (old)"):
             self.assertNotIn(gone, names)
         for dead in ("176.99.11.77", "80.78.247.254", "95.216.204.218", "80.253.249.40", "111.88.96.54", "87.228.47.200"):

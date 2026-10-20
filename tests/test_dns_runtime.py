@@ -247,8 +247,12 @@ class DnsProviderCatalogTests(unittest.TestCase):
 
         self.assertEqual(ai["AstraCat"]["ipv4"], ["135.106.217.200", "135.106.197.22"])
         self.assertEqual(ai["GeoHide"]["ipv4"], ["193.233.112.67", "193.233.112.68"])
+        # Узлы GeoHide и вернувшийся Malw.link (проверено с win10 2026-10-20).
+        self.assertEqual(ai["GeoHide EU"]["ipv4"], ["5.175.161.3", "5.175.161.40"])
+        self.assertEqual(ai["GeoHide US"]["ipv4"], ["192.255.159.240", "192.255.159.241"])
+        self.assertEqual(ai["Malw.link"]["ipv4"], ["179.254.166.171", "164.5.224.81"])
+        self.assertEqual(ai["Bezmezhau"]["doh"], "https://dns.bezmezhau.com/dns-query")
         # Серверы, которые перестали отвечать, из списка убраны.
-        self.assertNotIn("dns.malw.link", ai)
         self.assertNotIn("Xbox DNS (old)", ai)
         # Xbox DNS закрыл сервисы ИИ и отвечает на них пустым адресом.
         self.assertNotIn("Xbox DNS", ai)
