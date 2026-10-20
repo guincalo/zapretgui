@@ -119,6 +119,17 @@ class ReportMappingTests(unittest.TestCase):
         self.assertEqual(parse_report_mapping("<html>Доступ ограничен</html>"), "")
         self.assertEqual(cluster_to_host("muc_12"), "")
 
+    def test_the_players_streaming_node_comes_first(self) -> None:
+        page = (
+            '"formats":[{"url":"https://rr2---sn-aaa.googlevideo.com/videoplayback?x"}],'
+            '"serverAbrStreamingUrl":"https:\\/\\/rr9---sn-zzz.googlevideo.com\\/videoplayback?sabr=1"'
+        )
+
+        self.assertEqual(
+            extract_googlevideo_hosts(page),
+            ("rr9---sn-zzz.googlevideo.com", "rr2---sn-aaa.googlevideo.com"),
+        )
+
     def test_redirector_answer_is_used_before_the_youtube_page(self) -> None:
         with (
             patch(

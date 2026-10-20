@@ -32,6 +32,9 @@ _WATCH_URLS: tuple[str, ...] = (
     "https://www.youtube.com/watch?v=dQw4w9WgXcQ&hl=en",
     "https://www.youtube.com/watch?v=Qr1zDbHATw0&t=8s&hl=en",
 )
+_STREAMING_URL_RE = re.compile(
+    r'(?i)"serverAbrStreamingUrl"\s*:\s*"https?:(?:\\/\\/|//)((?:rr|r)\d+---sn-[a-z0-9-]+\.googlevideo\.com)'
+)
 _GOOGLEVIDEO_RR_RE = re.compile(
     r"(?i)\b((?:rr|r)\d+(?:---|\.)sn-[a-z0-9-]+\.googlevideo\.com)\b"
 )
@@ -124,7 +127,10 @@ def extract_googlevideo_hosts(page: str) -> tuple[str, ...]:
 
     hosts: list[str] = []
     seen: set[str] = set()
-    for match in _GOOGLEVIDEO_RR_RE.finditer(decoded):
+    # Адрес потоковой передачи плеера идёт первым: именно с этого узла он и будет качать видео.
+    streaming = _STREAMING_URL_RE.search(decoded)
+    matches = ([streaming] if streaming else []) + list(_GOOGLEVIDEO_RR_RE.finditer(decoded))
+    for match in matches:
         host = normalize_googlevideo_host(match.group(1))
         if not host or host in seen:
             continue
