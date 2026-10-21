@@ -4,6 +4,7 @@ import webbrowser
 from dataclasses import dataclass
 
 from log.log import log
+from utils.site_links import resolve
 
 
 @dataclass(slots=True)
@@ -16,9 +17,10 @@ def open_support_discussions() -> AboutActionResult:
     from config.urls import SUPPORT_ISSUES_URL
 
     try:
-        webbrowser.open(SUPPORT_ISSUES_URL)
-        log(f"Открыт Forgejo Issues: {SUPPORT_ISSUES_URL}", "INFO")
-        return AboutActionResult(True, SUPPORT_ISSUES_URL)
+        target = resolve(SUPPORT_ISSUES_URL)
+        webbrowser.open(target)
+        log(f"Открыт Forgejo Issues: {target}", "INFO")
+        return AboutActionResult(True, target)
     except Exception as e:
         return AboutActionResult(False, str(e))
 
@@ -27,9 +29,10 @@ def open_docs_home() -> AboutActionResult:
     from config.urls import DOCS_URL
 
     try:
-        webbrowser.open(DOCS_URL)
-        log(f"Открыт вики-сайт: {DOCS_URL}", "INFO")
-        return AboutActionResult(True, DOCS_URL)
+        target = resolve(DOCS_URL)
+        webbrowser.open(target)
+        log(f"Открыт вики-сайт: {target}", "INFO")
+        return AboutActionResult(True, target)
     except Exception as e:
         return AboutActionResult(False, str(e))
 
@@ -61,27 +64,30 @@ def open_telegram_folder(slug: str) -> AboutActionResult:
 
 def open_link(url: str) -> AboutActionResult:
     try:
-        webbrowser.open(url)
-        log(f"Открыта ссылка: {url}", "INFO")
-        return AboutActionResult(True, url)
+        target = resolve(url)
+        webbrowser.open(target)
+        log(f"Открыта ссылка: {target}", "INFO")
+        return AboutActionResult(True, target)
     except Exception as e:
         return AboutActionResult(False, str(e))
 
 
 def open_discord(url: str) -> AboutActionResult:
     try:
-        webbrowser.open(url)
-        log(f"Открыт Discord: {url}", "INFO")
-        return AboutActionResult(True, url)
+        target = resolve(url)
+        webbrowser.open(target)
+        log(f"Открыт Discord: {target}", "INFO")
+        return AboutActionResult(True, target)
     except Exception as e:
         return AboutActionResult(False, str(e))
 
 
 def open_github(url: str) -> AboutActionResult:
     try:
-        webbrowser.open(url)
-        log(f"Открыт Forgejo: {url}", "INFO")
-        return AboutActionResult(True, url)
+        target = resolve(url)
+        webbrowser.open(target)
+        log(f"Открыт Forgejo: {target}", "INFO")
+        return AboutActionResult(True, target)
     except Exception as e:
         return AboutActionResult(False, str(e))
 

@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import time
 
-from PyQt6.QtCore import Qt, QTimer, QUrl
-from PyQt6.QtGui import QDesktopServices
+from PyQt6.QtCore import Qt, QTimer
 
 from log.log import log
+from utils import site_links
 from profile.match_filters import filter_values
 from profile.key_resolution import profile_reference_key
 from profile.list_apply_signature import profile_payload_apply_signature
@@ -1585,7 +1585,7 @@ class PresetSetupPageBase(BasePage):
         )
         site_button_text = "Открыть сайт с профилями"
         site_button = PushButton(site_button_text)
-        site_button.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(PROFILE_INFO_URL)))
+        site_button.clicked.connect(lambda: site_links.open_in_browser(PROFILE_INFO_URL))
         set_state_text(site_button, site_button_text)
         set_control_accessibility(
             site_button,

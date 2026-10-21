@@ -205,3 +205,116 @@ class MirrorReportTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def _wiki_document():
+    document = _document(("git2.zapret.moe", False))
+    document["families"]["wiki"] = {
+        "preferred": "wiki2.zapret.moe",
+        "names": [
+            {"name": "wiki.zapret.moe", "blocked": True},
+            {"name": "wiki2.zapret.moe", "blocked": False},
+            {"name": "wiki3.zapret.moe", "blocked": False},
+        ],
+    }
+    return document
+
+
+class WikiFamilyTests(unittest.TestCase):
+    """Вики устроена как git: основное имя режут, зеркала открываются; семейства не смешиваются."""
+
+    def test_family_of_names(self) -> None:
+        self.assertEqual(mirrors.family_of("wiki2.zapret.moe"), "wiki")
+        self.assertEqual(mirrors.family_of("GIT.zapret.moe"), "git")
+        self.assertEqual(mirrors.family_of("evil.example"), "")
+        self.assertEqual(mirrors.family_of("wiki.zapret.moe.evil.example"), "")
+        self.assertEqual(mirrors.family_of(None), "")
+        self.assertTrue(mirrors.is_site_host("wiki3.zapret.moe"))
+        self.assertFalse(mirrors.is_git_host("wiki3.zapret.moe"))
+
+    def test_with_host_changes_only_inside_one_family(self) -> None:
+        wiki = "https://wiki.zapret.moe/Zapret/home"
+        self.assertEqual(mirrors.with_host(wiki, "wiki2.zapret.moe"), "https://wiki2.zapret.moe/Zapret/home")
+        self.assertEqual(mirrors.with_host(wiki, "git2.zapret.moe"), wiki)
+        git = "https://git.zapret.moe/zapretdiscordyoutube/zapretgui"
+        self.assertEqual(mirrors.with_host(git, "wiki2.zapret.moe"), git)
+
+    def test_canonical_url_returns_each_family_to_its_own_main_name(self) -> None:
+        self.assertEqual(mirrors.canonical_url("https://wiki3.zapret.moe/a"), "https://wiki.zapret.moe/a")
+        self.assertEqual(mirrors.canonical_url("https://git3.zapret.moe/a"), "https://git.zapret.moe/a")
+        self.assertEqual(mirrors.canonical_url("https://example.com/a"), "https://example.com/a")
+
+    def test_ordered_hosts_per_family(self) -> None:
+        document = _wiki_document()
+        self.assertEqual(mirrors.ordered_hosts(document, "wiki"), ["wiki2.zapret.moe", "wiki3.zapret.moe", "wiki.zapret.moe"])
+        self.assertEqual(mirrors.ordered_hosts(document), ["git2.zapret.moe"])
+
+    def test_wiki_list_falls_back_to_wiki_bootstrap_and_can_be_downloaded_from_git_names(self) -> None:
+        asked: list[str] = []
+
+        def fetch(url: str):
+            asked.append(url)
+            return None
+
+        offline = mirrors.MirrorList(fetch, family="wiki")
+        self.assertEqual(offline.hosts(), list(mirrors.WIKI_BOOTSTRAP_HOSTS))
+        self.assertEqual(mirrors.WIKI_BOOTSTRAP_HOSTS[-1], "wiki.zapret.moe")
+
+        body = json.dumps(_wiki_document()).encode()
+        mirror_list = mirrors.MirrorList(
+            lambda url: body if "git2." in url else (_ for _ in ()).throw(OSError("закрыто")), family="wiki"
+        )
+        self.assertEqual(mirror_list.hosts()[0], "wiki2.zapret.moe")
+
+    def test_remember_ignores_another_family(self) -> None:
+        mirror_list = mirrors.MirrorList(lambda url: json.dumps(_wiki_document()).encode(), family="wiki")
+        mirror_list.remember("git3.zapret.moe")
+        self.assertEqual(mirror_list.hosts()[0], "wiki2.zapret.moe")
+
+
+class ChooseTests(unittest.TestCase):
+    """choose(): первое ответившее имя запоминается, дальше выбор не повторяется."""
+
+    def _list(self, open_hosts: set[str], family: str = "git"):
+        asked: list[str] = []
+        body = json.dumps(_wiki_document() if family == "wiki" else _document(
+            ("git.zapret.moe", True), ("git2.zapret.moe", False), ("git3.zapret.moe", False)
+        )).encode()
+
+        def fetch(url: str):
+            asked.append(url)
+            host = url.split("/")[2]
+            if host in open_hosts:
+                return body
+            raise OSError("TLS закрыт")
+
+        return mirrors.MirrorList(fetch, family=family), asked
+
+    def test_first_answering_name_is_chosen_and_kept(self) -> None:
+        mirror_list, asked = self._list({"git3.zapret.moe"})
+        self.assertEqual(mirror_list.choose(), "git3.zapret.moe")
+        after_first = len(asked)
+        self.assertEqual(mirror_list.choose(), "git3.zapret.moe")
+        self.assertEqual(len(asked), after_first)
+
+    def test_blocked_main_name_is_not_chosen_when_a_mirror_answers(self) -> None:
+        mirror_list, _asked = self._list({"git.zapret.moe", "git3.zapret.moe"})
+        self.assertEqual(mirror_list.choose(), "git3.zapret.moe")
+
+    def test_nothing_answers_gives_best_guess_without_remembering(self) -> None:
+        mirror_list, asked = self._list(set())
+        guess = mirror_list.choose()
+        self.assertEqual(guess, "git2.zapret.moe")
+        before = len(asked)
+        mirror_list.choose()
+        self.assertGreater(len(asked), before)
+
+    def test_wiki_family(self) -> None:
+        mirror_list, _asked = self._list({"wiki3.zapret.moe"}, family="wiki")
+        self.assertEqual(mirror_list.choose(), "wiki3.zapret.moe")
+
+    def test_forget_makes_the_next_choice_start_over(self) -> None:
+        mirror_list, _asked = self._list({"git2.zapret.moe", "git3.zapret.moe"})
+        self.assertEqual(mirror_list.choose(), "git2.zapret.moe")
+        mirror_list.forget()
+        self.assertEqual(mirror_list.choose(), "git2.zapret.moe")

@@ -61,6 +61,7 @@ from ui.onboarding.steps import (
     target_widget,
 )
 from ui.widgets.fluent_item_tooltip import FluentItemToolTipController
+from utils import site_links
 
 
 OVERLAY_OBJECT_NAME = "onboardingTourOverlay"
@@ -151,6 +152,15 @@ class TourChapter:
     count: int
     # Подсказка при наведении на отрезок главы.
     hint: str = ""
+
+
+class _SiteLinkButton(HyperlinkButton):
+    """Ссылка на статью вики: открывается под открытым именем сайта (utils.site_links)."""
+
+    def _onClicked(self) -> None:
+        url = self.getUrl()
+        if url.isValid():
+            site_links.open_in_browser(url.toString())
 
 
 class _ChapterBar(QWidget):
@@ -343,7 +353,7 @@ class _TourCard(QWidget):
         layout.addWidget(self.body_label)
 
         # Статья вики по теме шага: открывается сразу, искать не нужно.
-        self.wiki_button = HyperlinkButton(FluentIcon.LINK, "", "", self.content)
+        self.wiki_button = _SiteLinkButton(FluentIcon.LINK, "", "", self.content)
         self.wiki_button.hide()
         layout.addWidget(self.wiki_button, 0, Qt.AlignmentFlag.AlignLeft)
 

@@ -46,6 +46,7 @@ from dataclasses import dataclass
 from urllib.parse import urlencode
 
 from log.log import log
+from utils import site_links
 
 from ..channel_utils import normalize_update_channel
 from ..versions import compare_versions, normalize_version
@@ -96,11 +97,11 @@ class WaitEndpoint:
 
 
 def wait_endpoints() -> tuple[WaitEndpoint, ...]:
-    """Forgejo, затем зеркала в порядке из конфигурации сборки."""
+    """Forgejo (под открытым именем сайта), затем зеркала в порядке из конфигурации сборки."""
     from .mirrors import mirror_servers
     from ..server_config import should_verify_ssl
 
-    endpoints = [WaitEndpoint("Forgejo", FORGEJO_WAIT_URL, True)]
+    endpoints = [WaitEndpoint("Forgejo", site_links.resolve(FORGEJO_WAIT_URL), True)]
     for server in mirror_servers():
         name = str(server.get("name") or server.get("host") or "")
         endpoints.append(

@@ -5,8 +5,7 @@ from unittest.mock import Mock, patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtCore import Qt, QUrl
-from PyQt6.QtTest import QTest
+from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QApplication
 
 from profile.ui.preset_setup_page import PresetSetupPageBase
@@ -248,7 +247,7 @@ class ProfileSetupAccessibilityTests(unittest.TestCase):
             patch("profile.ui.preset_setup_page.MessageBox", _MessageBox),
             patch("profile.ui.preset_setup_page.PushButton", _DialogButton, create=True),
             patch(
-                "profile.ui.preset_setup_page.QDesktopServices.openUrl",
+                "utils.site_links.open_in_browser",
                 side_effect=lambda url: opened_urls.append(url),
             ),
         ):
@@ -260,7 +259,7 @@ class ProfileSetupAccessibilityTests(unittest.TestCase):
         site_button = dialog.buttonLayout.widgets[0]
         self.assertEqual(site_button.text(), "Открыть сайт с профилями")
         self.assertEqual(site_button.accessibleName(), "Открыть сайт с профилями")
-        self.assertEqual(opened_urls, [QUrl("https://wiki.zapret.moe/Zapret2/profile")])
+        self.assertEqual(opened_urls, ["https://wiki.zapret.moe/Zapret2/profile"])
 
 
 if __name__ == "__main__":

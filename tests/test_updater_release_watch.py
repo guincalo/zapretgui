@@ -397,12 +397,22 @@ class ReleaseWatcherTests(unittest.TestCase):
 
 
 class WaitEndpointsTests(unittest.TestCase):
+    def test_forgejo_queue_uses_the_open_name_of_the_server(self) -> None:
+        with patch("updater.release.mirrors.mirror_servers", return_value=[]), patch(
+            "utils.site_links.chosen_host", return_value="git2.zapret.moe"
+        ):
+            endpoints = watch.wait_endpoints()
+
+        self.assertEqual(endpoints[0].url, "https://git2.zapret.moe/api/zapret/wait")
+
     def test_forgejo_goes_first_then_mirrors(self) -> None:
         servers = [
             {"name": "Первое", "host": "192.0.2.1", "https_port": 888, "http_port": 887},
             {"name": "Второе", "host": "192.0.2.2", "https_port": 888, "http_port": 887},
         ]
-        with patch("updater.release.mirrors.mirror_servers", return_value=servers):
+        with patch("updater.release.mirrors.mirror_servers", return_value=servers), patch(
+            "utils.site_links.chosen_host", return_value="git.zapret.moe"
+        ):
             endpoints = watch.wait_endpoints()
 
         self.assertEqual(

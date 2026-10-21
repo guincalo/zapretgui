@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtCore import Qt, QUrl
+from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QKeyEvent
 from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication, QAbstractItemView, QVBoxLayout, QWidget
@@ -601,7 +601,7 @@ class UserPresetsAccessibilityTests(unittest.TestCase):
             patch("presets.ui.common.user_presets_page.MessageBox", _MessageBox),
             patch("presets.ui.common.user_presets_page.PushButton", _DialogButton, create=True),
             patch(
-                "presets.ui.common.user_presets_page.QDesktopServices.openUrl",
+                "utils.site_links.open_in_browser",
                 side_effect=lambda url: opened_urls.append(url),
             ),
         ):
@@ -615,7 +615,7 @@ class UserPresetsAccessibilityTests(unittest.TestCase):
         self.assertEqual(site_button.text(), "Открыть сайт с пресетами")
         self.assertEqual(site_button.accessibleName(), "Открыть сайт с пресетами")
 
-        self.assertEqual(opened_urls, [QUrl("https://wiki.zapret.moe/Zapret2/preset")])
+        self.assertEqual(opened_urls, ["https://wiki.zapret.moe/Zapret2/preset"])
 
     def test_create_preset_dialog_has_screen_reader_text(self) -> None:
         dialog = CreatePresetDialog([], self._dialog_parent())

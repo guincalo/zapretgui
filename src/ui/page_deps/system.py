@@ -210,7 +210,7 @@ def build_about_page_kwargs(
 
     def _create_about_open_action_worker(request_id: int, *, action_name: str, parent=None):
         import about.commands as about_commands
-        from config.urls import ANDROID_URL
+        from config.urls import ANDROID_URL, GIT_REPO_URL, KVN_REPO_URL
 
         actions = {
             # «Справка»: научиться
@@ -229,13 +229,13 @@ def build_about_page_kwargs(
             "telegram_news": lambda: about_commands.open_telegram("bypassblock"),
             "mastodon": lambda: about_commands.open_link("https://mastodon.social/@zapret"),
             "bastyon": lambda: about_commands.open_link("https://bastyon.com/zapretgui"),
-            "source_code": lambda: about_commands.open_github("https://git.zapret.moe/zapretdiscordyoutube/zapretgui"),
+            "source_code": lambda: about_commands.open_github(GIT_REPO_URL),
             # Zapret KVN
             "kvn_channel": lambda: about_commands.open_telegram("vpndiscordyooutube"),
             "kvn_bot": lambda: about_commands.open_telegram(
                 "zapretvpns_bot", start="gui_about_kvn"
             ),
-            "kvn_github": lambda: about_commands.open_github("https://git.zapret.moe/zapretkvn/zapret-kvn"),
+            "kvn_github": lambda: about_commands.open_github(KVN_REPO_URL),
         }
         return external_actions_feature.create_external_action_worker(
             request_id,

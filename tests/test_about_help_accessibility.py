@@ -109,6 +109,7 @@ class AboutHelpAccessibilityTests(unittest.TestCase):
         kwargs = build_about_page_kwargs(
             page_name=PageName.ABOUT,
             external_actions_feature=feature,
+            updater_feature=object(),
             show_page=lambda *_args, **_kwargs: None,
             ui_state_store=None,
         )

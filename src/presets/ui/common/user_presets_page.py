@@ -8,9 +8,8 @@ from PyQt6.QtCore import (
     Qt,
     QTimer,
     QPoint,
-    QUrl,
 )
-from PyQt6.QtGui import QDesktopServices, QKeySequence, QShortcut
+from PyQt6.QtGui import QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QFileDialog,
@@ -19,6 +18,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 from ui.pages.base_page import BasePage
+from utils import site_links
 from presets.ui.common.preset_actions_menu import build_preset_actions_menu, show_preset_actions_menu
 from presets.ui.common.preset_rating_menu import show_preset_rating_menu
 from presets.user_presets_runtime_service import (
@@ -668,7 +668,7 @@ class UserPresetsPageBase(BasePage):
                 "Открыть сайт с пресетами",
             )
             site_button = PushButton(site_button_text)
-            site_button.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(PRESET_INFO_URL)))
+            site_button.clicked.connect(lambda: site_links.open_in_browser(PRESET_INFO_URL))
             set_state_text(site_button, site_button_text)
             set_control_accessibility(
                 site_button,

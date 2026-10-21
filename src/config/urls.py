@@ -1,3 +1,8 @@
+# Все ссылки на сайты проекта (git.zapret.moe, wiki.zapret.moe) пишутся здесь,
+# на основных именах. Основные имена режут по TLS, поэтому в браузер и в сеть
+# адрес уходит через utils.site_links.resolve / open_in_browser, которые
+# подставляют открытое имя (git2, wiki2, …). Своих списков имён в других местах
+# не заводить.
 # URLs for updates and documentation
 #VERSION_URL = "https://nozapret.ru/dev.json"  # URL для проверки обновлений
 #EXE_UPDATE_URL = "https://nozapret.ru/main.exe"  # URL для скачивания обновления EXE
@@ -11,6 +16,8 @@ BLOCKCHECK_INFO_URL = "https://wiki.zapret.moe/Zapret2/find-game-strategy"  # UR
 ANDROID_URL = "https://wiki.zapret.moe/Zapret/android"  # URL инструкции для Android
 PREMIUM_GUIDE_URL = "https://wiki.zapret.moe/Zapret/premium"  # Гайд по Zapret Premium: как привязать компьютер к подписке бота
 GIT_SITE_URL = "https://git.zapret.moe/"  # Git-сайт проекта: исходный код и выпуски программ
+GIT_REPO_URL = f"{GIT_SITE_URL}zapretdiscordyoutube/zapretgui"  # Исходный код Zapret 2 GUI
+KVN_REPO_URL = f"{GIT_SITE_URL}zapretkvn/zapret-kvn"  # Исходный код Zapret KVN
 ZAPRET_DNS_SITE_URL = "https://dns.zapret.moe/"  # Сайт своего DNS-сервера проекта: состояние и список сервисов
 ZAPRET_DNS_SITE_HOST = "dns.zapret.moe"  # Его имя: адрес сервера на плитке «Настройки DNS»
 # Статьи вики к шагам обучающего тура (ключ — шаг из ui.onboarding.steps).
@@ -60,7 +67,7 @@ ONBOARDING_WIKI_URLS = {
     "finish": "https://wiki.zapret.moe/Zapret/zapret_not_working",
 }
 BOLVAN_URL = "https://github.com/bol-van/zapret-win-bundle"  # URL автора
-SUPPORT_ISSUES_URL = "https://git.zapret.moe/zapretdiscordyoutube/zapretgui/issues"  # Основная ссылка поддержки
+SUPPORT_ISSUES_URL = f"{GIT_REPO_URL}/issues"  # Основная ссылка поддержки
 # Forgejo (в отличие от GitHub) требует в ?template= полный путь к файлу шаблона
-BLOCKCHECK_ISSUES_URL = "https://git.zapret.moe/zapretdiscordyoutube/zapretgui/issues/new?template=.forgejo%2FISSUE_TEMPLATE%2Fservice_not_working.yml"  # Обращение по BlockCheck
-PROFILE_REQUEST_FORM_URL = "https://git.zapret.moe/zapretdiscordyoutube/zapretgui/issues/new?template=.forgejo%2FISSUE_TEMPLATE%2Fhostlist_ipset_request.yml"  # Форма заявки на hostlist/ipset
+BLOCKCHECK_ISSUES_URL = f"{GIT_REPO_URL}/issues/new?template=.forgejo%2FISSUE_TEMPLATE%2Fservice_not_working.yml"  # Обращение по BlockCheck
+PROFILE_REQUEST_FORM_URL = f"{GIT_REPO_URL}/issues/new?template=.forgejo%2FISSUE_TEMPLATE%2Fhostlist_ipset_request.yml"  # Форма заявки на hostlist/ipset

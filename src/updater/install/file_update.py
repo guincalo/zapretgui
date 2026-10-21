@@ -84,9 +84,17 @@ def is_available(signed: SignedRelease | None) -> bool:
 
 def store_sources():
     """Хранилище выпуска: Forgejo, затем зеркала (то же имя файла везде)."""
+    from utils import site_links
     from zapret_update import fetch, store
 
-    sources = [fetch.Source("Forgejo", lambda name: store.forgejo_url("https://git.zapret.moe", "zapretdiscordyoutube", PRODUCT, name))]
+    # Имя выбирается при каждой ссылке (запомненное отдаётся сразу), а не при
+    # сборке списка: качает фоновый поток, и основное имя режут по TLS.
+    sources = [
+        fetch.Source(
+            "Forgejo",
+            lambda name: store.forgejo_url(f"https://{site_links.chosen_host('git')}", "zapretdiscordyoutube", PRODUCT, name),
+        )
+    ]
     for server in VPS_SERVERS:
         base = f"https://{server['host']}:{server['https_port']}"
         label = str(server.get("name") or server["host"])

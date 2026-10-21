@@ -29,6 +29,7 @@ from urllib.parse import quote, unquote, urlsplit
 import requests
 
 from log.log import log
+from utils import site_links
 from utils.https_dns_fallback import request_with_dns_fallback
 from zapret_update import mirrors as git_mirrors
 from zapret_update.manifest import MANIFEST_NAME, SIGNATURE_NAME
@@ -50,7 +51,6 @@ FORGEJO_SOURCE = "Forgejo"
 # Основное имя git.zapret.moe режут по TLS; тот же Forgejo открывается под
 # зеркалами git2, git3, … (список имён отдаёт сам сервер). Обмен идёт под первым
 # открытым именем, ссылки для человека остаются на основном.
-_MIRROR_LIST_TIMEOUT = (3, 3)
 # Дольше этого перебор имён не идёт: общий срок источника задаёт resolver.
 _MIRROR_ROUND_BUDGET_S = 14.0
 RELEASES_PAGE_LIMIT = 50
@@ -99,23 +99,8 @@ def _parse_sha256_sidecar(text: str, *, expected_name: str) -> str:
     return match.group(1).lower()
 
 
-def _fetch_mirror_list(url: str) -> bytes | None:
-    """Короткий запрос списка имён сервера: одна попытка, без повторов."""
-    session = new_session()
-    try:
-        response = request_with_dns_fallback(
-            session, "GET", url, headers={"Accept": "application/json"}, timeout=_MIRROR_LIST_TIMEOUT, verify=True
-        )
-        return response.content if response.status_code == 200 else None
-    finally:
-        session.close()
-
-
-def _report_mirror(message: str) -> None:
-    log(f"[UPDATE] Forgejo, имена сервера: {message}", "INFO")
-
-
-_MIRRORS = git_mirrors.MirrorList(_fetch_mirror_list, report=_report_mirror)
+# Тот же список имён, что и у кнопок со ссылками: выбор открытого имени один.
+_MIRRORS = site_links.mirror_list("git")
 
 
 def _should_try_next_name(exc: BaseException) -> bool:

@@ -101,7 +101,9 @@ class ExternalPageActionWorkerBoundaryTests(unittest.TestCase):
         opened_urls: list[str] = []
         feature = _ExternalActionsFeature()
 
-        with patch("about.commands.webbrowser.open", side_effect=opened_urls.append):
+        with patch("about.commands.webbrowser.open", side_effect=opened_urls.append), patch(
+            "utils.site_links.chosen_host", return_value="wiki2.zapret.moe"
+        ):
             kwargs = build_about_page_kwargs(
                 page_name=PageName.ABOUT,
                 external_actions_feature=feature,
@@ -118,7 +120,8 @@ class ExternalPageActionWorkerBoundaryTests(unittest.TestCase):
 
         self.assertEqual(worker, ("forum_for_beginners", None))
         self.assertTrue(result.ok)
-        self.assertEqual(opened_urls, ["https://wiki.zapret.moe/Zapret/home"])
+        # Кнопка открывает вики под открытым именем сайта (основное режут по TLS).
+        self.assertEqual(opened_urls, ["https://wiki2.zapret.moe/Zapret/home"])
 
     def test_support_open_actions_are_queued_while_worker_runs(self) -> None:
         class _Runtime:
