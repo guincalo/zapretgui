@@ -53,6 +53,21 @@ jobs:
       - name: Build (payload + PyInstaller + portable zip)
         run: python tools/fork_build/build.py ${{ env.UPSTREAM_VERSION }}
 
+      - name: Smoke test (start Zapret.exe for 40 s)
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          Copy-Item -Recurse out\Zapret2 smoke
+          $p = Start-Process -FilePath smoke\_internal\Zapret.exe -WorkingDirectory smoke -PassThru
+          Start-Sleep -Seconds 40
+          $alive = -not $p.HasExited
+          Write-Host "Zapret.exe alive after 40 s: $alive"
+          Get-ChildItem -Recurse smoke -Include *crash*.log,*.txt -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -match 'logs|crash' } |
+            ForEach-Object { Write-Host "== $($_.FullName)"; Get-Content $_.FullName -Tail 40 }
+          if ($alive) { Stop-Process -Id $p.Id -Force; Get-Process winws*,dnscrypt* -ErrorAction SilentlyContinue | Stop-Process -Force }
+          if (-not $alive) { Write-Error "Zapret.exe exited early (code $($p.ExitCode))"; exit 1 }
+
       - name: Build installer (Inno Setup)
         shell: pwsh
         run: |
