@@ -60,6 +60,33 @@ def lookup_latest_release(
     forgejo_deadline: float = FORGEJO_DEADLINE_SECONDS,
     mirrors_deadline: float = mirrors.MIRRORS_DEADLINE_SECONDS,
 ) -> ReleaseLookup:
+    """guincalo/zapretgui fork: in-app update lookup is disabled.
+
+    Upstream installs releases signed with the upstream Ed25519 keys from
+    git.zapret.moe and its mirrors; that would silently replace this build with
+    the upstream one (telemetry included). New versions of the fork are
+    published at https://github.com/guincalo/zapretgui/releases.
+    """
+    del channel
+    return ReleaseLookup(release=None, error=FORK_UPDATES_DISABLED)
+
+
+FORK_RELEASES_URL = "https://github.com/guincalo/zapretgui/releases"
+FORK_UPDATES_DISABLED = (
+    "Автообновление в этой сборке отключено. Новые версии: " + FORK_RELEASES_URL
+)
+
+
+def _upstream_lookup_latest_release(
+
+    channel: str,
+    *,
+    fetch_forgejo: Callable[[str], dict[str, Any]] = forgejo.fetch_latest_release,
+    fetch_mirrors: Callable[[str], dict[str, Any]] = mirrors.fetch_latest_release,
+    fallback_delay: float = MIRROR_FALLBACK_DELAY_SECONDS,
+    forgejo_deadline: float = FORGEJO_DEADLINE_SECONDS,
+    mirrors_deadline: float = mirrors.MIRRORS_DEADLINE_SECONDS,
+) -> ReleaseLookup:
     selected = normalize_update_channel(channel)
     started = time.monotonic()
     answers: queue.Queue[tuple[str, Outcome[dict[str, Any]]]] = queue.Queue()

@@ -34,7 +34,15 @@ def _tr(language: str, key: str, default: str) -> str:
     return tr_catalog(key, language=language, default=default)
 
 
+_FORK_DISABLED = "отключено в форке guincalo/zapretgui"
+
+
 def _forgejo_row(language: str) -> tuple[str, dict]:
+    # guincalo/zapretgui fork: no probes of the upstream update server.
+    return FORGEJO_ROW_NAME, {"status": "error", "error": _FORK_DISABLED, "update_source": True}
+
+
+def _upstream_forgejo_row(language: str) -> tuple[str, dict]:
     try:
         response_time = forgejo.probe_forgejo()
     except Exception as exc:
@@ -75,6 +83,17 @@ def _mirror_row(server: dict[str, Any]) -> tuple[str, dict]:
 
 
 def _telegram_row(language: str) -> tuple[str, dict]:
+    # guincalo/zapretgui fork: the upstream Telegram channel page is not scraped.
+    return TELEGRAM_ROW_NAME, {
+        "status": "error",
+        "response_time": 0.0,
+        "error": _FORK_DISABLED,
+        "is_current": False,
+        "update_source": False,
+    }
+
+
+def _upstream_telegram_row(language: str) -> tuple[str, dict]:
     started = time.monotonic()
     channel = normalize_update_channel(CHANNEL)
     error = _tr(language, "page.servers.error.version_not_found", "Версия не найдена")

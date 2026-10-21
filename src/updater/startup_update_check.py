@@ -112,6 +112,20 @@ def check_for_update_sync(*, now: float | None = None, signalled: bool = False) 
     from updater.release.resolver import lookup_latest_release
     from updater.versions import compare_versions
 
+    # guincalo/zapretgui fork: background update checks are off (nothing is
+    # contacted); updates are published at github.com/guincalo/zapretgui/releases.
+    log("Автопроверка обновлений отключена в этой сборке (guincalo/zapretgui)", "🔁 UPDATE")
+    return {
+        "has_update": False,
+        "version": APP_VERSION,
+        "release_notes": "",
+        "error": None,
+        "release_info": None,
+        "skipped": True,
+        "skip_reason": "отключено в форке",
+        "checked_at": 0.0,
+    }
+
     current = float(now if now is not None else time.time())
     pause_left = 0.0 if signalled else _pause_left(current)
     if pause_left > 0:

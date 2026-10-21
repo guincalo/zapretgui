@@ -97,7 +97,19 @@ class WaitEndpoint:
 
 
 def wait_endpoints() -> tuple[WaitEndpoint, ...]:
-    """Forgejo (под открытым именем сайта), затем зеркала в порядке из конфигурации сборки."""
+    """guincalo/zapretgui fork: the release long-poll is disabled.
+
+    Upstream kept a permanent connection to git.zapret.moe/api/zapret/wait and
+    its mirrors, reporting channel, version, activity (window/tray/fullscreen
+    game/check), raw screen state, whether the bypass runs, a queue ticket and
+    the outcome of the previous update. No endpoints means the watcher thread
+    exits immediately and nothing is sent.
+    """
+    return ()
+
+
+def _upstream_wait_endpoints() -> tuple[WaitEndpoint, ...]:
+    """Upstream behaviour, kept for reference only; not called in this fork."""
     from .mirrors import mirror_servers
     from ..server_config import should_verify_ssl
 

@@ -244,6 +244,8 @@ def _fetch_sha256(session: requests.Session, candidate: dict[str, Any]) -> str:
 
 def fetch_latest_release(channel: str) -> dict[str, Any]:
     """Новейший проверенный выпуск канала. ForgejoReleaseError, если его нет."""
+    # guincalo/zapretgui fork: the upstream Forgejo is never contacted.
+    raise ForgejoReleaseError("отключено в форке guincalo/zapretgui")
     selected = normalize_update_channel(channel)
     started = time.monotonic()
     session = new_session()
@@ -296,6 +298,8 @@ def fetch_release_notes(version: str) -> dict[str, str]:
 
     ForgejoReleaseError, если выпуска нет или Forgejo недоступен.
     """
+    # guincalo/zapretgui fork: the upstream Forgejo is never contacted.
+    raise ForgejoReleaseError("отключено в форке guincalo/zapretgui")
     tag_name = normalize_version(version)
     session = new_session()
     try:
@@ -325,6 +329,8 @@ def fetch_recent_release_history(channel: str, *, up_to_version: str) -> tuple[d
     Один запрос списка, без файлов суммы. ForgejoReleaseError, если Forgejo
     недоступен или выпусков нет.
     """
+    # guincalo/zapretgui fork: the upstream Forgejo is never contacted.
+    raise ForgejoReleaseError("отключено в форке guincalo/zapretgui")
     selected = normalize_update_channel(channel)
     session = new_session()
     try:
@@ -343,6 +349,8 @@ def fetch_recent_release_history(channel: str, *, up_to_version: str) -> tuple[d
 
 def probe_forgejo() -> float:
     """Свежая проверка доступности API Forgejo. Время ответа в секундах."""
+    # guincalo/zapretgui fork: the upstream Forgejo is never contacted.
+    raise ForgejoReleaseError("отключено в форке guincalo/zapretgui")
     started = time.monotonic()
     session = new_session()
     try:
