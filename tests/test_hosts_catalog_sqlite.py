@@ -81,7 +81,7 @@ class HostsCatalogSqliteTests(unittest.TestCase):
         self.assertFalse(
             (PROJECT_ROOT / "private_zapretgui" / "resources" / "json" / "hosts_catalog").exists()
         )
-        self.assertEqual(catalog.catalog_version, "2026.10.15.1")
+        self.assertEqual(catalog.catalog_version, "2026.10.21.1")
         # У каждого сервиса свой значок, а не запасной глобус.
         self.assertEqual(
             [name for name, (icon, _color) in catalog.service_icons.items() if icon == "fa5s.globe"],
@@ -192,7 +192,7 @@ class HostsCatalogSqliteTests(unittest.TestCase):
         после этого не осталось рабочего профиля, выключены, а не удалены.
         """
         relays = {
-            "comss_dns": ("157.22.177.90", "157.22.178.170", "132.243.112.221"),
+            "comss_dns": ("91.132.224.167", "103.137.248.145", "80.74.30.162"),
             "geohide": ("159.194.200.33", "193.233.112.67", "193.233.112.68", "193.233.112.88"),
             "astracat": ("217.60.179.6",),
         }
@@ -262,10 +262,11 @@ class HostsCatalogSqliteTests(unittest.TestCase):
         foreign = {"103.137.248.145", "89.150.59.128", "217.60.179.6", "35.228.34.253", "159.194.200.33"}
         self.assertEqual({host for host, ip in first.items() if ip in foreign}, set())
         # Comss DNS сменил посредников (сверено с его сервером 2026-10-09): старых адресов в каталоге нет.
+        # 103.137.248.145 вернулся в его выдачу 2026-10-21 и снова открывает сайты, поэтому его здесь нет.
         connection = sqlite3.connect(PRIVATE_DATABASE)
         try:
             stale = connection.execute(
-                "SELECT COUNT(*) FROM dns_answers WHERE ip_address IN ('103.137.248.145', '89.150.59.128')"
+                "SELECT COUNT(*) FROM dns_answers WHERE ip_address IN ('89.150.59.128')"
             ).fetchone()[0]
         finally:
             connection.close()
@@ -309,7 +310,7 @@ class HostsCatalogSqliteTests(unittest.TestCase):
         finally:
             connection.close()
         self.assertEqual(russian, 0)
-        self.assertEqual(gemini, ["132.243.112.221", "157.22.178.170"])
+        self.assertEqual(gemini, ["91.132.224.167", "103.137.248.145"])
 
     def test_geohide_opens_spotify_through_its_relays(self) -> None:
         """Имена Spotify с гео-ограничением идут через посредников GeoHide, раздача — напрямую."""
