@@ -80,3 +80,7 @@ www_youtube_com.txt
 
 # Пользовательское рантайм-состояние новой раскладки (создаётся при локальных запусках)
 /user/
+
+# fork build output
+/out/
+/src/config/build_info.py

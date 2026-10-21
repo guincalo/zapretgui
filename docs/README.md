@@ -1,3 +1,10 @@
+> [!NOTE]
+> **guincalo/zapretgui** — форк [Zapret 2 GUI](https://git.zapret.moe/zapretdiscordyoutube/zapretgui) (MIT). Что убрано:
+> - фоновое «длинное» соединение с `git.zapret.moe/api/zapret/wait` и зеркалами, которое передавало канал, версию, занятость (окно/трей/игра на весь экран), состояние экрана, включён ли обход, талон очереди и итог прошлого обновления;
+> - встроенное автообновление и «починка» с серверов upstream (они поставили бы обратно оригинальную сборку), загрузка «Что нового» с Forgejo, опрос Forgejo/Telegram в таблице серверов.
+>
+> Код Premium/подписки не трогали. Сборки — в [Releases](https://github.com/guincalo/zapretgui/releases) (GitHub Actions, `.github/workflows/windows-build.yml`); движок, списки и пресеты берутся из подписанного манифеста выпуска upstream. Обновляться — вручную отсюда.
+
 <h1 align="center"><a href="https://wiki.zapret.moe/Zapret/home">Zapret 2</a> (Запрет: обход блокировки Дискорда и Ютуба)</h1>
 
 <p align="center"><b>Документация доступна <a href="https://wiki.zapret.moe/Zapret2/Zapret2">здесь</a> · Попробуйте наш новый <a href="https://git.zapret.moe/zapretkvn/zapret-kvn">Zapret KVN</a>!</b></p>

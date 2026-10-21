@@ -1,0 +1,96 @@
+name: Windows build (clean fork)
+
+on:
+  push:
+    branches: [clean]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: requirements-runtime.txt
+
+      - name: Resolve upstream payload version
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            v="${GITHUB_REF_NAME#v}"; v="${v%-clean*}"
+          else
+            v="$(tr -d '[:space:]' < tools/fork_build/UPSTREAM_VERSION)"
+          fi
+          echo "UPSTREAM_VERSION=$v" >> "$GITHUB_ENV"
+          echo "Upstream payload version: $v"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-runtime.txt PyInstaller==6.21.0
+
+      - name: Sanity checks
+        shell: bash
+        run: |
+          python -m compileall -q src
+          python - <<'PY'
+          import re, pathlib
+          # The fork must not talk to the upstream release queue.
+          s = pathlib.Path("src/updater/release/watch.py").read_text(encoding="utf-8")
+          body = s.split("def wait_endpoints()", 1)[1].split("\ndef ", 1)[0]
+          assert "    return ()" in body, "release watcher re-enabled?"
+          PY
+
+      - name: Build (payload + PyInstaller + portable zip)
+        run: python tools/fork_build/build.py ${{ env.UPSTREAM_VERSION }}
+
+      - name: Build installer (Inno Setup)
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress | Out-Null }
+          & $iscc "/DAppVersion=$env:UPSTREAM_VERSION" tools\fork_build\installer.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Checksums
+        shell: bash
+        run: |
+          cd out
+          for f in *.zip *.exe; do sha256sum "$f" | sed 's/ \*/  /' > "$f.sha256"; cat "$f.sha256"; done
+          ls -la
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: zapret2-clean-${{ env.UPSTREAM_VERSION }}
+          path: |
+            out/*.zip
+            out/*.exe
+            out/*.sha256
+            out/upstream-update-manifest.json
+            out/upstream-update-manifest.json.sig
+          if-no-files-found: error
+
+      - name: Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Zapret 2 GUI ${{ github.ref_name }}
+          body: |
+            Zapret 2 GUI rebuilt from source (branch `clean`) without the upstream update telemetry / release long-poll and without the upstream auto-updater.
+            Engine, lists, lua, presets and catalogs are the upstream payload of release ${{ env.UPSTREAM_VERSION }}, verified against its Ed25519-signed `update-manifest.json` (included).
+            Untested on a real Windows machine. Premium/subscription code is unchanged; premium status cannot be checked in this build (no upstream API endpoint).
+          files: |
+            out/*.zip
+            out/*.exe
+            out/*.sha256
+            out/upstream-update-manifest.json
+            out/upstream-update-manifest.json.sig
